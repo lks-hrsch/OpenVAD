@@ -1,0 +1,7 @@
+% TODO: confirm with Prüfungsamt/chair where the signed task description goes.
+\IfFileExists{frontmatter/task-description.pdf}{
+    \includepdf[pages=-]{frontmatter/task-description.pdf}
+}{
+    \chapter*{Task Description}
+    Placeholder: save the signed task description as \texttt{task-description.pdf} in \texttt{frontmatter/}.
+}

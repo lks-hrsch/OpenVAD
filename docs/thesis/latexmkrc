@@ -1,0 +1,4 @@
+$pdf_mode = 4;
+$out_dir = 'build';
+# Run biber whenever the .bcf asks for it.
+$bibtex_use = 2;

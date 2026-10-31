@@ -1,0 +1,42 @@
+\documentclass[logo/language=en]{tudcdbook}
+\usepackage[english]{babel}
+\usepackage{csquotes}
+\usepackage[backend=biber]{biblatex}
+\addbibresource{../shared/references.bib}
+\usepackage{acro}
+\usepackage{siunitx}
+\usepackage{pdfpages}
+\usepackage{tikz}
+
+\input{../shared/macros}
+\input{../shared/acronyms}
+\input{../shared/generated/numbers}
+
+% The title page does not inherit logo/language, so set it again.
+\TUDCDsetup{titlepage/logo-language=en}
+
+\subject{Master's Thesis}
+\title{Reproducible Real-Time Voice Activity Detection under Noisy Telephone Conditions}
+\author{Lukas Hirsch}
+
+\begin{document}
+
+\frontmatter
+\input{frontmatter/titlepage}
+\input{frontmatter/task-description}
+\input{frontmatter/abstract}
+\tableofcontents
+
+\mainmatter
+\input{chapters/01-introduction}
+\input{chapters/02-related-work}
+
+\appendix
+\input{appendix/ai-use}
+\input{appendix/declaration}
+\input{appendix/reproducibility}
+
+\backmatter
+\printbibliography
+
+\end{document}

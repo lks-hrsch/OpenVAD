@@ -1,0 +1,57 @@
+[tool.uv.workspace]
+members = ["training", "inferencing/vadigo", "inferencing/vadigo-rs"]
+
+[tool.uv]
+environments = [
+    "sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
+
+# Workspace-root sources apply to every member.
+[tool.uv.sources]
+torch = { index = "pytorch-cu130", marker = "sys_platform == 'linux'" }
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[dependency-groups]
+dev = ["pytest", "ruff", "basedpyright"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+src = ["training/src", "inferencing/vadigo/src", "inferencing/vadigo-rs/python"]
+extend-exclude = ["docs"]
+
+[tool.ruff.lint]
+select = [
+    "E", # pycodestyle
+    "F", # Pyflakes
+    "UP", # pyupgrade
+    "B", # flake8-bugbear
+    "NPY", # NumPy-specific rules
+    "I", # isort - import sorting
+    "SIM", # flake8-simplify
+    "N", # pep8-naming
+    "RUF", # Ruff-specific rules
+    "PT", # flake8-pytest-style
+    "C4", # flake8-comprehensions
+]
+
+[tool.ruff.lint.isort]
+# Configure import sorting behavior
+force-single-line = false
+lines-after-imports = 2
+
+[tool.basedpyright]
+typeCheckingMode = "standard"
+
+[tool.pytest.ini_options]
+addopts = "--import-mode=importlib"
+testpaths = [
+    "training/tests",
+    "inferencing/vadigo/tests",
+    "inferencing/vadigo-rs/tests",
+]

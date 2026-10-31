@@ -1,0 +1,3 @@
+[submodule "docs/tudcd-scr"]
+	path = docs/tudcd-scr
+	url = https://github.com/tud-cd/tudcd-scr

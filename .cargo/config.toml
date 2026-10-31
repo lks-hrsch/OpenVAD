@@ -1,0 +1,5 @@
+# Build the PyO3 module as an extension module everywhere: do not link libpython.
+# Without this, pyo3-ffi demands a Python interpreter on PATH even for `cargo test`
+# (uv's managed Python is not on PATH outside `uv run`). maturin sets it as well.
+[env]
+PYO3_BUILD_EXTENSION_MODULE = "1"

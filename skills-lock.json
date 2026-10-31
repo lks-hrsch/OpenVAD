@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "skills": {
+    "coding-standards": {
+      "source": "affaan-m/ecc",
+      "sourceType": "github",
+      "skillPath": "skills/coding-standards/SKILL.md",
+      "computedHash": "94f8d33db00faef148fb7a9f88c2e37e4d2afe109cdb9978b06fe280892de405"
+    },
+    "docstring": {
+      "source": "pytorch/pytorch",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/docstring/SKILL.md",
+      "computedHash": "8f9ef1fd3551beb6d9760515930ab76e380195a27a675df013268c3fa50c83ce"
+    },
+    "find-skills": {
+      "source": "vercel-labs/skills",
+      "sourceType": "github",
+      "skillPath": "skills/find-skills/SKILL.md",
+      "computedHash": "b146008599c31057cef1c145774cea5d5afb30e8f43fa802e47a4b461419aaaf"
+    },
+    "latex-paper-en": {
+      "source": "bahayonghang/academic-writing-skills",
+      "sourceType": "github",
+      "skillPath": "academic-writing-skills/latex-paper-en/SKILL.md",
+      "computedHash": "c1ca54bd7c9896b273cdf44b2b6fb30b242369c12d63d9d678b420512348e2c9"
+    },
+    "python-patterns": {
+      "source": "affaan-m/ecc",
+      "sourceType": "github",
+      "skillPath": "skills/python-patterns/SKILL.md",
+      "computedHash": "3ce7d51e18d3e2fa79635e569e73a8d269bc484ff1095fae7c414543f023e95e"
+    },
+    "python-testing": {
+      "source": "affaan-m/ecc",
+      "sourceType": "github",
+      "skillPath": "skills/python-testing/SKILL.md",
+      "computedHash": "f057c2d50d29efe29a1f9e7ac3bc11ebb60f773c5b3831fe2b9cf9ad6786d755"
+    },
+    "pytorch-patterns": {
+      "source": "affaan-m/ecc",
+      "sourceType": "github",
+      "skillPath": "skills/pytorch-patterns/SKILL.md",
+      "computedHash": "eb170710a86bc3bc292ad27fddbdf15e46f707eab139e192bad59099cb47586a"
+    },
+    "rust-patterns": {
+      "source": "affaan-m/ecc",
+      "sourceType": "github",
+      "skillPath": "skills/rust-patterns/SKILL.md",
+      "computedHash": "7119b88682b5773ef83ac6d01153ac2a0683be28b01ea46a2b0512fe74b30420"
+    },
+    "rust-testing": {
+      "source": "affaan-m/ecc",
+      "sourceType": "github",
+      "skillPath": "skills/rust-testing/SKILL.md",
+      "computedHash": "bd66d6441ff6d3a6acb89c902cd6a01bf58410aec3ecbc43d45409b3a3788ac8"
+    }
+  }
+}

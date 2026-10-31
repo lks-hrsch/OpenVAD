@@ -1,0 +1,51 @@
+% Single source of truth for acronyms in the thesis, the notes and the ADRs.
+% `definition` is a custom acro property: one or two sentences, plus the source where one exists.
+% Spelling: "noise" (voice-to-noise, signal-to-noise) and "gammatone".
+\DeclareAcroProperty{definition}
+
+\DeclareAcronym{amx}{short = AMX, long = Advanced Matrix Extensions, definition = {Intel matrix-multiply unit in the CPU (Sapphire Rapids).}}
+\DeclareAcronym{auc}{short = AUC, long = area under the receiver operating characteristic curve, definition = {Area under the ROC curve (ROC AUC); the primary threshold-free metric.}}
+\DeclareAcronym{avx512}{short = AVX-512, long = Advanced Vector Extensions 512, definition = {512-bit x86 SIMD instruction set.}}
+\DeclareAcronym{bce}{short = BCE, long = binary cross-entropy, definition = {Cross-entropy loss for two-class targets; the VAD loss.}}
+\DeclareAcronym{bf16}{short = BF16, long = bfloat16, definition = {16-bit floating-point format.}}
+\DeclareAcronym{bgfar}{short = BG-FAR, long = background false-alarm rate, definition = {False-alarm rate measured on background audio. Source: Foreground VAD (Yang et al. 2026).}}
+\DeclareAcronym{cnn}{short = CNN, long = convolutional neural network, definition = {Neural network built from convolutional layers.}}
+\DeclareAcronym{crnn}{short = CRNN, long = convolutional recurrent neural network, definition = {Convolutional encoder followed by an RNN (Silero-style).}}
+\DeclareAcronym{f1}{short = F1, long = F1 score, definition = {Harmonic mean of precision and recall.}}
+\DeclareAcronym{far}{short = FAR, long = false-alarm rate, definition = {Rate at which non-speech is wrongly detected as speech.}}
+\DeclareAcronym{fbank}{short = FBANK, long = log-mel filterbank energies, definition = {Log-mel filterbank energies, i.e.\ log-mel without the DCT.}}
+\DeclareAcronym{ffn}{short = FFN, long = feed-forward network, definition = {A stack of fully connected layers applied per position or frame, without recurrence or attention.}}
+\DeclareAcronym{fp32}{short = FP32, long = 32-bit floating point, definition = {The reference numeric precision.}}
+\DeclareAcronym{g711}{short = G.711, long = ITU-T G.711, definition = {Narrowband (8 kHz) telephony codec using A-law or $\mu$-law companding. Source: ITU-T G.711.}}
+\DeclareAcronym{g722}{short = G.722, long = ITU-T G.722, definition = {Wideband (16 kHz) telephony codec. Source: ITU-T G.722.}}
+\DeclareAcronym{gfcc}{short = GFCC, long = gammatone frequency cepstral coefficients, definition = {Cepstral features computed from a gammatone filterbank. Source: Shao, Srinivasan \& Wang 2007 (origin).}}
+\DeclareAcronym{gru}{short = GRU, long = gated recurrent unit, definition = {Recurrent cell with update and reset gates and no separate memory cell.}}
+\DeclareAcronym{int8}{short = INT8, long = 8-bit integer, definition = {Quantised number format.}}
+\DeclareAcronym{kv}{short = KV, long = key--value, definition = {As in KV cache: the cache of attention keys and values; Transformer inference memory.}}
+\DeclareAcronym{leaf}{short = LEAF, long = LEarnable Audio Frontend, definition = {A frontend whose filterbank, pooling and compression (sPCEN) are learned. Source: Zeghidour et al., ICLR 2021 (not Interspeech).}}
+\DeclareAcronym{lstm}{short = LSTM, long = long short-term memory, definition = {Recurrent cell with a separate memory cell and input, forget and output gates.}}
+\DeclareAcronym{mae}{short = MAE, long = mean absolute error, definition = {Mean of absolute differences; the VNR regression loss (not ``maximum average error'').}}
+\DeclareAcronym{mfa}{short = MFA, long = Montreal Forced Aligner, definition = {Forced-alignment tool.}}
+\DeclareAcronym{mfcc}{short = MFCC, long = mel-frequency cepstral coefficients, definition = {Cepstral features computed from a mel filterbank. Source: Davis \& Mermelstein 1980.}}
+\DeclareAcronym{nds}{short = NDS, long = noise detected as speech, definition = {Noise wrongly flagged as speech; a telephony boundary metric.}}
+\DeclareAcronym{pbx}{short = PBX, long = private branch exchange, definition = {Private telephone exchange inside an organisation.}}
+\DeclareAcronym{pcen}{short = PCEN, long = per-channel energy normalisation, definition = {Causal adaptive compression of filterbank energies. Source: Wang et al. 2017.}}
+\DeclareAcronym{pcm}{short = PCM, long = pulse-code modulation, definition = {Digital representation of an analogue signal by sampled, quantised values.}}
+\DeclareAcronym{pcma}{short = PCMA, long = G.711 A-law, definition = {G.711 PCM with A-law companding.}}
+\DeclareAcronym{pcmu}{short = PCMU, long = G.711 $\mu$-law, definition = {G.711 PCM with $\mu$-law companding.}}
+\DeclareAcronym{qat}{short = QAT, long = quantisation-aware training, definition = {Training with quantisation simulated.}}
+\DeclareAcronym{rnn}{short = RNN, long = recurrent neural network, definition = {Neural network with recurrent connections.}}
+\DeclareAcronym{rtf}{short = RTF, long = real-time factor, definition = {Processing time divided by audio duration.}}
+\DeclareAcronym{rtp}{short = RTP, long = Real-time Transport Protocol, definition = {Protocol that carries real-time audio and video over IP networks.}}
+\DeclareAcronym{sad}{short = SAD, long = speech activity detection, definition = {Synonym of VAD. Source: DIHARD, RATS.}}
+\DeclareAcronym{sdp}{short = SDP, long = Session Description Protocol, definition = {Text format that describes media sessions, e.g.\ codecs and ports.}}
+\DeclareAcronym{sed}{short = SED, long = sound event detection, definition = {Detecting and labelling sound events in audio.}}
+\DeclareAcronym{sip}{short = SIP, long = Session Initiation Protocol, definition = {Signalling protocol that sets up and ends calls.}}
+\DeclareAcronym{snr}{short = SNR, long = signal-to-noise ratio, definition = {Ratio of signal level to noise level; define per utterance or segment and state the level reference (ITU-T P.56).}}
+\DeclareAcronym{spcen}{short = sPCEN, long = PCEN with learned per-channel smoothing, definition = {PCEN whose per-channel smoothing is learned; LEAF's compression.}}
+\DeclareAcronym{sre}{short = SRE, long = NIST Speaker Recognition Evaluation, definition = {NIST evaluation series for speaker recognition.}}
+\DeclareAcronym{ssr}{short = SSR, long = silence-to-speech ratio, definition = {Ratio of silence to speech. LibriVAD reports it as a percentage (\textasciitilde{}34\,\%) and also says ``speech-to-silence'', so define it precisely ourselves (e.g.\ share of non-speech frames). Source: LibriVAD.}}
+\DeclareAcronym{stft}{short = STFT, long = short-time Fourier transform, definition = {Fourier transform over short windowed frames.}}
+\DeclareAcronym{vad}{short = VAD, long = voice activity detection, definition = {Detecting whether speech is present.}}
+\DeclareAcronym{vnni}{short = VNNI, long = Vector Neural Network Instructions, definition = {AVX-512 INT8 dot-product instructions.}}
+\DeclareAcronym{vnr}{short = VNR, long = voice-to-noise ratio, definition = {Segmental, auditory-weighted ratio of voice to noise; the label is VNR above a threshold. Source: Braun \& Tashev 2021.}}

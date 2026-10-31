@@ -14,6 +14,10 @@ VADigo aims to be fully reproducible: open architecture, open training code, pub
 
 VADigo is developed as part of the Master's thesis "Reproducible Real-Time Voice Activity Detection under Noisy Telephone Conditions" at TU Dresden.
 
+## Name origin
+
+The vadigo (*Campogramma glaycos*) is a Mediterranean fish. Its official FAO species code happens to be "VAD".
+
 ## Goals
 
 - Streaming, real-time operation, lightweight enough for CPU inference
@@ -28,9 +32,16 @@ VADigo is developed as part of the Master's thesis "Reproducible Real-Time Voice
 - **Inference:** hand-implemented in Rust, loading the trained weights directly (no ONNX runtime)
 - **Python bindings** for the Rust inference engine
 
-## Name origin
+## Development setup
 
-The vadigo (*Campogramma glaycos*) is a Mediterranean fish. Its official FAO species code happens to be "VAD".
+Without Nix:
+
+1. Install [rustup](https://rustup.rs) (the toolchain comes from `rust-toolchain.toml`), [uv](https://docs.astral.sh/uv/) and [just](https://just.systems).
+2. Run `git clone --recursive` on this repository, then `uv sync --all-packages`.
+3. Run `cargo test --workspace` and `uv run pytest`.
+4. The thesis builds in the Nix docs shell, see [docs/README.md](docs/README.md).
+
+With Nix: run `direnv allow`, then `just setup` and `just check`.
 
 ## License
 
