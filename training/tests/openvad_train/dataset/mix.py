@@ -5,8 +5,11 @@
 
 import numpy as np
 import pytest
+from scipy.special import digamma
 
 from openvad_train.dataset.mix import (
+    _WADA_DB,
+    _WADA_G,
     dither,
     loop_slice,
     mix_at_snr,
@@ -170,3 +173,14 @@ def test_wada_snr_does_not_depend_on_float_scale_of_16_bit_audio():
     ints = np.round(speech_like() * 32768).astype(np.float32)  # many exact zeros after quantisation
     assert (ints == 0).any()
     assert wada_snr(ints / 32768) == pytest.approx(wada_snr(ints))
+
+
+def test_wada_table_spans_minus_20_to_100_between_the_analytic_limits():
+    assert len(_WADA_G) == len(_WADA_DB) == 121
+    assert np.all(np.diff(_WADA_G) >= 0)
+    assert _WADA_G[0] == pytest.approx(0.5 * np.log(2 / np.pi) - (digamma(0.5) + np.log(2)) / 2, abs=1e-3)  # Gaussian
+    assert _WADA_G[-1] == pytest.approx(np.log(0.4) - digamma(0.4), abs=0.02)  # clean Gamma(0.4)
+
+
+def test_wada_snr_clamps_at_100_for_clean_speech():
+    assert wada_snr(speech_like()) == 100.0

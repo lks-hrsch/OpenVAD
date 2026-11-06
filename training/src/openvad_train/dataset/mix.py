@@ -108,8 +108,13 @@ def padded_length(speech_s: float, target: float = 0.33, edge_s: float = 0.0) ->
     return max(speech_s / target, speech_s + edge_s)
 
 
-# G(SNR) for SNR = -20 to 97 dB in 1 dB steps: log(mean|x|) - mean(log|x|) of Gamma(0.4)
-# speech amplitudes plus Gaussian noise (Kim and Stern 2008, Table 1).
+# G(SNR) for SNR = -20 to 100 dB in 1 dB steps: log(mean|x|) - mean(log|x|) of Gamma(0.4) speech
+# amplitudes plus Gaussian noise. These are the values of the public Monte Carlo table behind the
+# WADA-SNR method of Kim and Stern, "Robust Signal-to-Noise Ratio Estimation Based on Waveform
+# Amplitude Distribution Analysis", Interspeech 2008. Copied from lIkesimba9/audiogear
+# (src/audiogear/pipeline/metrics/wada_snr.py, MIT licence, checked).
+# The accumulate is needed because the Monte Carlo noise makes the third and fourth entries decrease,
+# and np.interp requires a non-decreasing table.
 # fmt: off
 _WADA_G = np.maximum.accumulate(
     np.array(
@@ -126,19 +131,20 @@ _WADA_G = np.maximum.accumulate(
             1.48269965, 1.49034339, 1.49748214, 1.50435106, 1.51076426, 1.51698915, 1.5229097, 1.528578,
             1.53389835, 1.5391211, 1.5439065, 1.54858517, 1.55310776, 1.55744391, 1.56164927, 1.56566348,
             1.56938671, 1.57307767, 1.57654764, 1.57980083, 1.58304129, 1.58602496, 1.58880681, 1.59162477,
-            1.59419982, 1.59671568, 1.59907946, 1.60135846, 1.60352614, 1.60558286, 1.60766405, 1.60970592,
-            1.61161603, 1.61343689, 1.61526494, 1.61697957, 1.6187069, 1.62026286, 1.62178528, 1.62331528,
-            1.62477064, 1.62614226, 1.62748432, 1.62880497, 1.63012469, 1.63137379,
+            1.5941969, 1.59693155, 1.599446, 1.60185011, 1.60408668, 1.60627134, 1.60826199, 1.61004547,
+            1.61192472, 1.61369656, 1.61534074, 1.61688905, 1.61838916, 1.61985374, 1.62135878, 1.62268119,
+            1.62390423, 1.62513143, 1.62632463, 1.6274027, 1.62842767, 1.62945532, 1.6303307, 1.63128026,
+            1.63204102,
         ]
     )
 )
 # fmt: on
-_WADA_DB = np.arange(-20, 98, dtype=np.float64)
+_WADA_DB = np.arange(-20, 101, dtype=np.float64)
 _EPS = 1e-10
 
 
 def wada_snr(x: np.ndarray) -> float:
-    """Blind SNR estimate in dB, clamped to [-20, 97] (WADA-SNR, Kim and Stern 2008).
+    """Blind SNR estimate in dB, clamped to [-20, 100] (WADA-SNR, Kim and Stern 2008).
 
     Input is 16-bit audio as decoded for storage, as float. The clip is
     peak-normalised and magnitudes are clipped to `_EPS`, as in the public
