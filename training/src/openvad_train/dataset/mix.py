@@ -22,6 +22,8 @@ def mix_at_snr(speech: np.ndarray, noise: np.ndarray, active: np.ndarray, snr_db
     is `snr_db` above noise RMS over the same samples. The gain applies to the
     whole noise, including outside `active`.
     """
+    if active.dtype != bool:  # integer labels would silently fancy-index
+        raise TypeError(f"active must be a boolean mask, got {active.dtype}")
     if not speech.shape == noise.shape == active.shape:
         raise ValueError("speech, noise and active must have the same shape")
     if not active.any():

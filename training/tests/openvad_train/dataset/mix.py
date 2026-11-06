@@ -65,6 +65,12 @@ def test_silent_noise_or_no_active_samples_raise():
         mix_at_snr(speech, white(), np.zeros_like(speech, bool), 5.0)
 
 
+def test_non_boolean_active_mask_raises():
+    speech = sine()
+    with pytest.raises(TypeError, match="boolean"):
+        mix_at_snr(speech, white(), np.ones_like(speech, np.int8), 5.0)
+
+
 def test_place_puts_speech_in_one_block():
     out = place(np.ones(3, np.float32), 8, 2)
     assert out.tolist() == [0, 0, 1, 1, 1, 0, 0, 0]
