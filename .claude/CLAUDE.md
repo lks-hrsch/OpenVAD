@@ -127,4 +127,5 @@ None of the kernel tiers, `OPENVAD_KERNEL`, golden checksums, the 2:1 resampler 
 - `just thesis`: build the thesis PDF into `docs/thesis/build`.
 - `just watch <doc>`: rebuild a document on every save.
 - `just docs-generated`: regenerate numbers and figures under `docs/`.
+- `just dataset <stage>`: run one dataset construction stage (`python -m openvad_train.dataset`); only finished stages are available.
 - `just skills`: restore the Claude skills pinned in `skills-lock.json` (needs Node).

@@ -66,6 +66,10 @@ docs-generated:
 fetch dataset:
     uv run python -m openvad_train.fetch {{dataset}}
 
+# run one dataset construction stage (see docs/project/spec/dataset-construction.md)
+dataset stage *args:
+    uv run python -m openvad_train.dataset {{stage}} {{args}}
+
 # restore the Claude skills pinned in skills-lock.json (needs Node; experimental command)
 skills:
     npx skills experimental_install
