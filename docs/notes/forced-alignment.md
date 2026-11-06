@@ -3,7 +3,7 @@
 A comparison of the Montreal Forced Aligner (MFA 3.x with its pretrained models) and the MMS forced aligner in torchaudio (`MMS_FA`) as labelling tools for OpenVAD.
 State of 2026-11-04.
 
-The labels we need: word-level speech intervals from forced alignment, turned into 10 ms speech/non-speech frames, where a gap between two words shorter than the proposed 200 ms counts as speech and a longer one as non-speech ([0022](../project/adr/0022-frame-labels.md)).
+The labels we need: word-level speech intervals from forced alignment, turned into 10 ms speech/non-speech frames, where a gap between two words shorter than G = 200 ms (owner, 2026-11-06) counts as speech and a longer one as non-speech ([0022](../project/adr/0022-frame-labels.md)).
 The data: Common Voice 27.0, Multilingual LibriSpeech, VoxPopuli, FLEURS and Speech Commands (train, dev and test) in about 53 languages, counting Common Voice's 53 locales as 51 languages plus Bosnian and Croatian from FLEURS ([0023](../project/adr/0023-dataset-composition.md)).
 Every section before [Recommendation](#recommendation) states sourced facts only; the recommendation records what [0025](../project/adr/0025-alignment-labelling.md) proposes (pretrained MFA models) and the alternative it did not adopt (`MMS_FA`).
 Anything not checked against a primary source is marked "not verified".
@@ -296,6 +296,7 @@ No language with a model is held out, so Korean, Vietnamese, Kazakh and Hausa ar
 
 - MFA with the Hugging Face `*_mfa` models for the 19 languages that have one (all in the pool; which model labels Czech, Bulgarian and Ukrainian is not chosen, open in [0025](../project/adr/0025-alignment-labelling.md)), with `--use_g2p` for out-of-vocabulary words: the best measured word boundaries of any tool in every English comparison, a 10 ms grid that matches ours, and per-utterance failure metrics that the drop rules of [0025](../project/adr/0025-alignment-labelling.md) already use.
 - For the 14 `*_cv` languages, prefer the newer VoxCommunis models (Common Voice 16 to 20) over the Common Voice 7.0 models in mfa-models; `uzbek_cv` (0.24 h, 5 speakers), `abkhaz_cv` (2 h) and `georgian_cv` (6 h) are too small to trust.
+- Italian and Dutch have no G2P model, so their out-of-vocabulary words become `spn` instead of getting generated pronunciations (owner, 2026-11-06). Other languages use `--use_g2p`.
 - The same VoxCommunis route covers the 10 languages without a model in mfa-models listed above (Catalan, Welsh, Bengali, Estonian, Finnish, Kabyle, Kinyarwanda, Luganda, Cantonese, Mongolian).
 - VoxCommunis models need G2P for out-of-vocabulary words: generate pronunciations with the same G2P system their lexicon used (Epitran or XPF) or train one with `mfa train_g2p` on the lexicon, so the phone set matches.
 - The remaining 8 (Persian, Urdu, Meadow Mari, Arabic, Laz, Kabardian, Adyghe, Puno Quechua) and the FLEURS languages without an MFA model are left out (0023). `MMS_FA` would cover them, with the costs below.
@@ -304,7 +305,7 @@ No language with a model is held out, so Korean, Vietnamese, Kazakh and Hausa ar
 ### `MMS_FA` as the alternative (not adopted)
 
 - `MMS_FA` everywhere would remove the aligner as a per-language confound in RQ1, but its word onsets are about twice as far off (43 to 50 ms mean against 20 to 25 ms) and its words about 60 ms too short in English.
-- For VAD labels, the proposed 200 ms gap rule hides most of that bias inside utterances; it remains at the first onset and last offset of each speech run, which is where a voicebot's latency and end-of-turn behaviour live.
+- For VAD labels, the 200 ms gap rule hides most of that bias inside utterances; it remains at the first onset and last offset of each speech run, which is where a voicebot's latency and end-of-turn behaviour live.
 - If the 8 languages are ever added: MFA where it exists, `MMS_FA` only where it must, and measure the difference instead of avoiding it.
 - Run both aligners on a few languages that have an MFA model (English, German and one VoxCommunis language) to measure the MMS bias in onset and offset directly; if the bias is stable, a fixed per-aligner correction (for example widening MMS word spans) can be estimated on the Praat set and applied to all `MMS_FA` languages.
 - Record the aligner, model and version per clip in the manifest, and report RQ1 results split by aligner.
@@ -317,7 +318,7 @@ No language with a model is held out, so Korean, Vietnamese, Kazakh and Hausa ar
 
 ### Validation
 
-- Keep the Praat check of [0025](../project/adr/0025-alignment-labelling.md) (500 clips: 125 each for English, German, other `*_mfa` languages and other `*_cv` languages; frame agreement on the 10 ms grid, onsets and offsets within 20 and 50 ms), reported per group, with no per-language quota.
+- Run the Praat pilot of [0025](../project/adr/0025-alignment-labelling.md) (100 clips, 25 each from English, German, Italian and Catalan, sampled across score quantiles and labelled blind to MFA; frame agreement on the 10 ms grid, onsets and offsets within 20 and 50 ms) (owner, 2026-11-06). The earlier 500-clip check (125 each for English, German, other `*_mfa` languages and other `*_cv` languages) is deferred.
 - Report signed onset and offset errors, not only absolute ones: the expected CTC failure is a bias (late onsets, early offsets), which a shift or padding can correct, while MFA errors are expected to be symmetric.
 - If `MMS_FA` is used: map its spans to 10 ms by splitting each 20 ms frame into two, and state that its labels have 20 ms resolution.
 - If `MMS_FA` is used: define its drop rules before the run: the MMS paper's greedy-path score above −0.2 as a starting point, plus the duration and coverage rules of [0025](../project/adr/0025-alignment-labelling.md) that do not depend on MFA metrics.
@@ -327,7 +328,7 @@ No language with a model is held out, so Korean, Vietnamese, Kazakh and Hausa ar
 
 - `MMS_FA` weights are CC BY-NC 4.0; [0024](../project/adr/0024-training-data-licence-policy.md) accepts labelling tools under an NC licence (they are not shipped), but `MMS_FA` is not used.
 - The thesis must carry uroman's acknowledgement sentence if `MMS_FA` is used.
-- MFA comes from conda-forge, outside the repo's uv workflow; keep it as a separate labelling environment and record its exact versions, or test whether the PyPI packages suffice.
+- MFA is built from source in the uv workspace (owner, 2026-11-06): `tools/montreal-forced-aligner` pinned to v3.4.3 and `tools/kaldi` as git submodules, `just build-mfa` compiling Kaldi, and an optional `align` dependency group for the editable MFA, `kalpy-kaldi` and `pynini`; conda-forge `kaldi` as `KALDI_ROOT` is the second fallback ([0025](../project/adr/0025-alignment-labelling.md)). Record the exact versions.
 
 ## Not verified
 
