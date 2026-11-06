@@ -133,9 +133,13 @@ Working state sits next to it, under `datasets/processed/work/<name>/` with the 
 | `band` | string | `wide`, `narrow_leg` or `narrow_native`, see [train time](#train-time-narrowband) |
 | `in_small` | boolean, nullable | train only, null until Small is set |
 
-Metadata columns follow: `rank`, `source`, `language`, `speaker` (nullable), `licence`, `treatment` (`augmented`, `as_is`), `speech_ratio`, `condition`, `noise_source_ids`, `noise_offsets`, `snr_db` (nullable), `tir_db` (nullable), `baseline_snr_db` (nullable), `rir_id` (nullable), `handset`, `agc`, `clip_drive_db`, `suppression`, `codec`, `bitrate`, `codec_delay_ms`, `transients`, `gap_ms`, `dither_dbfs`, `segments`, `aligner` (nullable), `seed`.
+Metadata columns follow: `rank`, `source`, `language`, `speaker` (nullable), `licence`, `treatment` (`augmented`, `as_is`), `speech_ratio`, `condition`, `noise_source_ids`, `noise_offsets`, `snr_db` (nullable), `tir_db` (nullable), `baseline_snr_db` (nullable), `room`, `rir_id` (nullable), `handset`, `agc`, `clip_drive_db`, `suppression`, `codec`, `bitrate`, `codec_delay_ms`, `transients`, `gap_ms`, `dither_dbfs`, `segments`, `aligner` (nullable), `seed`.
 
 These cover the manifest fields of ADR 0023; loss pattern is absent because v1 has no packet loss.
+
+`plan.parquet` holds these columns, with null pointers on constructed rows until `construct`, plus `split`.
+It also holds `clip_id`, `shard`, `source_path`, `source_offset_n`, `source_n`, `speech_offset_n`, `total_n`, `speech_ms` and `mask_ms`.
+These are plan-only and dropped at publish, except what pointers need.
 
 `index.parquet` holds `sample_id`, `split`, `in_small`, `source`, `treatment` and `audio_filepath`: the quick map of the whole set, without labels.
 
@@ -171,7 +175,7 @@ Non-MFA sources:
 
 | Source | Input | Notes |
 | --- | --- | --- |
-| SWC | word timings | an unaligned token inside a gap makes that gap masked |
+| SWC | word timings | an unaligned token inside a gap, or a gap of 2 s or more, makes that gap masked; a word over 5 s is masked (proposal 13) |
 | AMI | manual word XML | vocal sounds excluded; crosstalk is non-speech |
 | CallHome | turns | union of both sides is speech; ±0.25 s masked around every turn boundary of either side (ADR 0022) |
 | VOiCES | Zenodo alignments | shifted by the delay measured by cross-correlation |
@@ -242,6 +246,12 @@ A build missing planned shards is marked `state: interim`.
 | Speech Commands | one clip, one sample |
 | VOiCES | whole wav, every re-recording; distractor-only noise files not used |
 | LibriVAD `medium` | every generated wav, one row each; each utterance appears 54 times by design |
+
+- A stretch still over 6.6 s of speech has no gap longer than G, so it is split between two words where the budget would overflow, at that gap's midpoint with no margin. A last piece under 1 s is evened with the one before it. Only a single word over the limit stays whole.
+- Such a cut can sit on a label edge, which is accepted because noise or dither covers the whole sample.
+- A chunk also ends where its span would pass 20 s, so a total above 20 s comes only from a stretch that cannot be cut.
+- A chunk with under 200 ms of speech yields no sample and is counted in the plan manifest.
+- Cutting uses G = 200 ms whatever G the labels use, so a G ablation leaves audio bytes identical.
 
 ### Acoustic mix, augmented sources
 
@@ -432,6 +442,7 @@ These are not owner decisions yet. They are settled at the owner checkpoint at t
 10. SCAFE exists only at 48 kHz and stays out, so Street has two scenes (SPSQUARE, STRAFFIC) where LibriVAD has three.
 11. Because LibriVAD's `medium` beat its `large` on its own test but `large` won on VOiCES, the checkpoint compares a shorter rank prefix of Large against the full one before headline results.
 12. WADA-SNR saturates at its table ends on about half or more of sampled Common Voice clips, and the resulting correction to speech power is at most about 0.11 dB. `baseline_snr_db` is therefore informational unless the owner asks for Brouhaha.
+13. SWC masks an inner gap of 2 s or more between aligned words, and a word longer than 5 s, because labels would otherwise disagree with the audio. Of 30 sampled unmasked gaps per length, speech-level audio was found in 23 over 10 s, 5 at 5 to 10 s, 3 at 2 to 5 s and 2 at 1 to 2 s; `swc/german/U-Bahn_Berlin#2@202340` has a 14,240 ms gap at speech level. Words over 5 s are mostly not speech, such as an 8,920 ms word at -63 dB and a 55,830 ms word. Masking is safe because padding supplies ample non-speech.
 
 ## Left to the builder
 
