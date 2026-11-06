@@ -5,19 +5,28 @@
 
 """Stage `plan`: one row per sample with every random draw resolved, so construction is a pure function of a row."""
 
+import argparse
+import asyncio
 import dataclasses
-from collections import defaultdict
+import logging
+from collections import Counter, defaultdict
+from types import ModuleType
 
 import numpy as np
+import polars as pl
 
-from openvad_train.dataset.config import DEMAND_CATEGORIES, BuildConfig
+from openvad_train.dataset.config import DEMAND_CATEGORIES, FULL, SLICE, BuildConfig, work_dir
 from openvad_train.dataset.cutting import Chunk, cut_long, rebase
+from openvad_train.dataset.index import SOURCES
 from openvad_train.dataset.labels import apply_gap_rule, rasterise, speech_ratio
 from openvad_train.dataset.mix import padded_length
 from openvad_train.dataset.noise import NoisePool
+from openvad_train.dataset.parquet_io import read_parquet, write_parquet
 from openvad_train.dataset.schema import Clip, Timing, rank, sample_seed
-from openvad_train.fetch.common import data_dir
+from openvad_train.fetch.common import data_dir, raw_dir, write_manifest
 
+
+log = logging.getLogger(__name__)
 
 SAMPLES_PER_MS = 16
 SAMPLE_RATE = 16_000
@@ -28,6 +37,77 @@ _CUT_SOURCES = {"mls", "swc"}
 _CODEC_MODES = {
     "amr_wb": (6.6, 8.85, 12.65, 14.25, 15.85, 18.25, 19.85, 23.05, 23.85),
     "amr_nb": (4.75, 5.15, 5.9, 6.7, 7.4, 7.95, 10.2, 12.2),
+}
+# Competing talker, babble and SSN need reserved clips and city needs WHAM!, which a later task adds to the draws.
+_CONDITIONS_WITH_A_DRAW = {"clean", *DEMAND_CATEGORIES}
+
+_INTERVALS = pl.List(pl.List(pl.Int64))
+_PLAN_SCHEMA = {
+    "sample_id": pl.String,
+    "clip_id": pl.String,
+    "split": pl.String,
+    "rank": pl.UInt64,
+    "seed": pl.UInt64,
+    "shard": pl.String,
+    "source": pl.String,
+    "language": pl.String,
+    "speaker": pl.String,
+    "licence": pl.String,
+    "treatment": pl.String,
+    "aligner": pl.String,
+    "audio_filepath": pl.String,
+    "audio_format": pl.String,
+    "byte_offset": pl.Int64,
+    "byte_length": pl.Int64,
+    "offset": pl.Float64,
+    "duration": pl.Float64,
+    "row_in_file": pl.Int64,
+    "labels": pl.List(pl.UInt8),
+    "band": pl.String,
+    "in_small": pl.Boolean,
+    "speech_ratio": pl.Float64,
+    "condition": pl.String,
+    "noise_source_ids": pl.List(pl.String),
+    "noise_offsets": pl.List(pl.Int64),
+    "snr_db": pl.Float64,
+    "tir_db": pl.Float64,
+    "baseline_snr_db": pl.Float64,
+    "room": pl.Boolean,
+    "rir_id": pl.String,
+    "handset": pl.Struct(
+        {
+            "highpass_hz": pl.Float64,
+            "lowpass_hz": pl.Float64,
+            "peaks": pl.List(pl.Struct({"freq_hz": pl.Float64, "gain_db": pl.Float64})),
+        }
+    ),
+    "agc": pl.Struct({"target_dbfs": pl.Float64, "attack_ms": pl.Float64, "release_ms": pl.Float64}),
+    "clip_drive_db": pl.Float64,
+    "suppression": pl.String,
+    "codec": pl.String,
+    "bitrate": pl.Float64,
+    "codec_delay_ms": pl.Int64,
+    "transients": pl.List(pl.Struct({"kind": pl.String, "offset_n": pl.Int64, "peak_db": pl.Float64})),
+    "gap_ms": pl.Int64,
+    "dither_dbfs": pl.Float64,
+    "segments": pl.List(
+        pl.Struct(
+            {
+                "clip_id": pl.String,
+                "start_n": pl.Int64,
+                "end_n": pl.Int64,
+                "rir_id": pl.String,
+                "lowpass_hz": pl.Float64,
+            }
+        )
+    ),
+    "source_path": pl.String,
+    "source_offset_n": pl.Int64,
+    "source_n": pl.Int64,
+    "speech_offset_n": pl.Int64,
+    "total_n": pl.Int64,
+    "speech_ms": _INTERVALS,
+    "mask_ms": _INTERVALS,
 }
 
 
@@ -243,3 +323,124 @@ def assign_shards(rows: list[dict], bytes_per_hour: float, target_bytes: int = 1
             filled[split] = 0.0
         filled[split] += size
         row["shard"] = f"{split}/{number[split]:05d}"
+
+
+def _parse_limit(limit: str | None) -> tuple[int | None, float | None]:
+    """`--limit` as (samples, hours); at most one is set."""
+    if limit is None:
+        return None, None
+    hours = limit.endswith("h")
+    try:
+        value = float(limit[:-1]) if hours else int(limit)
+    except ValueError:
+        raise ValueError(f"limit must be a sample count or hours such as 1000h, got {limit!r}") from None
+    if not value > 0:  # also refuses NaN
+        raise ValueError(f"limit must be positive, got {limit!r}")
+    return (None, float(value)) if hours else (int(value), None)
+
+
+def _lowest_ranks(rows: list[dict], samples: int | None, hours: float | None) -> list[dict]:
+    """The prefix of rank-sorted `rows` within the limit; a sample that would pass the hours is not taken."""
+    if samples is not None:
+        return rows[:samples]
+    if hours is None:
+        return rows
+    kept, total_s = [], 0.0
+    for row in rows:
+        total_s += row["duration"]
+        if total_s > hours * 3600:
+            break
+        kept.append(row)
+    return kept
+
+
+def _timings(cfg: BuildConfig, name: str, module: ModuleType, clips: list[Clip]) -> dict[str, Timing]:
+    if hasattr(module, "timings"):
+        return {t.clip_id: t for t in module.timings(raw_dir(name), clips)}
+    words = work_dir(cfg) / "words" / name
+    if not words.is_dir():
+        raise FileNotFoundError(f"{name} is labelled by MFA and {words} does not exist: run the align stage first")
+    raise NotImplementedError(f"reading the MFA word tables under {words} arrives with the align stage")
+
+
+def _print_summary(df: pl.DataFrame, bytes_per_hour: float) -> list[dict]:
+    """Hours and estimated constructed bytes per source, split and condition; as-is sources store nothing."""
+    built_s = pl.col("duration").filter(pl.col("treatment") == "augmented").sum()
+    summary = (
+        df.group_by("source", "split", "condition")
+        .agg(samples=pl.len(), hours=pl.col("duration").sum() / 3600, bytes=built_s / 3600 * bytes_per_hour)
+        .sort("source", "split", "condition")
+        .to_dicts()
+    )
+    for s in summary:
+        print(
+            f"{s['source']} {s['split']} {s['condition']}: "
+            f"{s['samples']} samples, {s['hours']:.2f} h, {s['bytes'] / 1e9:.2f} GB"
+        )
+    hours, size = sum(s["hours"] for s in summary), sum(s["bytes"] for s in summary)
+    print(f"total: {df.height} samples, {hours:.2f} h, {size / 1e9:.2f} GB")
+    return summary
+
+
+def run_plan(cfg: BuildConfig, limit: str | None = None) -> None:
+    """Write `work/<name>/plan/plan.parquet` in rank order and the stage's `manifest.json`, from the index stage's
+    tables. `limit`, a sample count or hours such as `1000h`, keeps the lowest ranks.
+    """
+    samples, hours = _parse_limit(limit)
+    missing = sorted(c for c, share in cfg.condition_shares.items() if share > 0 and c not in _CONDITIONS_WITH_A_DRAW)
+    if missing:
+        raise NotImplementedError(f"conditions without a draw yet: {', '.join(missing)}")
+    unknown = [name for name in cfg.sources if name not in SOURCES]
+    if unknown:
+        raise ValueError(f"no index adapter for source {unknown[0]!r}; have {sorted(SOURCES)}")
+
+    pool = NoisePool(raw_dir("demand"))
+    rows: list[dict] = []
+    per_source: dict[str, dict] = {}
+    for name in cfg.sources:
+        fields = [f.name for f in dataclasses.fields(Clip)]
+        index = asyncio.run(read_parquet(work_dir(cfg) / "index" / f"{name}.parquet", fields))
+        clips = [Clip(**row) for row in index.iter_rows(named=True)]
+        timings = _timings(cfg, name, SOURCES[name], clips)
+        counts = Counter(reserved=sum(c.reserved for c in clips))
+        for clip in clips:
+            sample_rows = clip_rows(clip, timings[clip.clip_id], cfg, pool)
+            rows += sample_rows
+            counts["samples"] += len(sample_rows)
+            counts["without_sample"] += not sample_rows and not clip.reserved
+        per_source[name] = {"clips": len(clips), **{k: counts[k] for k in ("reserved", "without_sample", "samples")}}
+        log.info("%s: %s", name, per_source[name])
+
+    # Sorted before the limit too: `assign_shards` only sees what the limit keeps.
+    rows.sort(key=lambda r: r["rank"])
+    rows = _lowest_ranks(rows, samples, hours)
+    if len({r["sample_id"] for r in rows}) != len(rows):
+        raise ValueError("a sample id is repeated: rows would overwrite each other's rank and seed")
+    bytes_per_hour = cfg.flac_mb_per_hour * 1e6
+    assign_shards(rows, bytes_per_hour)
+    df = pl.DataFrame(rows, schema=_PLAN_SCHEMA)
+    out = work_dir(cfg) / "plan"
+    out.mkdir(parents=True, exist_ok=True)
+    asyncio.run(write_parquet({out / "plan.parquet": df.lazy()}))
+    write_manifest(
+        out,
+        {
+            "stage": "plan",
+            "config": cfg.name,
+            "plan_version": cfg.plan_version,
+            "global_seed": cfg.global_seed,
+            "limit": limit,
+            "samples": df.height,
+            "per_source": per_source,
+            "summary": _print_summary(df, bytes_per_hour),
+        },
+    )
+
+
+def main(args: list[str]) -> None:
+    parser = argparse.ArgumentParser(prog="dataset plan", description=__doc__)
+    parser.add_argument("--config", choices=("slice", "full"), required=True)
+    parser.add_argument("--limit", help="keep the lowest ranks: a sample count, or hours such as 1000h")
+    ns = parser.parse_args(args)
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    run_plan({"slice": SLICE, "full": FULL}[ns.config], ns.limit)

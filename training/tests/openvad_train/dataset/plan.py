@@ -3,18 +3,28 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+import asyncio
 import dataclasses
+import json
 from collections import Counter
+from types import SimpleNamespace
 from typing import Literal
 
+import polars as pl
 import pytest
 
 from demand_support import make_demand_tree
+from openvad_train.dataset import __main__ as cli
+from openvad_train.dataset import plan as plan_module
 from openvad_train.dataset.config import DEMAND_CATEGORIES, FULL, SLICE
 from openvad_train.dataset.cutting import Chunk
+from openvad_train.dataset.index import run_index
+from openvad_train.dataset.labels import rasterise
 from openvad_train.dataset.noise import NoisePool, demand_channels
-from openvad_train.dataset.plan import assign_shards, clip_rows, draw_sample
+from openvad_train.dataset.parquet_io import read_parquet, write_parquet
+from openvad_train.dataset.plan import assign_shards, clip_rows, draw_sample, run_plan
 from openvad_train.dataset.schema import Clip, Timing, rank, sample_seed
+from swc_support import make_swc_tree
 
 
 Split = Literal["train", "validation", "test"]
@@ -384,3 +394,140 @@ def test_a_sample_over_the_target_has_its_own_shard():
     rows = plan_rows(sources=["swc"], n=3)
     assign_shards(rows, bytes_per_hour=3600e6, target_bytes=1)
     assert len({r["shard"] for r in rows}) == 3
+
+
+@pytest.fixture
+def data(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENVAD_DATA_DIR", str(tmp_path))
+    make_swc_tree(tmp_path / "datasets/raw/swc")
+    make_demand_tree(tmp_path / "datasets/raw/demand")
+    return tmp_path
+
+
+CONFIG = dataclasses.replace(SLICE, languages=None)
+
+
+def plan_of(data) -> pl.DataFrame:
+    return asyncio.run(read_parquet(data / "datasets/processed/work/openvad-slice/plan/plan.parquet"))
+
+
+def test_run_plan_writes_one_row_per_clip_in_rank_order_with_a_manifest(data, capsys):
+    run_index(CONFIG)
+    run_plan(CONFIG)
+    df = plan_of(data)
+    assert df.height == 5
+    assert df["sample_id"].to_list() == [s for _, s in sorted((rank(s), s) for s in df["sample_id"].to_list())]
+    assert df.schema["rank"] == pl.UInt64
+    assert df.schema["seed"] == pl.UInt64
+    assert df["shard"].null_count() == 0
+    assert df["audio_filepath"].null_count() == 5
+    assert (df["source_path"].str.starts_with("datasets/raw/swc/")).all()
+    manifest = json.loads((data / "datasets/processed/work/openvad-slice/plan/manifest.json").read_text())
+    assert manifest["samples"] == 5
+    assert manifest["plan_version"] == "v1"
+    assert manifest["per_source"]["swc"] == {"clips": 5, "reserved": 0, "without_sample": 0, "samples": 5}
+    first = df.row(0, named=True)
+    assert f"swc {first['split']} " in capsys.readouterr().out
+
+
+def test_the_parquet_schema_names_exactly_the_row_columns():
+    assert set(plan_module._PLAN_SCHEMA) == set(draw_sample(clip(), timing(), SLICE))
+
+
+def test_a_row_read_back_feeds_the_labels(data):
+    run_index(CONFIG)
+    run_plan(CONFIG)
+    row = plan_of(data).row(0, named=True)
+    assert row["speech_ms"][0] == [100, 300]
+    labels = rasterise(row["speech_ms"], row["mask_ms"], row["total_n"], row["speech_offset_n"] // 16)
+    assert labels.sum() > 0
+
+
+def test_a_rerun_gives_the_same_plan(data):
+    run_index(CONFIG)
+    run_plan(CONFIG)
+    first = plan_of(data)
+    run_plan(CONFIG)
+    assert plan_of(data).equals(first)
+
+
+def test_noise_rows_on_real_files_name_a_file_in_the_tree(data):
+    run_index(CONFIG)
+    run_plan(CONFIG)
+    for row in plan_of(data).iter_rows(named=True):
+        if row["condition"] == "clean":
+            assert row["noise_source_ids"] == []
+            continue
+        [path] = row["noise_source_ids"]
+        assert (data / path).is_file()
+
+
+def test_run_plan_leaves_reserved_clips_out(data):
+    run_index(CONFIG)
+    path = data / "datasets/processed/work/openvad-slice/index/swc.parquet"
+    frame = asyncio.run(read_parquet(path)).with_columns(reserved=pl.col("clip_id") == "english/Aaa")
+    asyncio.run(write_parquet({path: frame.lazy()}))
+    run_plan(CONFIG)
+    assert plan_of(data).height == 4
+    assert "swc/english/Aaa@0" not in plan_of(data)["sample_id"].to_list()
+
+
+def test_limit_keeps_the_lowest_ranks_by_count(data):
+    run_index(CONFIG)
+    run_plan(CONFIG)
+    everything = plan_of(data)["sample_id"].to_list()
+    run_plan(CONFIG, limit="2")
+    assert plan_of(data)["sample_id"].to_list() == everything[:2]
+
+
+def test_limit_keeps_the_lowest_ranks_by_hours(data):
+    run_index(CONFIG)
+    run_plan(CONFIG)
+    everything = plan_of(data)
+    hours = float(everything["duration"].head(2).sum()) / 3600
+    run_plan(CONFIG, limit=f"{hours * 1.01}h")
+    assert plan_of(data)["sample_id"].to_list() == everything["sample_id"].to_list()[:2]
+
+
+@pytest.mark.parametrize("limit", ["abc", "-1", "0", "-2h", "h", "nanh"])
+def test_a_bad_limit_is_refused_before_any_work(limit):
+    with pytest.raises(ValueError, match="limit"):
+        run_plan(SLICE, limit=limit)
+
+
+def test_full_refuses_conditions_without_a_draw_before_any_work():
+    with pytest.raises(NotImplementedError, match="babble"):
+        run_plan(FULL)
+
+
+def test_an_mfa_source_without_word_tables_names_them(data, monkeypatch):
+    run_index(CONFIG)
+    monkeypatch.setitem(plan_module.SOURCES, "swc", SimpleNamespace())
+    with pytest.raises(FileNotFoundError, match="words/swc"):
+        run_plan(CONFIG)
+
+
+def test_a_source_without_adapter_is_named(data):
+    with pytest.raises(ValueError, match="no index adapter for source 'ami'"):
+        run_plan(dataclasses.replace(SLICE, sources=("ami",)))
+
+
+def test_a_repeated_sample_id_is_refused(data, monkeypatch):
+    run_index(CONFIG)
+    monkeypatch.setattr(
+        plan_module, "clip_rows", lambda c, t, cfg, pool: [draw_sample(c, t, cfg, pool, Chunk(0, 1))] * 2
+    )
+    with pytest.raises(ValueError, match="repeated"):
+        run_plan(CONFIG)
+
+
+def test_cli_passes_config_and_limit(monkeypatch):
+    seen = []
+    monkeypatch.setattr(plan_module, "run_plan", lambda cfg, limit: seen.append((cfg.name, limit)))
+    plan_module.main(["--config", "slice", "--limit", "1000h"])
+    plan_module.main(["--config", "full"])
+    assert seen == [("openvad-slice", "1000h"), ("openvad-v1", None)]
+
+
+def test_plan_is_a_registered_stage():
+    assert cli.STAGES["plan"] is plan_module.main

@@ -8,11 +8,11 @@
 import argparse
 from collections.abc import Callable
 
-from openvad_train.dataset import index
+from openvad_train.dataset import index, plan
 
 
 # Each stage registers here with the task that adds it; a stage without an entry is not implemented yet.
-STAGES: dict[str, Callable[[list[str]], None]] = {"index": index.main}
+STAGES: dict[str, Callable[[list[str]], None]] = {"index": index.main, "plan": plan.main}
 
 
 def main(argv: list[str] | None = None) -> None:
