@@ -26,15 +26,21 @@ Published Picovoice curves are cited only; Cobra is commercial and is not run.
 
 ### Own test set
 
-- Test-broad: the test split of every [0023](0023-dataset-composition.md) source, with conditions drawn like train, reported per dataset (owner, 2026-11-03). Its size follows from the 0023 splits. It gives the headline numbers.
+- Test-broad: the test split of every [0023](0023-dataset-composition.md) source, with conditions drawn like train, reported per dataset (owner, 2026-11-03). Its size follows from the 0023 splits. It gives the headline numbers. Its DEMAND noise comes from channels 15 and 16, and its LibriVAD part is `medium` test as generated (owner, 2026-11-06). Its City noise is WHAM! `tt` (proposed, as in LibriVAD).
 - Test-grid: a paired factorial grid on LibriSpeech `test-clean` and SWC German test, with 19 acoustic × 7 channel cells plus 32 packet-loss cells (165 cells), about 60 utterances per language in every cell, about 130 h. It shows where each system breaks.
-- Test-unseen-noise: the same draws as Test-broad with WHAM! `tt` in place of the ambient pool. `tt` is this pool's noise (owner, 2026-11-03).
-- Metrics: frame AUC and AP, F1 at the dev threshold, miss and false-alarm rates, BG-FAR ([0022](0022-frame-labels.md)) and DCF (0.75 P_miss + 0.25 P_FA, as for Fearless Steps).
+- Test-unseen-noise: the same draws as Test-broad with WHAM! `tt` in place of the ambient pool. `tt` is this pool's noise (owner, 2026-11-03). Since `tt` is also City noise in Test-broad, its definition is revisited when it is built (deferred).
+- Metrics: frame AUC and AP, F1 at the dev threshold, miss and false-alarm rates, BG-FAR ([0022](0022-frame-labels.md)) and DCF (0.75 P_miss + 0.25 P_FA, as for Fearless Steps). BG-FAR needs the reference without the competing talker, so it is available only on samples where we mixed one (owner, 2026-11-06).
 - LibriSpeech `test-clean` is benchmark audio only and never enters dataset creation ([0023](0023-dataset-composition.md)). Its labels are the Zenodo alignments (owner, 2026-11-04).
 
 ### Conditions
 
-Two test conditions: 16 kHz, and 8 kHz derived from the same test set with the OpenVAD resampler, so bandwidth is the only variable.
+Three conditions over validation and test (owner, 2026-11-06):
+
+- 16 kHz: the stored audio.
+- 8 kHz: derived from the same test set with the OpenVAD resampler (decimate, interpolate; no G.711), so bandwidth is the only variable.
+- Telephone: decimate, G.711, interpolate, a labelled third condition for the target domain. The narrowband step is applied at scoring time, because nothing is stored at 8 kHz ([0021](0021-telephone-channel-simulation.md)).
+
+Samples whose `band` is `narrow_leg` or `narrow_native` stay in every condition and are reported through `band`.
 
 ### Scoring
 
@@ -53,6 +59,7 @@ Two test conditions: 16 kHz, and 8 kHz derived from the same test set with the O
 
 - The Picovoice benchmark mixes whole files from all 16 channels of 10 DEMAND environments (DKITCHEN, DWASHING, NFIELD, NPARK, NRIVER, OHALLWAY, OOFFICE, PSTATION, STRAFFIC, TCAR) into LibriSpeech `test-clean`. Its speech is held out, but DEMAND is training noise with no hold-out (owner, 2026-11-01), so Picovoice results are reported as seen noise.
 - LibriVAD's City noise is cut from WHAM! by split: train from `tr`, validation from `cv`, test from `tt` ([0018](0018-datasets.md)). WHAM! `tt` never enters training, so the City test noise is unseen; `tr` is training noise ([0023](0023-dataset-composition.md)).
+- The LibriVAD paper calls Babble, SSN and Domestic noise unseen for its models. OpenVAD trains on all nine categories, so for OpenVAD they are seen noise, and this is stated wherever LibriVAD results are reported.
 
 ## Consequences
 
@@ -67,13 +74,12 @@ Two test conditions: 16 kHz, and 8 kHz derived from the same test set with the O
 - Which Fearless Steps splits have public reference labels, and the official collar for Phase 4.
 - How 10 ms outputs are scored on Picovoice's 32 ms frames.
 - Whether "one threshold" means one per system, and whether the 8 kHz condition gets its own dev threshold or reuses the 16 kHz one.
-- Whether BG-FAR applies beyond our own test set. It needs the reference without the competing talker, which exists only where we mix one.
 - Whether the DEMAND environment list above matches upstream Picovoice; the fetcher does not confirm it.
 
 ## Deferred
 
 - The AVA-Speech 16 kHz step: the fetcher only cuts with ffmpeg and keeps the source rate, so the resampling step does not exist yet and must record its own ffmpeg version.
-- Running the 8 kHz condition (needs the OpenVAD resampler).
+- Running the 8 kHz and telephone conditions (need the OpenVAD resampler and the G.711 transform).
 - The scoring module and the reference VAD adapters.
 - Onset-latency evaluation under noisy labels (S4VAD 2026).
 

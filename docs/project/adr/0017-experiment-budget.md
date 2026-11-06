@@ -17,8 +17,9 @@ Ablations are proposed in [0006](0006-window-and-stride.md), [0010](0010-signal-
   - OpenVAD Large is the full training.
 - Screen with 1 seed; use 3 seeds only for winners and headline results, on the Large tier.
 - There will be a Small and a Large set, each with a train, validation (dev) and test split, and Small is a subset of Large ([0023](0023-dataset-composition.md)) (owner, 2026-11-06).
+- Small is a rank cut-off of Large over everything except LibriVAD, so it leaves out LibriVAD `medium`; its size is not decided (owner, 2026-11-06). Validation and test are the same rows for both tiers.
 - Running on LibriVAD `small` train makes architectures comparable with the LibriVAD paper models. LibriVAD test splits are never trained on: `medium` test is a benchmark and `small` test is the paper-comparison row ([0020](0020-evaluation-benchmarks.md)). LibriVAD `medium` train reaches training only through Large (owner, 2026-11-04).
-- LibriVAD has no validation split at the pinned revision, so screening validates on the OpenVAD dev split.
+- LibriVAD has no validation split at the pinned revision. `just fetch librivad-val` generates one from `dev-clean` into its own raw directory. Its `medium` val sits in the OpenVAD validation split, validation only (owner, 2026-11-06; [0023](0023-dataset-composition.md), [0024](0024-training-data-licence-policy.md)). Screening validates on that split.
 - Early stopping and checkpoint choice use a fixed subset of 15 to 30 h of dev.
 - Retune the 2 or 3 best configurations at Large scale (learning rate, width, epochs) before their seeds; a scaling check between the tiers is optional.
 - Compare runs by steps or frames seen, not by epochs.
@@ -29,4 +30,5 @@ Ablations are proposed in [0006](0006-window-and-stride.md), [0010](0010-signal-
 - What does the budget cap: the number of configurations per axis, the number of runs, or GPU-hours? Only about 20 configurations are fixed so far.
 - Is week 10 the variants slot, and where is the work plan?
 - Were the LibriVAD paper models trained on `small` train?
+- Does a shorter rank prefix of Large beat the full Large? LibriVAD's `medium` beat its `large` on its own test, but `large` won on VOiCES, so the owner checkpoint compares the two before headline results ([dataset construction spec](../spec/dataset-construction.md)).
 - Where does the optional native 8 kHz model ([0009](0009-native-16khz-and-one-resampler.md)) fit in the budget?

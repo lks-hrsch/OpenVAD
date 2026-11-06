@@ -22,14 +22,15 @@ The engine design follows from this: it runs natively at 16 kHz and upsamples 8 
 - The input rate is set once at stream creation (for example `Stream::new(model, sample_rate)`) and fixed for the stream's lifetime.
 - The streaming API accepts any block length (for example `Stream::push(samples)`) and buffers internally up to the model's stride.
 - One resampler for 8 and 16 kHz conversion: `openvad-core` provides a 2:1 decimator and a 2:1 interpolator, exposed via `openvad-rs`. The engine, training and the benchmarks all use it. It is fixed and documented. Other rates in data preparation use ffmpeg, with the version recorded in the manifest (owner, 2026-11-04).
-- Band-limited training augmentation along the production narrowband path (16 kHz to 8 kHz, G.711, back to 16 kHz) is defined in [0021](0021-telephone-channel-simulation.md); the share of narrowband copies is an open question there.
+- The filter is fixed in the dataset construction phase (owner, 2026-11-06): a half-band decimator and interpolator, causal and linear-phase, 63 taps, at least 70 dB stopband, with committed coefficients and explicit `mul_add` in the canonical order, in the scalar tier only.
+  - 63 taps and 70 dB are starting values; the design step may adjust them before the coefficients are committed.
+  - A committed script designs the coefficients, and the hash of the coefficients goes in the dataset manifest.
+  - `openvad-rs` exposes both on NumPy arrays through the `numpy` crate, because `Vec<f32>` from Python lists is too slow for dataset work.
+  - Tests cover the frequency response against the stated stopband, the group delay, known vectors, and a Python and Rust comparison at `1e-6`.
+- Nothing is stored at 8 kHz (owner, 2026-11-06). Band-limited training augmentation along the production narrowband path (16 kHz to 8 kHz, G.711, back to 16 kHz) runs at train time with this resampler, as defined in [0021](0021-telephone-channel-simulation.md).
 
 ## Consequences
 
 - The resampler's group delay counts towards algorithmic latency and is reported.
 - Production uses libsamplerate `sinc_best` instead. The filter difference is noted, and it may be tested as a robustness check.
-- The resampler and the streaming API do not exist yet; each is added with its first user.
-
-## Open questions
-
-- Filter length and stopband of the interpolator, decided in the model-design phase.
+- The resampler and the streaming API do not exist yet; each is added with its first user. The dataset construction is the resampler's first user ([dataset construction spec](../spec/dataset-construction.md)).

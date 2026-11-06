@@ -27,8 +27,10 @@ It covers:
 
 - Sources with word or phone timings: a gap between two aligned words shorter than G is speech, a longer gap is non-speech (owner, 2026-11-04).
 - Turn-based sources (CallHome, Simsamu) use their turns as given (owner, 2026-11-04).
-- Proposed G = 200 ms, after Kretzschmar 2023: people notice pauses from about 200 to 250 ms, and labels running from the first to the last word made his model sluggish.
-- G is a generator parameter; the owner decides its value. A G ablation is optional.
+- G = 200 ms (owner, 2026-11-06), after Kretzschmar 2023: people notice pauses from about 200 to 250 ms, and labels running from the first to the last word made his model sluggish.
+- G is a generator parameter, applied only when intervals are rasterised to the 10 ms grid, so a change of G never reruns the aligner. A G ablation is optional.
+- Audio decisions (the 20% coverage drop of [0025](0025-alignment-labelling.md), padding to 33% speech, TIR over active frames) use the word union at G = 0, so a G ablation changes labels and leaves audio bytes identical.
+- A frame is masked if any mask covers it; otherwise it takes the majority class of its samples.
 
 ### Competing talker
 
@@ -41,9 +43,10 @@ Following Foreground VAD (Yang et al. 2026, arXiv 2609.19856):
 
 ### Channel effects
 
-- Labels are shifted by the codec delay table of [0021](0021-telephone-channel-simulation.md).
-- Frames filled by PLC stay speech.
-- Comfort noise (CNG) is non-speech.
+- Labels are shifted by the codec delay table of [0021](0021-telephone-channel-simulation.md), after the padding offset.
+- Room impulse responses are peak-aligned to zero, so reverberation adds no shift. The reverb tail after the speech offset is non-speech (owner, 2026-11-06).
+- Decimator and interpolator together delay about 3.9 ms at 63 taps, which rounds to 0 on the 10 ms grid. The train-time narrowband transform computes the shift from the coefficients, and a test asserts the result.
+- PLC-filled frames and comfort noise (CNG) belong to packet loss, DTX and CNG, which are deferred ([0021](0021-telephone-channel-simulation.md)). When they return, PLC frames stay speech and CNG is non-speech.
 
 ## Consequences
 
@@ -54,11 +57,9 @@ Following Foreground VAD (Yang et al. 2026, arXiv 2609.19856):
 
 ## Open questions
 
-- The value of G. [`docs/notes/forced-alignment.md`](../../notes/forced-alignment.md) states 200 ms, but it is not decided.
 - What BG-FAR computes exactly. The only definition is the one in `docs/shared/acronyms.tex`, "false-alarm rate measured on background audio"; how the 6 dB margin enters is not recorded.
 - Whether 9, 13 and 17 dB are our test levels or the paper's. No test pool in [0020](0020-evaluation-benchmarks.md) uses them, and 17 dB lies above the training range of 0 to 15 dB.
-- Whether the gap rule also applies to LibriVAD's own labels, or they are used as they are.
-- Whether the label shift includes the group delay of the OpenVAD decimator and interpolator for narrowband samples, or only codec delay.
+- Whether the gap rule also applies to LibriVAD's own labels, or they are used as they are. Proposed: as they are, per-sample `int16` labels reduced to 10 ms by majority.
 
 ## References
 

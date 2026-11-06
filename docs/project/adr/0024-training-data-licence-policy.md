@@ -34,6 +34,7 @@ The project needs one rule for what may be trained on, what is recorded, and whe
    - every test pool of [0020](0020-evaluation-benchmarks.md).
 
    Dev pools are not trained on either.
+   The LibriVAD `medium` validation and test splits sit in the validation and test files of the dataset (owner, 2026-11-06). They still never train, and the dataset code raises if they are read outside validation and test.
 6. Every training dataset and anything rendered from them stay on the owner's network share (owner, 2026-11-04).
    - The workstation may read them over the mount and hold temporary local copies for rendering and training.
    - Copies anywhere else, including the TU Dresden HPC and the company cluster, need a new decision by the owner.
@@ -45,6 +46,7 @@ The project needs one rule for what may be trained on, what is recorded, and whe
 - Licence facts per source are recorded in [`data/README.md`](../../../data/README.md) and the manifests; [0018](0018-datasets.md) does not sort sources by licence.
 - One run set for RQ1.
 - A source's licence cannot keep it out of training; only decision 5 and the composition of [0023](0023-dataset-composition.md) can.
+- LibriVAD's validation split exists only after `just fetch librivad-val` has generated it from `dev-clean` into its own raw directory, so the unmodified train and test build stays as it is.
 - Decision 6 blocks training on TU Dresden Capella and the company cluster until the owner decides otherwise.
 
 ## Open questions

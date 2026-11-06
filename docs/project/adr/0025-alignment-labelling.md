@@ -14,14 +14,23 @@ The aligner facts behind it, including models per language, accuracy and licence
 
 - Word alignments come from the Montreal Forced Aligner (MFA) with pretrained acoustic models, dictionaries and grapheme-to-phoneme (G2P) models, one per language (owner, 2026-11-03); we do not train our own aligners.
 - Some of these models were trained partly on NC data or on GlobalPhone. They are labelling tools and are not shipped ([0024](0024-training-data-licence-policy.md)).
-- The labelling runs when the dataset generator needs it.
+- The labelling runs when the dataset generator needs it, in batches of clips taken in rank order per speaker, one MFA run per batch, so each speaker's clips stay together for fMLLR. Audio is read from a temporary local copy on the workstation ([0024](0024-training-data-licence-policy.md)).
+- MFA is the latest release, v3.4.3 (2026-10-08), built from source inside the uv workspace (owner, 2026-11-06):
+  - `tools/montreal-forced-aligner` is a git submodule pinned to that tag, never `main`, which is heading to 4.0 and removes the tokenisers;
+  - `tools/kaldi` is a git submodule at a pinned commit, compiled as shared libraries by `just build-mfa`;
+  - an optional `align` dependency group holds the editable MFA, `kalpy-kaldi` built against `KALDI_ROOT`, and `pynini`, so `just setup` keeps working without Kaldi;
+  - `initdb` and `pg_ctl` come from the system and are a documented requirement.
+- If the pilot shows MFA does not build in the workspace, the fallbacks in order are a separate uv project in `tools/mfa/`, then conda-forge `kaldi` as `KALDI_ROOT` only, which needs a note to the owner.
 - Which model labels which language follows the recommendation in [`docs/notes/forced-alignment.md`](../../notes/forced-alignment.md#which-aligner-for-which-language).
 - Kazakh has `kazakh_cv` 2.0.0 (`acoustic/kazakh/cv/v2.0.0` in `MontrealCorpusTools/mfa-models`, checked 2026-11-04).
-- Japanese and Mandarin transcripts need word segmentation before alignment; how MFA 3 does it is to be checked when the aligner is set up.
+- Japanese and Mandarin transcripts need word segmentation before alignment; they use the MFA 3.4.3 tokenisers. Digits map to `<unk>`.
+- One committed table, `dataset/mfa_models.tsv`, holds language, acoustic model, dictionary and G2P model, following the note.
+- A language with an acoustic model but no lexicon gets a rule-based lexicon (Epitran or XPF) (owner, 2026-11-06). If it fails the quality bar, the failure rule below applies.
 - The model cards list corpora, not splits, so the aligners may have seen Common Voice and MLS dev and test audio. They only produce labels; the labels on those pools may be a little more accurate than on train.
 
 ### Drop rules
 
+The rules below are confirmed as written (owner, 2026-11-06).
 Per language and source, a clip is dropped if:
 
 - its alignment fails or needs a wider beam;
@@ -31,27 +40,30 @@ Per language and source, a clip is dropped if:
 - its first word starts in the first 20 ms;
 - speech covers less than 20% of it.
 
-### Hand check
+Speech Commands is exempt from the speaking-rate and first-20-ms rules (owner, 2026-11-06).
+Drop thresholds are frozen per language and source from the first batch, so later batches cannot change earlier decisions.
+Out-of-vocabulary words use `--use_g2p` where a G2P model exists; Italian and Dutch have none, so their out-of-vocabulary words become `spn` (owner, 2026-11-06).
 
-500 clips are labelled by hand in Praat (owner, 2026-11-04): 125 English, 125 German, 125 from other languages with `*_mfa` models and 125 from other languages with `*_cv` models.
+### Quality bar and hand check
 
-- Clips are sampled across the alignment-score quantiles.
-- Each clip gets one TextGrid tier with speech intervals, labelled without seeing the MFA output.
-- About 20% of the clips are labelled by two people to measure agreement between labellers, the ceiling for MFA.
+Before any language enters the full run (owner, 2026-11-06):
+
+- Pilot coverage: a small sample of every language using `*_cv` or VoxCommunis models with over 200 h in the pool, plus English, German, Japanese and Mandarin.
+- Automatic bar per language: alignment failure rate and the share of clips removed by the drop rules. The thresholds are set from the pilot distribution and recorded in the manifest.
+- Hand check: 100 clips are labelled by hand in Praat, 25 each from English, German, Italian and Catalan. They are sampled across the alignment-score quantiles, and each gets one TextGrid tier with speech intervals, labelled without seeing the MFA output.
 - Reported: frame agreement on the 10 ms grid and the share of onsets and offsets within 20 ms and 50 ms.
-- The pass threshold is set after a pilot.
+- Failure rule: a failing language is dropped and recorded automatically. If it has over 500 h in the pool, the owner decides instead.
 
 The published MFA results are phone boundary errors on other corpora, so they do not replace this check on noisy crowd-sourced clips.
+The earlier 500-clip hand check (125 each for English, German, other `*_mfa` languages and other `*_cv` languages, with about 20% double-labelled to measure agreement between labellers) is deferred; the word tables keep what its sampling needs.
 
 ## Consequences
 
 - Praat is under the GNU General Public License. It is a tool only and never part of the release.
-- There is no per-language quota, so the thesis claims no hand-checked accuracy per language. Alignment failure rates, computed automatically per language, flag languages for a closer look.
+- There is no per-language quota, so the thesis claims no hand-checked accuracy per language beyond the four pilot languages. Alignment failure rates, computed automatically per language, flag languages for a closer look.
 
 ## Open questions
 
-- Are the drop rules owner-decided? No source dates them.
-- Do Italian and Dutch, which have no G2P model, use a G2P model trained on the dictionary for out-of-dictionary words, or drop those clips?
 - Which models label Croatian, Bosnian, Czech, Serbian, Bulgarian and Ukrainian? [`docs/notes/forced-alignment.md`](../../notes/forced-alignment.md#mfa) lists what exists; none is chosen, and Bosnian has no model of its own.
 - Is the legacy `acoustic/arabic.zip` in `mfa-models` usable? [0023](0023-dataset-composition.md) leaves Arabic out as a language without an MFA model; the note reports the archive as unverified ([`docs/notes/forced-alignment.md`](../../notes/forced-alignment.md)).
 - The VoxCommunis coverage, checked model by model.

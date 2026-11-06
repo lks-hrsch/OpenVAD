@@ -16,40 +16,56 @@ This record holds the channel chain.
 
 ### Chain per sample
 
-[0023](0023-dataset-composition.md) sets which sources pass through this chain.
+[0023](0023-dataset-composition.md) sets which sources pass through this chain: the augmented ones. As-is sources skip the stored chain.
+Everything stored is 16 kHz (owner, 2026-11-06); nothing is stored at 8 kHz. The narrowband step runs at train time.
+The probabilities and ranges below are placeholders the owner may correct at the checkpoint of the [dataset construction spec](../spec/dataset-construction.md).
+
+Stored chain:
 
 1. Acoustic mix ([0023](0023-dataset-composition.md)).
-2. Optional reverberation (room impulse response).
-3. Handset response.
-4. AGC, gain and soft clipping.
-5. Classical phone noise suppression (spectral subtraction or Wiener filter), with p ≈ 0.3.
-6. One of three channel groups, with no shares set (see Open questions):
+2. Room, p = 0.5: a real room impulse response from BUT ReverbDB (CC BY 4.0) or OpenSLR 28 (Apache-2.0) (owner, 2026-11-06). Rooms are split 80/10/10 by hash, and the response is peak-aligned to zero, so it adds no label shift.
+3. Handset, p = 0.7: high-pass 100 to 300 Hz, low-pass 3.4 to 7 kHz, two peaks of ±6 dB.
+4. AGC, p = 0.5: target −26 to −16 dBFS, attack 5 to 20 ms, release 100 to 500 ms.
+5. Soft clipping, p = 0.15: drive 3 to 12 dB.
+6. Classical phone noise suppression, p = 0.3: Wiener filter or spectral subtraction with scipy.
+7. Stored codec leg, with the shares below. Shares and bitrates are placeholders until the gateway log query has run.
 
-| Group | Rate | Channel |
-| --- | --- | --- |
-| No channel | 16 kHz | none |
-| Wideband | 16 kHz | G.722, AMR-WB or Opus; no G.711 stage |
-| Narrowband | 8 kHz | caller leg: none (landline), AMR-NB, AMR-WB or EVS; then 16 kHz to 8 kHz with the OpenVAD decimator and G.711 A-law or μ-law |
+| Codec | Share | Bitrate | Path | `band` |
+| --- | --- | --- | --- | --- |
+| None | 40% | | | `wide` |
+| G.722 | 30% | 64 kbit/s | ffmpeg | `wide` |
+| AMR-WB | 15% | 6.6 to 23.85 kbit/s | ffmpeg | `wide` |
+| Opus | 5% | 12 to 32 kbit/s | ffmpeg | `wide` |
+| AMR-NB | 10% | 4.75 to 12.2 kbit/s | decimate, ffmpeg, interpolate | `narrow_leg` |
 
-- "No channel" concerns the codec stage only; it is not the "Clean" acoustic condition of [0023](0023-dataset-composition.md).
+- "None" concerns the codec stage only; it is not the "Clean" acoustic condition of [0023](0023-dataset-composition.md).
 - Every 8 and 16 kHz conversion uses the OpenVAD resampler (owner, 2026-11-04).
-- Within narrowband, G.711 is A-law in 90% and μ-law in 10% of the samples (proposed; see Open questions).
-- Narrowband samples are stored at 8 kHz.
-  Their 16 kHz view comes from the OpenVAD interpolator at load time, the same path the engine uses ([0009](0009-native-16khz-and-one-resampler.md)).
-- Codec DTX and CNG are switched on and off at random.
-- Packet loss:
-  - Lossless in 50% of the samples.
-  - In the other 50%, the loss rate is drawn from {1, 3, 5, 10, 20}%.
-  - Losses come in bursts (Gilbert-Elliott model) and are decoded with each codec's own PLC.
-  - Loss hits mainly the caller leg; the G.711 leg gets only a little.
+- The `band` column of the sample row says what the train-time step does. CallHome's mirror holds 8 kHz telephone audio in 16 kHz files; it is stored unchanged with `band = narrow_native`.
+
+Train-time narrowband (owner, 2026-11-06):
+
+| `band` | Behaviour |
+| --- | --- |
+| `wide` | with probability `p_narrow`: decimate, G.711, interpolate |
+| `narrow_leg` | always: decimate, G.711, interpolate, because the AMR-NB caller leg always reaches the network through G.711 |
+| `narrow_native` | nothing |
+
+- This replaces storing narrowband samples at 8 kHz: it costs little in training, and a filter change does not force a rebuild of the wideband samples.
+- `p_narrow` is a training parameter with default 0.35, a placeholder. The gateway log query of the [build notes](../../notes/build-and-hardware.md#open-questions) no longer blocks construction.
+- It applies to every `wide` sample, as-is sources included; the `treatment` column lets training exclude them.
+- G.711 is A-law in 90% and μ-law in 10% of the draws (proposed; see Open questions).
+- Validation and test draw with a seed derived from `sample_id`, so scoring is repeatable. The scoring conditions are in [0020](0020-evaluation-benchmarks.md).
+- Decimator and interpolator together delay about 3.9 ms at 63 taps, which rounds to 0 on the 10 ms grid. The transform computes the shift from the coefficients, and a test asserts the result.
 
 ### Tools
 
-- G.711 is our own code in `openvad-core`.
+- G.711 is a numpy lookup table in `training/`. The engine has no user for it, so it stays out of `openvad-core`, which ships in the wheel.
 - AMR-NB, AMR-WB, Opus and G.722 come from ffmpeg, run as an external tool: `libopencore-amrnb`, `libvo-amrwbenc`, `libopus` and the native `g722`.
   The ffmpeg build flags are recorded with every generated set.
+  The workstation's ffmpeg lacks the two AMR libraries, so construction needs another build and fails early without it.
+- Each codec's delay is measured once by cross-correlation and stored as a fixed table; the frame labels use it.
 - EVS only through the 3GPP reference code (TS 26.442 or 26.443), fetched at build time and never vendored, and only once its licence is checked.
-  If it cannot be used, EVS is dropped and the other caller legs remain.
+  Until then EVS is left out, and the other caller legs remain.
 - No GNU General Public License code is linked into the release.
   The ITU-T STL runs only from outside the repo.
   Spotify Pedalboard (GNU General Public License 3.0) is not used.
@@ -58,21 +74,22 @@ This record holds the channel chain.
 
 - Each codec's delay is measured once by cross-correlation and stored as a fixed table, which the frame labels use ([0022](0022-frame-labels.md)).
 - The generator needs ffmpeg with the listed libraries; the build flags are part of every manifest.
-- The rendered size depends on the mix, because narrowband samples are stored at 8 kHz.
+- Stored sizes do not depend on the narrowband share, because everything is stored at 16 kHz.
+- The AMR-NB leg is the only stored narrowband path; if AMR does not round-trip through ffmpeg with a measured delay, the AMR legs are dropped and reported.
 
 ## Open questions
 
-- The mix: the shares of no channel, wideband and narrowband, and of the codecs and caller legs inside them, including G.722 for customer-PBX trunks, but not the G.711 A-law and μ-law split of narrowband calls (next question). It stays undecided until the gateway log query in the [build notes](../../notes/build-and-hardware.md#open-questions) has run.
+- The mix: the shares of the stored codecs and `p_narrow`, including G.722 for customer-PBX trunks, but not the G.711 A-law and μ-law split of narrowband calls (next question). They stay placeholders until the gateway log query in the [build notes](../../notes/build-and-hardware.md#open-questions) has run.
 - Whether the 90/10 G.711 split holds. "Almost always A-law" supports the direction, but no source gives the numbers; the same query should show PCMA against PCMU.
 - Which codecs production has enabled, and the share of mobile callers.
 - Whether the wideband group (AMR-WB, Opus) should stay wider than the production path, where only G.722 is wideband over SIP ([build notes](../../notes/build-and-hardware.md#production-audio)).
 - Whether EVS is feasible: the licence of the 3GPP reference code is not yet checked (its archive sits behind a bot check).
-- The probabilities and ranges of reverberation, handset response, AGC and soft clipping, which no record sets.
-- Where the rate conversion sits for a caller leg at 8 kHz, such as AMR-NB, since the decimator follows the caller leg in the table above.
-- Whether G.711 belongs in `openvad-core`, which ships in the wheel, or on the training side.
-- Who provides PLC for the G.711 leg while the ITU-T STL stays outside the repo, and whether ffmpeg exposes each codec's own PLC for AMR-NB, AMR-WB and G.722.
 
 ## Deferred
 
+- Packet loss, with PLC, DTX and CNG (owner, 2026-11-06, for packet loss). DTX and CNG need per-frame flags from the codec bitstream that are unverified through ffmpeg (proposed). The design that was dropped from v1:
+  - lossless in 50% of the samples, otherwise a loss rate drawn from {1, 3, 5, 10, 20}%, in bursts (Gilbert-Elliott model), decoded with each codec's own PLC;
+  - loss hits mainly the caller leg, the G.711 leg only a little;
+  - open there: who provides PLC for the G.711 leg while the ITU-T STL stays outside the repo, and whether ffmpeg exposes each codec's own PLC for AMR-NB, AMR-WB and G.722.
 - A real-channel test set recorded through the production SIP path.
 - Echo of the bot's prompt for barge-in.
