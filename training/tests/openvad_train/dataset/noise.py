@@ -68,3 +68,13 @@ def test_pool_rejects_unknown_or_empty_category(demand_tree):
         pool.draw("street", "train", np.random.default_rng(0))
     with pytest.raises(ValueError, match="category"):
         pool.draw("music", "train", np.random.default_rng(0))
+
+
+def test_pool_reads_each_header_once(demand_tree, monkeypatch):
+    reads = []
+    real_info = sf.info
+    monkeypatch.setattr(sf, "info", lambda file: reads.append(file) or real_info(file))
+    pool = NoisePool(demand_tree)
+    draws = [pool.draw("transport", "test", np.random.default_rng(i)) for i in range(40)]
+    assert len(reads) == len({d.file for d in draws}) <= 2
+    assert draws[0] == NoisePool(demand_tree).draw("transport", "test", np.random.default_rng(0))  # caching keeps draws

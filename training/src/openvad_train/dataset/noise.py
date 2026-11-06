@@ -56,6 +56,8 @@ class NoisePool:
     def __init__(self, root: Path) -> None:
         scenes = sorted(p for p in root.iterdir() if p.name[:1] in _CATEGORIES and (p / "ch01.wav").is_file())
         self._scenes = {c: [p for p in scenes if category_of_demand(p.name) == c] for c in _CATEGORIES.values()}
+        # A header read costs about 50 ms cold on the share, which adds up over millions of draws.
+        self._frames: dict[Path, int] = {}
 
     def draw(self, category: str, split: str, rng: np.random.Generator) -> NoiseDraw:
         if category not in self._scenes:
@@ -67,5 +69,7 @@ class NoisePool:
         scene = scenes[int(rng.integers(len(scenes)))]
         channel = int(rng.integers(channels.start, channels.stop))
         file = scene / f"ch{channel:02d}.wav"
+        if file not in self._frames:
+            self._frames[file] = sf.info(file).frames
         # The offset is uniform over the file; the caller wraps it around with `loop_slice`.
-        return NoiseDraw(file, channel, int(rng.integers(sf.info(file).frames)))
+        return NoiseDraw(file, channel, int(rng.integers(self._frames[file])))
