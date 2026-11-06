@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 import xml.etree.ElementTree as ET
+from collections import defaultdict
 from collections.abc import Iterable, Iterator
 from functools import cache, lru_cache
 from pathlib import Path
@@ -21,6 +22,8 @@ from typing import Literal
 
 import soundfile as sf
 
+from openvad_train.dataset.config import SPEAKER_CAP_HOURS
+from openvad_train.dataset.labels import apply_gap_rule
 from openvad_train.dataset.schema import Clip, Timing, rank
 from openvad_train.fetch.swc import audio_licence
 
@@ -84,11 +87,26 @@ def merge_readers(articles: Iterable[set[str]]) -> dict[str, str]:
     return {name: min(members) for members in components.values() for name in members}
 
 
-def split_of(reader: str | None) -> Literal["train", "validation", "test"]:
-    """80/10/10 by reader, so every reader is in exactly one split; no reader means train, uncapped."""
-    if reader is None:
-        return "train"
-    return ("train", "validation", "test")[max(0, rank(reader) % 10 - 7)]
+SPLIT_SHARES: dict[Literal["train", "validation", "test"], float] = {"train": 0.8, "validation": 0.1, "test": 0.1}
+
+
+def assign_splits(hours: dict[str, float]) -> dict[str, Literal["train", "validation", "test"]]:
+    """80/10/10 by reader and by aligned hours (ADR 0023): readers in rank order, each placed in the split furthest
+    below its target share once the reader is counted, with the hours capped at 30 h as the cap will leave them.
+    A reader over the cap goes to train. Ties go to the earlier split of `SPLIT_SHARES`.
+    """
+    placed = dict.fromkeys(SPLIT_SHARES, 0.0)
+    assigned: dict[str, Literal["train", "validation", "test"]] = {}
+    for reader in sorted(hours, key=lambda r: (rank(r), r)):
+        counted = min(hours[reader], SPEAKER_CAP_HOURS)
+        total = sum(placed.values()) + counted
+        assigned[reader] = (
+            "train"
+            if hours[reader] > SPEAKER_CAP_HOURS
+            else max(SPLIT_SHARES, key=lambda s: SPLIT_SHARES[s] * total - placed[s])
+        )
+        placed[assigned[reader]] += counted
+    return assigned
 
 
 def audio_duration_s(audio: Path) -> float:
@@ -139,8 +157,15 @@ def clips(raw: Path, languages: set[str] | None = None) -> Iterator[Clip]:
             names = article_readers(json.loads((folder / "info.json").read_text()))
             articles.append((language_dir, language, folder, names))
     canonical = merge_readers(names for *_, names in articles)
+    hours: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    for _, language, folder, names in articles:
+        if names:
+            speech = apply_gap_rule(_article_timings(folder)[0], 0)
+            hours[language][canonical[min(names)]] += sum(e - s for s, e in speech) / 3_600_000
+    splits = {language: assign_splits(per_reader) for language, per_reader in hours.items()}
     for language_dir, language, folder, names in articles:
         reader = canonical[min(names)] if names else None
+        split = splits[language][reader] if reader else "train"
         parts = _parts(folder)
         for part, duration in zip(parts, _durations(folder), strict=True):
             key = f"{language_dir}/{folder.name}"
@@ -149,7 +174,7 @@ def clips(raw: Path, languages: set[str] | None = None) -> Iterator[Clip]:
                 source=SOURCE,
                 language=language,
                 speaker=reader,
-                split=split_of(reader),
+                split=split,
                 path=(RAW_PREFIX / key / part.name).as_posix(),
                 offset_s=0.0,
                 # The header's length, not the last word's end: the mask after the last word needs it.

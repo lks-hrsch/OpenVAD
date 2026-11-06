@@ -9,7 +9,6 @@ from collections import defaultdict
 import pytest
 import soundfile as sf
 
-from openvad_train.dataset.schema import rank
 from openvad_train.dataset.sources import swc
 from swc_support import add_article, make_swc_tree
 
@@ -110,16 +109,41 @@ def test_merge_readers_joins_connected_components_to_the_first_name():
     assert merged == {"a": "a", "b": "a", "c": "a", "d": "a", "x": "x"}
 
 
-def test_split_is_80_10_10_by_rank_and_no_reader_is_train():
-    assert swc.split_of(None) == "train"
-    shares = defaultdict(int)
-    for i in range(2000):
-        shares[swc.split_of(f"reader{i}")] += 1
-    assert shares["train"] == pytest.approx(1600, abs=100)
-    assert shares["validation"] == pytest.approx(200, abs=60)
-    assert shares["test"] == pytest.approx(200, abs=60)
-    r = next(f"r{i}" for i in range(100) if rank(f"r{i}") % 10 == 9)
-    assert swc.split_of(r) == "test"
+def test_split_assignment_follows_aligned_hours_not_reader_count():
+    hours = {f"r{i}": 1.0 for i in range(10)} | {"big": 20.0, "bigger": 40.0}
+    got = swc.assign_splits(hours)
+    assert got["bigger"] == "train"  # over 30 h
+    placed = {s: sum(min(hours[r], 30.0) for r in hours if got[r] == s) for s in swc.SPLIT_SHARES}
+    total = sum(placed.values())
+    assert placed["validation"] / total == pytest.approx(0.1, abs=0.04)
+    assert placed["test"] / total == pytest.approx(0.1, abs=0.04)
+
+
+def test_equal_readers_split_8_1_1():
+    got = swc.assign_splits({f"r{i}": 2.0 for i in range(10)})
+    assert sorted(got.values()) == ["test"] + ["train"] * 8 + ["validation"]
+
+
+def test_a_small_language_with_one_dominant_reader_still_has_validation_and_test():
+    got = swc.assign_splits({"jcb": 66.1} | {f"r{i}": 1.0 for i in range(20)})
+    assert got["jcb"] == "train"
+    assert {"validation", "test"} <= set(got.values())
+
+
+def test_assign_splits_is_deterministic_and_independent_of_input_order():
+    hours = {f"r{i}": 0.5 + i % 7 for i in range(60)}
+    assert swc.assign_splits(hours) == swc.assign_splits(dict(reversed(hours.items())))
+    assert swc.assign_splits({}) == {}
+
+
+def test_clips_split_each_language_by_its_own_hours(tmp_path):
+    for i in range(10):
+        add_article(tmp_path, "german", f"d{i}", f"reader{i}")
+        add_article(tmp_path, "english", f"e{i}", f"reader{i}")
+    by_language = defaultdict(lambda: defaultdict(int))
+    for c in swc.clips(tmp_path):
+        by_language[c.language][c.split] += 1
+    assert by_language["de"] == by_language["en"] == {"train": 8, "validation": 1, "test": 1}
 
 
 def test_unaligned_token_masks_the_gap(swc_tree):

@@ -11,6 +11,9 @@ from pathlib import Path
 from openvad_train.fetch.common import data_dir
 
 
+# ADR 0023: no speaker contributes more than this to a source.
+SPEAKER_CAP_HOURS = 30.0
+
 # 9 LibriVAD noise categories plus clean and competing talker.
 _NOISE_CATEGORIES = ("babble", "ssn", "city", "domestic", "nature", "office", "public", "street", "transport")
 _DEMAND_CATEGORIES = ("domestic", "nature", "office", "public", "street", "transport")
