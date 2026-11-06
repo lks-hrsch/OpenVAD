@@ -19,33 +19,35 @@ What each source feeds; the benchmarks and test pools are defined in [0020](../p
 
 | Dataset | Train | Dev | Test | Benchmark or noise |
 | --- | --- | --- | --- | --- |
-| LibriSpeech | source of LibriVAD and Picovoice only | | | benchmark: `test-clean` (test-grid) |
+| LibriSpeech | source of LibriVAD and Picovoice only | `dev-clean` reaches validation through LibriVAD only | `test-clean` reaches test through LibriVAD only | benchmark: `test-clean` (test-grid); never read directly |
 | LibriSpeech alignments (Zenodo 2619474) | labels for VOiCES | labels for VOiCES | labels for VOiCES | labels for the `test-clean` benchmark; `train-clean-360` alignments kept for the VOiCES speakers, though that audio is not fetched |
 | Common Voice 27.0 | validated clips of speakers outside dev and test, augmented | official dev | official test | |
 | SWC 2.0 | by reader 80%, augmented | 10% | 10% | |
 | MLS | official train, augmented | official dev | official test | |
 | VoxPopuli (transcribed) | own split by speaker, 80%, unmodified; rows without a speaker ID too | 10% | 10% | |
 | AMI (IHM) | full-corpus-ASR train, unmodified | official | official | |
-| CallHome (TalkBank mirror) | by call, 80%, unmodified, 8 kHz | 10% | 10% | |
+| CallHome (TalkBank mirror) | by call, 80%, unmodified, 16 kHz files with 8 kHz content (`narrow_native`) | 10% | 10% | |
 | FLEURS | official train, augmented | official dev | official test | |
 | Speech Commands v0.02 | official, unmodified | official | `testing_list.txt` (11,005 clips) | |
 | VOiCES devkit | by speaker, 80%, unmodified; 64 `train-clean-100` speakers train only, 12 `dev-clean` speakers dropped | 10% | 10% | |
-| MUSAN | noise, music | noise, music | noise, music | noise, every file |
-| DEMAND | noise | noise | noise | noise |
-| WHAM! noise | `tr` | `cv` | `tt` (test-unseen-noise) | noise |
-| LibriVAD `medium` | train split as generated (NonConcat and Concat), only through Large | | | benchmark: test split |
+| MUSAN | noise only, sorted into the nine categories by keyword | noise only | noise only | noise, every file; music is not used |
+| DEMAND | noise, channels 1 to 12 | noise, channels 13 and 14 | noise, channels 15 and 16 | noise |
+| WHAM! noise | `tr` (City) | `cv` (City) | `tt` (City; proposed, as in LibriVAD) | noise |
+| BUT ReverbDB, OpenSLR 28 | room impulse responses, rooms split 80/10/10 by hash | same | same | |
+| LibriVAD `medium` | train split as generated (NonConcat and Concat), only through Large | val split generated from `dev-clean`, validation only | test split as generated, never trained on | benchmark: test split |
 | LibriVAD `small` | train split, screening only | | | benchmark: test split (paper-comparison row of the LibriVAD benchmark) |
 | AVA-Speech | | | | benchmark |
 | Fearless Steps Phase 4 | | | | benchmark; dev split for a second operating point |
 | Picovoice voice-activity-benchmark | | | | benchmark |
 | Simsamu | | | | benchmark (8 kHz) |
 
-Dev conditions are drawn like train, with WHAM! `cv` as the WHAM! noise.
+Dev conditions are drawn like train, with WHAM! `cv` as the City noise and DEMAND channels 13 and 14.
 Babble in dev and test comes from dev and test speakers.
+Noise categories and shares are in [0023](../project/adr/0023-dataset-composition.md); the room impulse responses are in [Per-source facts](#room-impulse-responses).
 
 ## Pool
 
-Train hours are audio hours, speech only where marked (AMI, CallHome, Speech Commands, SWC); Common Voice, MLS and SWC are after the 30 h cap, FLEURS has no speaker IDs to cap, and the rest are under it.
+Train hours are audio hours, speech only where marked (AMI, CallHome, LibriVAD, Speech Commands, SWC); Common Voice, MLS and SWC are after the 30 h cap, FLEURS has no speaker IDs to cap, and the rest are under it.
 Speakers count all splits, train only where marked.
 Numbers marked ≈ are estimates.
 The family and source-type tables use these train hours.
@@ -57,12 +59,12 @@ The family and source-type tables use these train hours.
 | VoxPopuli transcribed | 13: EN 477, DE 231, FR 184, ES 134, PL 90, IT 74, RO 72, HU 51, CS 50, NL 43, HR 34, FI 22, ET 2 | ≈ 2,380 IDs, plus rows without an ID | ≈ 1,464 h: 80% of the rows with a speaker ID, plus the 263.6 h of `None` rows (EN 201.0, FR 28.6, DE 16.3; train only) | as is |
 | SWC | EN ≈ 147, DE ≈ 166, NL ≈ 34 (after the cap) | ≈ 900 reader names, plus 25.6 h without one | ≈ 347 h aligned speech: 80% of the 434.4 h left under the cap | augmented |
 | FLEURS | 42 languages | unknown (no speaker IDs) | 397.6 h (measured) | augmented |
-| LibriVAD `medium` | EN | 251 (train) | 101 h (`train-clean-100`) | 546 h NonConcat, 680 h Concat |
+| LibriVAD `medium` | EN | 251 (train) | ≈ 10 h unique speech (every 10th utterance of `train-clean-100`, 54 mixtures each) | 546 h NonConcat, 680 h Concat |
 | AMI IHM | EN | 152 (train) | ≈ 76 h speech (word-timing union per headset) | as is |
 | CallHome | EN, DE, ES, JA, ZH | ≈ 528 calls (80% of 660), ≈ 1,245 speaker labels (train) | 71 h speech in 80 h audio, before the ±0.25 s mask | as is |
 | Speech Commands v0.02 | EN | 2,618 (2,112 train) | ≈ 15 h speech (estimate) in ≤ 23.6 h audio | as is |
 | VOiCES devkit | EN | 300 (re-recorded LibriSpeech), 288 after the drop | ≈ 2.6 h unique (600 utterances; ≈ 84 h of re-recordings in the devkit) | as is |
-| **Total** | **≈ 53 languages** | | **≈ 21,480 h** | |
+| **Total** | **≈ 53 languages** | | **≈ 21,390 h** | |
 
 - The total is the sum of the rows.
 - About 53 languages is a union: Common Voice has 51 distinct languages in its 53 locales, and FLEURS adds Bosnian and Croatian.
@@ -86,7 +88,7 @@ Information only: there is no per-family headline, and there is no minimum share
 
 | Family | Hours | Share | Main sources |
 | --- | --- | --- | --- |
-| Indo-European | ≈ 15,215 | 71% | Common Voice (English, Catalan, German, Belarusian, French, Spanish, ...), MLS, VoxPopuli, SWC, FLEURS, LibriVAD, AMI, CallHome English, German and Spanish, Speech Commands, VOiCES |
+| Indo-European | ≈ 15,125 | 71% | Common Voice (English, Catalan, German, Belarusian, French, Spanish, ...), MLS, VoxPopuli, SWC, FLEURS, LibriVAD, AMI, CallHome English, German and Spanish, Speech Commands, VOiCES |
 | Atlantic–Congo | ≈ 2,510 | 12% | Common Voice Kinyarwanda, Luganda, Swahili; FLEURS Luganda, Swahili |
 | Turkic | ≈ 880 | 4% | Common Voice Uyghur, Bashkir, Turkish, Uzbek, Kyrgyz, Tatar, Chuvash, Kazakh; FLEURS Kyrgyz, Turkish, Uzbek, Kazakh |
 | Sino-Tibetan | ≈ 585 | 3% | Common Voice Mandarin and Cantonese, CallHome Mandarin, FLEURS |
@@ -100,7 +102,7 @@ Information only: there is no per-family headline, and there is no minimum share
 | Koreanic | ≈ 10 | < 0.1% | Common Voice and FLEURS Korean |
 | Tupian | ≈ 4 | < 0.1% | Common Voice Guarani |
 
-- Rows are rounded and built per language after the cap; they sum to ≈ 21,490 h, ≈ 10 h above the pool total, and the rounded shares to 101%.
+- Rows are rounded and built per language after the cap; they sum to ≈ 21,400 h, ≈ 10 h above the pool total, and the rounded shares to 101%.
 - Each row adds the measured Common Voice hours, the estimate of 82.9% of the release hours for locales not yet extracted, the measured FLEURS train hours, the VoxPopuli hours per language and CallHome speech split by the hours of its calls.
 - Non-Indo-European ≈ 6,270 h, 29% of the pool.
 - Families by current speakers ([Wikipedia, List of language families](https://en.wikipedia.org/wiki/List_of_language_families)): Indo-European (586 languages, 3.24 billion speakers), Sino-Tibetan (1.39 billion), Atlantic–Congo (500 million), Afroasiatic (499 million), Austronesian (326 million), Dravidian (253 million), Turkic (180 million), Japonic (129 million), Austroasiatic (116 million), Kra–Dai (82 million), Koreanic (77 million), Nilotic, Mande, Uralic (21 million), Mongolic, Quechuan; Basque is an isolate.
@@ -109,13 +111,13 @@ Information only: there is no per-family headline, and there is no minimum share
 
 | Type | Sources | Share |
 | --- | --- | --- |
-| Crowd-sourced read sentences | Common Voice, Speech Commands | ≈ 78% |
+| Crowd-sourced read sentences | Common Voice, Speech Commands | ≈ 79% |
 | Read audiobooks and Wikipedia | MLS, SWC, FLEURS, LibriVAD | ≈ 14% |
 | Parliament, semi-spontaneous | VoxPopuli | ≈ 7% |
 | Meetings and telephone conversations | AMI, CallHome | ≈ 0.7% |
 | Re-recorded far-field read speech | VOiCES | < 0.1% |
 
-- Common Voice is 78% of the train hours.
+- Common Voice is 79% of the train hours.
 - Outside Europe, Common Voice is the only public source with many speakers and transcripts, so the non-Indo-European hours are almost all Common Voice, and language family and source type are confounded.
 - Conversational and telephone speech is a small share of the pool (AMI and CallHome, about 0.7%), although the deployment target is telephone audio; the channel simulation of [0021](../project/adr/0021-telephone-channel-simulation.md) runs on augmented samples only, its mix includes a no-channel group, and it does not make them conversational.
 
@@ -206,7 +208,7 @@ Pins, URLs and checksums are in the fetchers (`training/src/openvad_train/fetch/
 
 - TalkBank mirror on Hugging Face (`talkbank/callhome`, gated), CC BY-NC-SA 4.0; TalkBank itself is CC BY-NC-SA 3.0 and excludes commercial AI products. The paid Linguistic Data Consortium edition is LDC2026S06.
 - Calls (from the dataset card; hours measured to the last turn end): English 140 calls, 20.3 h; German 120, 18.4 h; Japanese 120, 18.7 h; Spanish 140, 21.9 h; Mandarin 140, 20.3 h; 660 calls, 99.6 h, 11.2 GB of parquet. The union of the turns is 89.1 h of speech; the calls carry 1,556 speaker labels.
-- The audio is mono 16-bit WAV at 16 kHz, cut to the transcribed span of each call. The original calls are 8 kHz telephone recordings; the mirror documents neither the upsampling nor the mix of the two sides into one channel.
+- The audio is mono 16-bit WAV at 16 kHz, cut to the transcribed span of each call. The original calls are 8 kHz telephone recordings; the mirror documents neither the upsampling nor the mix of the two sides into one channel. The files are used unchanged, with `band = narrow_native`, so no train-time narrowband step is applied ([0021](../project/adr/0021-telephone-channel-simulation.md)).
 - Labels: start and end time and speaker letter (`A`, `B`, sometimes `A1`, `B1`, `B2`) per turn; no transcripts and no speaker IDs across calls. Turns of the two sides overlap, and pauses inside a turn count as speech.
 
 ### FLEURS
@@ -230,23 +232,34 @@ Pins, URLs and checksums are in the fetchers (`training/src/openvad_train/fetch/
 
 ### Noise: DEMAND, MUSAN, WHAM!
 
-- DEMAND (Zenodo 1227121): 16 environments; the record metadata says CC BY 4.0, its description CC BY-SA 3.0; the stricter one is recorded. SCAFE exists only at 48 kHz.
+- DEMAND (Zenodo 1227121): 16 environments; the record metadata says CC BY 4.0, its description CC BY-SA 3.0; the stricter one is recorded. SCAFE exists only at 48 kHz, so Street has two scenes (SPSQUARE, STRAFFIC) where LibriVAD has three.
+  - The nine noise categories take DEMAND scenes by first letter (D, N, O, P, S, T) for Domestic, Nature, Office, Public, Street and Transport, with one random channel per draw. Channels 1 to 12 are train noise, 13 and 14 validation and 15 and 16 test ([0023](../project/adr/0023-dataset-composition.md)).
 - MUSAN (OpenSLR 17, every subfolder LICENSE read): no NC files.
   - 1,970 of 2,016 files are public domain, CC BY or CC BY-SA (music 40.1 h, noise 6.2 h, speech 60.5 h). Their music is 20.8 h public domain or CC BY and 19.3 h CC BY-SA; 12.8 h of it has vocals.
   - The other 46 are music files (2.5 h): 32 CC BY-ND 3.0 and 14 with no licence statement (8 in `fma-western-art`, 6 in `jamendo`, 2 of them absent from the LICENSE file).
-- MUSAN speech: LibriVox readings tagged per file in 15 languages (English 76 files, German 16, Spanish 11, French 11, Russian 9, Portuguese 9, Dutch 9, Italian 8, Chinese 7, Hebrew 4, Tagalog 3, Japanese 3, Polish 2, Latin 1, Hungarian 1); no word labels, and not used: MUSAN contributes noise and music only ([0023](../project/adr/0023-dataset-composition.md)).
+- MUSAN speech: LibriVox readings tagged per file in 15 languages (English 76 files, German 16, Spanish 11, French 11, Russian 9, Portuguese 9, Dutch 9, Italian 8, Chinese 7, Hebrew 4, Tagalog 3, Japanese 3, Polish 2, Latin 1, Hungarian 1); no word labels, and not used: MUSAN contributes noise only, and its music is not used either ([0023](../project/adr/0023-dataset-composition.md)). Its 6.2 h of noise are sorted into the nine noise categories by keyword.
 - WHAM! noise (`wham_noise.zip`, CC BY-NC 4.0 on the official page `wham.whisper.ai`):
   - Noise only, no WSJ0 mixtures. Recorded in late 2018 in restaurants, cafes, bars and parks in the San Francisco Bay Area with a binaural microphone pair; segments with intelligible speech were removed.
   - 32-bit float WAV, 2 channels, 16 kHz. Splits (from the zip directory, 128,000 bytes per second): `tr` 20,000 files, 58.0 h; `cv` 5,000 files, 14.7 h; `tt` 3,000 files, 9.0 h; 81.7 h in total, 37.6 GB unpacked.
   - `metadata/noise_meta_*.csv` give the recording, location and day of each clip. The splits share no recording and no location (`tr` 25 locations, `cv` 11, `tt` 8), so `cv` and `tt` are unseen locations for a model trained on `tr`.
   - LibriVAD's City noise is cut from WHAM! by split (`Scripts/create_city_noise.py`): 3 h of `tr` for its train, 30 min of `cv` for validation, 30 min of `tt` for test.
+  - OpenVAD's City category takes one random WHAM! channel per draw, `tr` for train and `cv` for validation, and (proposed, as in LibriVAD) `tt` for test; `tt` never trains.
 - Distinct ambient noise for training is ≈ 65 h: ≈ 7.5 h from DEMAND and MUSAN noise, 58.0 h from WHAM! `tr`.
 
 ### LibriSpeech and LibriVAD
 
 - The LibriSpeech alignments of Zenodo 2619474, and the copy that LibriVAD appears to ship, are in [`forced-alignment.md`](forced-alignment.md#prior-use-for-vad-and-segment-labels).
 - LibriVAD's speech is `train-clean-100`; its noise comes from DEMAND, WHAM! `tr` and its own babble and speech-shaped noise, and includes WHAM! (CC BY-NC 4.0).
+- `medium` takes every 10th utterance of `train-clean-100` and mixes each one 54 times, so its 546 h NonConcat and 680 h Concat hold about 10 h of unique speech, not the 101 h of `train-clean-100`; each utterance appears 54 times by design.
+- Splits: `medium` train is used as generated. `medium` test (from `test-clean`) is used as generated, in the test split and as the benchmark of [0020](../project/adr/0020-evaluation-benchmarks.md).
+- `medium` val (from `dev-clean`) does not exist at the pinned revision, because `create_LibriSpeech_wav.py` converts only two splits; `just fetch librivad-val` generates it into `datasets/raw/librivad-val/` with its own manifest, because `create_LibriVAD.py` and `create_LibriSpeechConcat.py` already handle `val`, and `Files/Noises/*_val.wav` and the `dev-clean` alignments exist. It holds about 27.4 h NonConcat and 35.2 h Concat, validation only ([0024](../project/adr/0024-training-data-licence-policy.md)).
 - A LibriVAD-like set could be rebuilt by our own code from DEMAND, WHAM! and babble from our own speech sources, without LibriVAD's scripts and `Noises.zip`.
+
+### Room impulse responses
+
+- BUT ReverbDB: CC BY 4.0, about 8.7 GB of real room impulse responses.
+- OpenSLR 28 (RIRS_NOISES): Apache-2.0, about 1.3 GB.
+- Both are used for the room step of [0021](../project/adr/0021-telephone-channel-simulation.md) (p = 0.5), with rooms split 80/10/10 by hash and each response peak-aligned to zero. `just fetch rirs` is to fetch both; neither is fetched yet, and the sizes are from the dataset construction spec, not from a manifest.
 
 ### AVA-Speech and Picovoice
 
