@@ -27,7 +27,7 @@ def test_gap_rule_drops_empty_intervals_and_accepts_empty_input():
 
 
 def test_rasterise_grid():
-    y = rasterise([(100, 300)], [], 500)
+    y = rasterise([(100, 300)], [], 8000)
     assert y.dtype == np.uint8
     assert len(y) == 50
     assert y[9] == 0
@@ -37,30 +37,30 @@ def test_rasterise_grid():
 
 
 def test_mask_wins_and_any_overlap_masks():
-    y = rasterise([(0, 500)], [(25, 26)], 500)
+    y = rasterise([(0, 500)], [(25, 26)], 8000)
     assert y[2] == 2
     assert y[1] == 1
 
 
 def test_tie_is_non_speech():
-    assert rasterise([(5, 10)], [], 20)[0] == 0
-    assert rasterise([(4, 10)], [], 20)[0] == 1
+    assert rasterise([(5, 10)], [], 320)[0] == 0
+    assert rasterise([(4, 10)], [], 320)[0] == 1
 
 
 def test_shift_moves_labels():
-    assert rasterise([(100, 200)], [], 500, shift_ms=30)[12] == 0
-    assert rasterise([(100, 200)], [], 500, shift_ms=30)[13] == 1
+    assert rasterise([(100, 200)], [], 8000, shift_ms=30)[12] == 0
+    assert rasterise([(100, 200)], [], 8000, shift_ms=30)[13] == 1
 
 
 def test_shift_moves_masks_too():
-    y = rasterise([], [(100, 110)], 500, shift_ms=30)
+    y = rasterise([], [(100, 110)], 8000, shift_ms=30)
     assert y[12] == 0
     assert y[13] == 2
     assert y[14] == 0
 
 
 def test_empty_input_is_all_non_speech():
-    y = rasterise([], [], 500)
+    y = rasterise([], [], 8000)
     assert y.dtype == np.uint8
     assert len(y) == 50
     assert not y.any()
@@ -68,13 +68,13 @@ def test_empty_input_is_all_non_speech():
 
 def test_unsorted_and_overlapping_intervals_are_a_union():
     # Overlap must not double count: (0, 6) then (3, 9) covers 9 ms of frame 0.
-    assert rasterise([(3, 9), (0, 6)], [], 20)[0] == 1
+    assert rasterise([(3, 9), (0, 6)], [], 320)[0] == 1
     # Two 3 ms intervals overlapping fully still cover only 3 ms: a tie, non-speech.
-    assert rasterise([(0, 3), (0, 3)], [], 20)[0] == 0
+    assert rasterise([(0, 3), (0, 3)], [], 320)[0] == 0
 
 
 def test_intervals_are_clipped_not_rejected():
-    y = rasterise([(-100, 20), (480, 900)], [(-50, -10), (700, 800)], 500)
+    y = rasterise([(-100, 20), (480, 900)], [(-50, -10), (700, 800)], 8000)
     assert len(y) == 50
     assert list(y[:3]) == [1, 1, 0]
     assert list(y[47:]) == [0, 1, 1]
@@ -82,20 +82,39 @@ def test_intervals_are_clipped_not_rejected():
 
 
 def test_shift_pushes_interval_out_of_range():
-    assert not rasterise([(0, 100)], [], 500, shift_ms=-200).any()
-    assert not rasterise([(0, 100)], [], 500, shift_ms=900).any()
+    assert not rasterise([(0, 100)], [], 8000, shift_ms=-200).any()
+    assert not rasterise([(0, 100)], [], 8000, shift_ms=900).any()
 
 
 def test_length_is_rounded_for_non_multiples_of_ten():
-    assert len(rasterise([], [], 504)) == 50
-    assert len(rasterise([], [], 496)) == 50
+    assert len(rasterise([], [], 8064)) == 50
+    assert len(rasterise([], [], 7936)) == 50
     assert len(rasterise([], [], 0)) == 0
 
 
 def test_interval_past_duration_does_not_cover_the_rounded_up_tail():
     # 496 ms rounds up to 50 frames; ms 496..500 is not audio and must not count.
-    assert rasterise([(496, 600)], [], 496)[49] == 0
-    assert rasterise([(490, 600)], [], 496)[49] == 1
+    assert rasterise([(496, 600)], [], 7936)[49] == 0
+    assert rasterise([(490, 600)], [], 7936)[49] == 1
+
+
+def test_floats_are_rejected():
+    with pytest.raises(TypeError):
+        rasterise([(0.0, 100)], [], 16000)  # pyright: ignore[reportArgumentType]
+    with pytest.raises(TypeError):
+        rasterise([], [(0, 100.5)], 16000)  # pyright: ignore[reportArgumentType]
+    with pytest.raises(TypeError):
+        rasterise([], [], 16000.0)  # pyright: ignore[reportArgumentType]
+    with pytest.raises(TypeError):
+        rasterise([], [], 16000, shift_ms=1.5)  # pyright: ignore[reportArgumentType]
+    with pytest.raises(TypeError):
+        apply_gap_rule([(0, 100.0)], 200)  # pyright: ignore[reportArgumentType]
+    with pytest.raises(TypeError):
+        apply_gap_rule([], 200.0)  # pyright: ignore[reportArgumentType]
+    with pytest.raises(TypeError):
+        speech_ratio([(0.5, 100)], 1000)  # pyright: ignore[reportArgumentType]
+    with pytest.raises(TypeError):
+        speech_ratio([], 1000.0)  # pyright: ignore[reportArgumentType]
 
 
 def test_speech_ratio_uses_the_union():
