@@ -5,8 +5,8 @@
 
 import asyncio
 import dataclasses
-from types import SimpleNamespace
-from typing import Literal
+from types import ModuleType, SimpleNamespace
+from typing import Literal, cast
 
 import polars as pl
 import pytest
@@ -15,7 +15,7 @@ from openvad_train.dataset import index
 from openvad_train.dataset.config import SLICE
 from openvad_train.dataset.index import ForbiddenSource, apply_cap_rank, guard_path, reserve_speakers, run_index
 from openvad_train.dataset.parquet_io import read_parquet
-from openvad_train.dataset.schema import Clip, rank
+from openvad_train.dataset.schema import Clip, Timing, rank
 from swc_support import make_swc_tree
 
 
@@ -99,18 +99,18 @@ def test_cap_keeps_rank_prefix_under_30_h():
     assert {c.clip_id for c in kept} == {c.clip_id for c in sorted(clips, key=lambda c: rank(c.clip_id))[:30]}
 
 
-def test_cap_stops_at_the_first_clip_that_would_exceed_it():
-    clips = [clip(id=f"c{i}", duration_s=d) for i, d in enumerate([2.0, 2.0, 0.5, 0.5, 0.5])]
-    by_rank = sorted(clips, key=lambda c: rank(c.clip_id))
-    kept = list(apply_cap_rank(clips, hours=3.0 / 3600))
-    expected = []
-    total = 0.0
-    for c in by_rank:
-        total += c.duration_s
-        if total > 3.0:
-            break
-        expected.append(c.clip_id)
-    assert {c.clip_id for c in kept} == set(expected)
+# rank order of these ids: c2, c4, c1, c3, c0
+def test_cap_stops_at_the_first_clip_that_would_exceed_it_even_if_a_smaller_one_follows():
+    durations = {"c2": 2.0, "c4": 2.0, "c1": 0.5, "c3": 0.5, "c0": 0.5}
+    clips = [clip(id=i, duration_s=d) for i, d in durations.items()]
+    assert {c.clip_id for c in apply_cap_rank(clips, hours=3.0 / 3600)} == {"c2"}
+
+
+def test_cap_counts_speech_seconds_when_given():
+    clips = [clip(id=f"c{i}", duration_s=3600.0) for i in range(5)]
+    speech = {"c2": 1.0, "c4": 2.0, "c1": 1.5, "c3": 0.5, "c0": 0.5}
+    # c2 and c4 make 3.0 s; c1 would make 4.5 s, so it and everything after it in rank order go.
+    assert {c.clip_id for c in apply_cap_rank(clips, hours=3.0 / 3600, speech_s=speech)} == {"c2", "c4"}
 
 
 def test_cap_counts_each_speaker_and_source_on_its_own():
@@ -178,7 +178,10 @@ def test_run_index_caps_only_sources_without_mfa(data_dir, monkeypatch):
         for n in ("swc", "mfa")
         for i in range(40)
     ]
-    swc_like = SimpleNamespace(clips=lambda _raw, _languages: iter(many[:40]), timings=lambda *_: iter(()))
+    swc_like = SimpleNamespace(
+        clips=lambda _raw, _languages: iter(many[:40]),
+        timings=lambda _raw, clips: (Timing(c.clip_id, "word", [(0, 3_600_000)], [], None, "t") for c in clips),
+    )
     mfa_like = SimpleNamespace(clips=lambda _raw, _languages: iter(many[40:]))
     monkeypatch.setitem(index.SOURCES, "swc", swc_like)
     monkeypatch.setitem(index.SOURCES, "mfa", mfa_like)
@@ -200,3 +203,25 @@ def test_run_index_asks_the_adapter_for_the_configured_languages_only(data_dir, 
     run_index(SLICE)
     run_index(dataclasses.replace(SLICE, languages=None))
     assert asked == [{"de"}, None]
+
+
+def test_run_index_counts_speech_seconds_and_drops_clips_without_any(caplog):
+    hour_ms = 3_600_000
+    clips = [clip(id=f"c{i}", speaker="s", language="de", duration_s=1.0) for i in range(5)]
+    # Rank order c2, c4, c1, c3, c0: 12 h, 24 h, none (dropped), then 34 h passes the 30 h cap.
+    speech = {
+        "c2": [(0, 12 * hour_ms)],
+        "c4": [(0, 12 * hour_ms)],
+        "c1": [],
+        "c3": [(0, 10 * hour_ms)],
+        "c0": [(0, hour_ms)],
+    }
+    fake = SimpleNamespace(
+        clips=lambda _raw, _languages: iter(clips),
+        timings=lambda _raw, cs: (Timing(c.clip_id, "word", speech[c.clip_id], [], None, "t") for c in cs),
+    )
+    with caplog.at_level("INFO", logger=index.log.name):
+        kept, dropped = index._index_source("swc", cast(ModuleType, fake), None)
+    assert {c.clip_id for c in kept} == {"c2", "c4"}
+    assert dropped == {"no_aligned_word": 1, "over_cap": 2}
+    assert "dropped {'no_aligned_word': 1, 'over_cap': 2}" in caplog.text

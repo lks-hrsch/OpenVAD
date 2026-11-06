@@ -8,19 +8,24 @@
 import argparse
 import asyncio
 import dataclasses
+import logging
 from collections import defaultdict
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from math import floor
 from pathlib import PurePosixPath
 from types import ModuleType
 
 import polars as pl
 
-from openvad_train.dataset.config import FULL, SLICE, BuildConfig, work_dir
+from openvad_train.dataset.config import FULL, SLICE, SPEAKER_CAP_HOURS, BuildConfig, work_dir
+from openvad_train.dataset.labels import apply_gap_rule
 from openvad_train.dataset.parquet_io import write_parquet
-from openvad_train.dataset.schema import Clip, rank
+from openvad_train.dataset.schema import Clip, Timing, rank
 from openvad_train.dataset.sources import swc
 from openvad_train.fetch.common import raw_dir
+
+
+log = logging.getLogger(__name__)
 
 
 class ForbiddenSource(Exception):  # noqa: N818  (the name the plan and its tests use)
@@ -64,9 +69,12 @@ def reserve_speakers(clips: Iterable[Clip], share: float = 0.05) -> set[tuple[st
     }
 
 
-def apply_cap_rank(clips: Iterable[Clip], hours: float = 30.0) -> Iterator[Clip]:
+def apply_cap_rank(
+    clips: Iterable[Clip], hours: float = SPEAKER_CAP_HOURS, speech_s: Mapping[str, float] | None = None
+) -> Iterator[Clip]:
     """At most `hours` per speaker and source: a speaker's clips in rank order, stopping before the first that would
-    exceed the cap. Clips without a speaker are not capped. The input order is kept.
+    exceed the cap, even if a smaller one follows. A clip counts `speech_s[clip_id]` seconds when that is given
+    (SWC counts aligned speech), else its `duration_s`. Clips without a speaker are not capped; the input order is kept.
     """
     clips = list(clips)
     by_speaker: dict[tuple[str, str], list[Clip]] = defaultdict(list)
@@ -77,7 +85,7 @@ def apply_cap_rank(clips: Iterable[Clip], hours: float = 30.0) -> Iterator[Clip]
     for group in by_speaker.values():
         total = 0.0
         for c in sorted(group, key=lambda c: (rank(c.clip_id), c.clip_id)):
-            total += c.duration_s
+            total += c.duration_s if speech_s is None else speech_s[c.clip_id]
             if total > hours * 3600:
                 break
             kept.add(c.clip_id)
@@ -112,18 +120,38 @@ def _frame(clips: list[Clip], reserved: set[tuple[str, str, str]]) -> pl.LazyFra
     return pl.DataFrame(rows, schema=_SCHEMA).lazy()
 
 
+def _speech_s(timings: Iterable[Timing]) -> dict[str, float]:
+    return {t.clip_id: sum(e - s for s, e in apply_gap_rule(t.speech_ms, 0)) / 1000 for t in timings}
+
+
+def _index_source(
+    name: str, module: ModuleType, languages: tuple[str, ...] | None
+) -> tuple[list[Clip], dict[str, int]]:
+    """The clips of one source that survive its rules, and how many were dropped for which reason."""
+    raw = raw_dir(name)
+    clips = list(module.clips(raw, None if languages is None else set(languages)))
+    for c in clips:
+        guard_path(c.path, c.split)
+    dropped: dict[str, int] = {}
+    if hasattr(module, "timings"):
+        # MFA sources get their cap in `align`, after the drop rules. Here a clip without speech yields no labels
+        # and would only use up budget, and the cap counts speech seconds.
+        speech_s = _speech_s(module.timings(raw, clips))
+        with_speech = [c for c in clips if speech_s[c.clip_id] > 0]
+        capped = list(apply_cap_rank(with_speech, speech_s=speech_s))
+        dropped = {"no_aligned_word": len(clips) - len(with_speech), "over_cap": len(with_speech) - len(capped)}
+        clips = capped
+    log.info("%s: %d clips, dropped %s", name, len(clips), dropped)
+    return clips, dropped
+
+
 def run_index(cfg: BuildConfig) -> None:
-    """Write `work/index/<source>.parquet` for every source of `cfg`."""
+    """Write `work/<name>/index/<source>.parquet` for every source of `cfg`."""
     per_source: dict[str, list[Clip]] = {}
     for name in cfg.sources:
         if name not in SOURCES:
             raise ValueError(f"no index adapter for source {name!r}; have {sorted(SOURCES)}")
-        module = SOURCES[name]
-        clips = list(module.clips(raw_dir(name), None if cfg.languages is None else set(cfg.languages)))
-        for c in clips:
-            guard_path(c.path, c.split)
-        # MFA sources get their cap in `align`, after the drop rules.
-        per_source[name] = list(apply_cap_rank(clips)) if hasattr(module, "timings") else clips
+        per_source[name], _ = _index_source(name, SOURCES[name], cfg.languages)
     # Reservation sees every source of a language together, so a speaker is reserved once, not per source.
     reserved = reserve_speakers((c for clips in per_source.values() for c in clips), cfg.reserved_share)
     out = work_dir(cfg) / "index"
