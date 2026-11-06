@@ -110,7 +110,7 @@ _SCHEMA = {
     "licence": pl.String,
     "transcript": pl.String,
     "reserved": pl.Boolean,
-    "rank": pl.UInt64,
+    "clip_rank": pl.UInt64,
 }
 
 
@@ -118,7 +118,7 @@ def _frame(clips: list[Clip], reserved: set[tuple[str, str, str]]) -> pl.LazyFra
     # A speaker reserved in one language of a split is reserved for all its clips there, so it is never foreground.
     reserved_in_split = {(split, speaker) for split, _, speaker in reserved}
     rows = [
-        dataclasses.asdict(c) | {"reserved": (c.split, c.speaker) in reserved_in_split, "rank": rank(c.clip_id)}
+        dataclasses.asdict(c) | {"reserved": (c.split, c.speaker) in reserved_in_split, "clip_rank": rank(c.clip_id)}
         for c in clips
     ]
     return pl.DataFrame(rows, schema=_SCHEMA).lazy()

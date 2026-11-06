@@ -150,10 +150,10 @@ def test_run_index_writes_one_parquet_per_source(data_dir):
     run_index(dataclasses.replace(SLICE, languages=None))
     df = _read(data_dir)
     assert df.height == 5
-    assert df.schema["rank"] == pl.UInt64
+    assert df.schema["clip_rank"] == pl.UInt64
     assert df.schema["speaker"] == pl.String
     row = df.filter(pl.col("clip_id") == "english/Aaa").row(0, named=True)
-    assert row["rank"] == rank("english/Aaa")
+    assert row["clip_rank"] == rank("english/Aaa")
     assert row["path"] == "datasets/raw/swc/english/Aaa/audio.ogg"
     assert not (data_dir / "datasets/processed/work/openvad-slice/index/swc.parquet.tmp").exists()
 
