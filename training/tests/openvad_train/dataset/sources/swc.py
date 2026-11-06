@@ -109,9 +109,13 @@ def test_merge_readers_joins_connected_components_to_the_first_name():
     assert merged == {"a": "a", "b": "a", "c": "a", "d": "a", "x": "x"}
 
 
+def de(hours: dict[str, float]) -> dict[str, dict[str, float]]:
+    return {reader: {"de": h} for reader, h in hours.items()}
+
+
 def test_split_assignment_follows_aligned_hours_not_reader_count():
     hours = {f"r{i}": 1.0 for i in range(10)} | {"big": 20.0, "bigger": 40.0}
-    got = swc.assign_splits(hours)
+    got = swc.assign_splits(de(hours))
     assert got["bigger"] == "train"  # over 30 h
     placed = {s: sum(min(hours[r], 30.0) for r in hours if got[r] == s) for s in swc.SPLIT_SHARES}
     total = sum(placed.values())
@@ -120,23 +124,23 @@ def test_split_assignment_follows_aligned_hours_not_reader_count():
 
 
 def test_equal_readers_split_8_1_1():
-    got = swc.assign_splits({f"r{i}": 2.0 for i in range(10)})
+    got = swc.assign_splits(de({f"r{i}": 2.0 for i in range(10)}))
     assert sorted(got.values()) == ["test"] + ["train"] * 8 + ["validation"]
 
 
 def test_a_small_language_with_one_dominant_reader_still_has_validation_and_test():
-    got = swc.assign_splits({"jcb": 66.1} | {f"r{i}": 1.0 for i in range(20)})
+    got = swc.assign_splits(de({"jcb": 66.1} | {f"r{i}": 1.0 for i in range(20)}))
     assert got["jcb"] == "train"
     assert {"validation", "test"} <= set(got.values())
 
 
 def test_assign_splits_is_deterministic_and_independent_of_input_order():
     hours = {f"r{i}": 0.5 + i % 7 for i in range(60)}
-    assert swc.assign_splits(hours) == swc.assign_splits(dict(reversed(hours.items())))
+    assert swc.assign_splits(de(hours)) == swc.assign_splits(de(dict(reversed(hours.items()))))
     assert swc.assign_splits({}) == {}
 
 
-def test_clips_split_each_language_by_its_own_hours(tmp_path):
+def test_readers_in_both_languages_split_8_1_1_in_each(tmp_path):
     for i in range(10):
         add_article(tmp_path, "german", f"d{i}", f"reader{i}")
         add_article(tmp_path, "english", f"e{i}", f"reader{i}")
@@ -217,3 +221,41 @@ def test_an_aligned_article_without_audio_is_an_error(tmp_path):
     (tmp_path / "german/Lost/audio.ogg").unlink()
     with pytest.raises(FileNotFoundError, match="without audio"):
         list(swc.clips(tmp_path))
+
+
+def test_a_reader_of_two_languages_gets_one_split(tmp_path):
+    # Twelve readers, each in German and English with different aligned hours per language, so placing each
+    # language on its own would send some of them to different splits.
+    for i in range(12):
+        reader = f"reader{i}"
+        add_article(tmp_path, "german", f"d{i}", reader, words=[(0, 1000 * (1 + i % 5))], seconds=10.0)
+        add_article(tmp_path, "english", f"e{i}", reader, words=[(0, 1000 * (1 + (i * 3) % 7))], seconds=10.0)
+    splits = defaultdict(set)
+    for c in swc.clips(tmp_path):
+        splits[c.speaker].add(c.split)
+    assert len(splits) == 12
+    assert all(len(s) == 1 for s in splits.values()), dict(splits)
+
+
+def test_a_bilingual_reader_is_placed_by_its_largest_language_and_counts_in_both():
+    # Over 30 h is train; "mixed" is mostly English, so English decides, and its hours count in German too.
+    hours = {"mixed": {"de": 1.0, "en": 5.0}, "huge": {"de": 20.0, "en": 20.0}}
+    got = swc.assign_splits(hours)
+    assert got["huge"] == "train"
+    assert got["mixed"] in swc.SPLIT_SHARES
+
+
+def test_ordinary_readers_keep_each_languages_shares_near_80_10_10():
+    hours = {f"de{i}": {"de": 1.0 + i % 4} for i in range(80)}
+    hours |= {f"en{i}": {"en": 1.0 + i % 3} for i in range(80)}
+    hours |= {f"both{i}": {"de": 1.0 + i % 2, "en": 1.0 + i % 3} for i in range(20)}
+    got = swc.assign_splits(hours)
+    for language in ("de", "en"):
+        per_split = defaultdict(float)
+        for reader, by_language in hours.items():
+            if language in by_language:
+                per_split[got[reader]] += by_language[language]
+        total = sum(per_split.values())
+        assert per_split["train"] / total == pytest.approx(0.8, abs=0.06)
+        assert per_split["validation"] / total == pytest.approx(0.1, abs=0.05)
+        assert per_split["test"] / total == pytest.approx(0.1, abs=0.05)

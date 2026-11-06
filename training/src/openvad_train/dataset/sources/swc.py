@@ -90,22 +90,29 @@ def merge_readers(articles: Iterable[set[str]]) -> dict[str, str]:
 SPLIT_SHARES: dict[Literal["train", "validation", "test"], float] = {"train": 0.8, "validation": 0.1, "test": 0.1}
 
 
-def assign_splits(hours: dict[str, float]) -> dict[str, Literal["train", "validation", "test"]]:
-    """80/10/10 by reader and by aligned hours (ADR 0023): readers in rank order, each placed in the split furthest
-    below its target share once the reader is counted, with the hours capped at 30 h as the cap will leave them.
-    A reader over the cap goes to train. Ties go to the earlier split of `SPLIT_SHARES`.
+def assign_splits(hours: dict[str, dict[str, float]]) -> dict[str, Literal["train", "validation", "test"]]:
+    """80/10/10 by reader and by aligned hours (ADR 0023), from the aligned hours of each reader per language.
+
+    Readers are walked once in rank order. Each goes to the split furthest below its target share in the reader's
+    largest language (ties: the alphabetically first), so a reader of two languages has one split. The reader's
+    hours, capped at 30 h as the cap will leave them, are then added to every language it reads. A reader over the
+    cap goes to train. Ties between splits go to the earlier one of `SPLIT_SHARES`.
     """
-    placed = dict.fromkeys(SPLIT_SHARES, 0.0)
+    placed: dict[str, dict[str, float]] = defaultdict(lambda: dict.fromkeys(SPLIT_SHARES, 0.0))
     assigned: dict[str, Literal["train", "validation", "test"]] = {}
     for reader in sorted(hours, key=lambda r: (rank(r), r)):
-        counted = min(hours[reader], SPEAKER_CAP_HOURS)
-        total = sum(placed.values()) + counted
+        per_language = hours[reader]
+        total = sum(per_language.values())
+        scale = min(1.0, SPEAKER_CAP_HOURS / total) if total else 1.0
+        home = placed[max(sorted(per_language), key=lambda language: per_language[language])]
+        target_total = sum(home.values()) + max(per_language.values()) * scale
         assigned[reader] = (
             "train"
-            if hours[reader] > SPEAKER_CAP_HOURS
-            else max(SPLIT_SHARES, key=lambda s: SPLIT_SHARES[s] * total - placed[s])
+            if total > SPEAKER_CAP_HOURS
+            else max(SPLIT_SHARES, key=lambda s: SPLIT_SHARES[s] * target_total - home[s])
         )
-        placed[assigned[reader]] += counted
+        for language, h in per_language.items():
+            placed[language][assigned[reader]] += h * scale
     return assigned
 
 
@@ -161,11 +168,11 @@ def clips(raw: Path, languages: set[str] | None = None) -> Iterator[Clip]:
     for _, language, folder, names in articles:
         if names:
             speech = apply_gap_rule(_article_timings(folder)[0], 0)
-            hours[language][canonical[min(names)]] += sum(e - s for s, e in speech) / 3_600_000
-    splits = {language: assign_splits(per_reader) for language, per_reader in hours.items()}
+            hours[canonical[min(names)]][language] += sum(e - s for s, e in speech) / 3_600_000
+    splits = assign_splits(hours)
     for language_dir, language, folder, names in articles:
         reader = canonical[min(names)] if names else None
-        split = splits[language][reader] if reader else "train"
+        split = splits[reader] if reader else "train"
         parts = _parts(folder)
         for part, duration in zip(parts, _durations(folder), strict=True):
             key = f"{language_dir}/{folder.name}"
