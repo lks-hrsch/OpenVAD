@@ -1,5 +1,5 @@
 [tool.uv.workspace]
-members = ["training", "inferencing/vadigo", "inferencing/vadigo-rs"]
+members = ["training", "inferencing/openvad", "inferencing/openvad-rs"]
 
 [tool.uv]
 environments = [
@@ -22,7 +22,7 @@ dev = ["pytest", "ruff", "basedpyright"]
 [tool.ruff]
 line-length = 120
 target-version = "py312"
-src = ["training/src", "inferencing/vadigo/src", "inferencing/vadigo-rs/python"]
+src = ["training/src", "training/tests/support", "inferencing/openvad/src", "inferencing/openvad-rs/python"]
 extend-exclude = ["docs"]
 
 [tool.ruff.lint]
@@ -47,11 +47,15 @@ lines-after-imports = 2
 
 [tool.basedpyright]
 typeCheckingMode = "standard"
+extraPaths = ["training/tests/support"]
 
 [tool.pytest.ini_options]
 addopts = "--import-mode=importlib"
+# Test files mirror the implementation tree and keep its file names.
+python_files = ["*.py"]
+pythonpath = ["training/tests/support"]
 testpaths = [
     "training/tests",
-    "inferencing/vadigo/tests",
-    "inferencing/vadigo-rs/tests",
+    "inferencing/openvad/tests",
+    "inferencing/openvad-rs/tests",
 ]

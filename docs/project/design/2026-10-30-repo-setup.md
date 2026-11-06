@@ -4,7 +4,7 @@ Status: draft for review (2026-10-30).
 
 ## Intent
 
-Give VADigo a working skeleton for the thesis: toolchains, workspaces, docs build and Claude configuration, with just enough placeholder code that every build and check passes.
+Give OpenVAD a working skeleton for the thesis: toolchains, workspaces, docs build and Claude configuration, with just enough placeholder code that every build and check passes.
 The repo must be fully usable without Nix (uv + cargo + TeX Live); Nix and direnv are a convenience layer.
 Guiding rule from Lukas: **KISS and YAGNI**, now and during later programming. Anything without a present user is deferred, not stubbed.
 
@@ -27,7 +27,7 @@ Guiding rule from Lukas: **KISS and YAGNI**, now and during later programming. A
 | nixpkgs | `nixos-26.05`, pinned by `flake.lock` | Lukas |
 | Tables | polars, Parquet wherever possible, each Parquet file described by a sibling `.md` | Lukas |
 | Large files | Git LFS for committed Parquet and own released weights; third-party weights and audio never committed | Lukas + my call |
-| Audio | fetched by a CLI script into `$VADIGO_DATA_DIR` (gitignored `./data` or a NAS mount) | Lukas |
+| Audio | fetched by a CLI script into `$OPENVAD_DATA_DIR` (gitignored `./data` or a NAS mount) | Lukas |
 | Aufgabenstellung | never in the repo; placeholder page in the thesis | Lukas |
 | tudcd-scr | git submodule at `docs/tudcd-scr`, pinned to `c436bf5` (LPPL 1.3c) | my call, Lukas asked |
 | Author | Lukas Hirsch, no ORCID yet | Lukas |
@@ -42,19 +42,19 @@ Guiding rule from Lukas: **KISS and YAGNI**, now and during later programming. A
 ## Scope now
 
 ```
-VADigo/
+OpenVAD/
 ├── .claude/{CLAUDE.md,settings.json}
 ├── .envrc, .env.example, flake.nix, flake.lock
 ├── Cargo.toml, Cargo.lock, rust-toolchain.toml
 ├── pyproject.toml, uv.lock, .python-version
 ├── justfile, README.md, .gitignore, .gitmodules, .editorconfig
-├── data/README.md                     # layout, VADIGO_DATA_DIR, NAS use
-├── training/                          # uv member `vadigo-train`; data code later in `vadigo_train.data`; exports the parity fixture
+├── data/README.md                     # layout, OPENVAD_DATA_DIR, NAS use
+├── training/                          # uv member `openvad-train`; data code later in `openvad_train.data`; exports the parity fixture
 ├── inferencing/                       # folders named after the package they hold
 │   ├── CLAUDE.md                      # parity rules, tolerances, fixture regeneration
-│   ├── vadigo/                        # uv member `vadigo` (canonical PyTorch model lives here later)
-│   ├── vadigo-core/                   # crate; deps: safetensors only
-│   ├── vadigo-rs/                     # crate + uv member `vadigo-rs` (PyO3 + maturin, abi3-py312)
+│   ├── openvad/                        # uv member `openvad` (canonical PyTorch model lives here later)
+│   ├── openvad-core/                   # crate; deps: safetensors only
+│   ├── openvad-rs/                     # crate + uv member `openvad-rs` (PyO3 + maturin, abi3-py312)
 │   └── fixtures/smoke/                # golden vectors, plain git, < 1 MB
 ├── benchmarking/CLAUDE.md             # isolation, fairness and licence rules
 └── docs/
@@ -69,28 +69,28 @@ VADigo/
 ### Rust
 
 - Virtual workspace: `resolver = "3"`, edition 2024, `[workspace.package]`, `[workspace.dependencies]`, `[workspace.lints]` (clippy pedantic warn, `unsafe_code = "deny"`).
-- `vadigo-core` depends on `safetensors` only. Plain `Vec<f32>` and slices, no ndarray: the forward pass is hand-written, so an array library adds a dependency without removing code.
+- `openvad-core` depends on `safetensors` only. Plain `Vec<f32>` and slices, no ndarray: the forward pass is hand-written, so an array library adds a dependency without removing code.
 - Toolchain pinned in `rust-toolchain.toml`, read by rust-overlay in Nix and by rustup without Nix.
 
 ### Python
 
-- Virtual uv workspace root (no `[project]`); members `training`, `inferencing/vadigo`, `inferencing/vadigo-rs`. Inter-member deps use `{ workspace = true }`.
+- Virtual uv workspace root (no `[project]`); members `training`, `inferencing/openvad`, `inferencing/openvad-rs`. Inter-member deps use `{ workspace = true }`.
 - `src/` layout, ruff (line length 100, rules `E,F,I,UP,B,NPY`), basedpyright (PyPI wheel bundles Node, so it runs on the HPC without extra installs; faster than mypy on torch), pytest. Dev tools in root `[dependency-groups] dev`.
 - torch: PyPI wheel on macOS (CPU/MPS), CUDA wheel on Linux via `[[tool.uv.index]]` (explicit) + `[tool.uv.sources]` with a `sys_platform == 'linux'` marker. CPU-only Linux takes the CUDA wheel too (one download, no second index).
 - torch pinned to `==2.14.1` on all platforms, Linux index `cu130` (`https://download.pytorch.org/whl/cu130`). Lukas asked for CUDA 13.0 or newer with the best driver compatibility: `cu130` needs the oldest CUDA 13 driver. Checked 2026-10-30: torch 2.15.0 exists only as `cu132` (and newer drivers), `cu130` ends at 2.14.1. Moving to `cu132` later is a one-line change plus `uv lock`.
 - `tool.uv.environments` limits the lock to `darwin/arm64` and `linux/x86_64`, matching the Nix systems. (my call)
-- Bindings: `vadigo_rs` = native `_native` + thin wrapper + `.pyi`. `tool.uv.cache-keys` lists the Rust sources so `uv sync` rebuilds; `maturin develop --uv` documented for fast iteration.
-- Data paths come from `VADIGO_DATA_DIR` (default `./data`).
+- Bindings: `openvad_rs` = native `_native` + thin wrapper + `.pyi`. `tool.uv.cache-keys` lists the Rust sources so `uv sync` rebuilds; `maturin develop --uv` documented for fast iteration.
+- Data paths come from `OPENVAD_DATA_DIR` (default `./data`).
 
 ### Parity smoke test
 
-`vadigo-train` writes `inferencing/fixtures/smoke/linear.safetensors` for a `Linear(4, 2)` with hard-coded small weights and input (no RNG): tensors `weight`, `bias`, `input`, `expected`.
+`openvad-train` writes `inferencing/fixtures/smoke/linear.safetensors` for a `Linear(4, 2)` with hard-coded small weights and input (no RNG): tensors `weight`, `bias`, `input`, `expected`.
 `expected` is computed in float64 and cast to float32, so regeneration gives the same bytes on every platform; tests compare with the tolerance below. (my call)
 Checked against `expected` with abs tolerance `1e-6` by:
 
-- `cargo test -p vadigo-core` (Rust forward pass),
-- pytest in `inferencing/vadigo` (torch forward pass),
-- pytest in `inferencing/vadigo-rs` (`vadigo_rs` through PyO3).
+- `cargo test -p openvad-core` (Rust forward pass),
+- pytest in `inferencing/openvad` (torch forward pass),
+- pytest in `inferencing/openvad-rs` (`openvad_rs` through PyO3).
 
 `just fixtures` regenerates it; output must be byte-identical across reruns.
 
@@ -120,7 +120,7 @@ Checked against `expected` with abs tolerance `1e-6` by:
 
 ### just
 
-`setup` (`git submodule update --init`, `git lfs install --local`, `uv sync`), `check` (ruff, basedpyright, clippy, tests, engine-deps guard: fails if `cargo tree -p vadigo-core` contains ort/tract/burn/candle), `test`, `fmt`, `fixtures`, `thesis`, `watch thesis`, `docs-generated`.
+`setup` (`git submodule update --init`, `git lfs install --local`, `uv sync`), `check` (ruff, basedpyright, clippy, tests, engine-deps guard: fails if `cargo tree -p openvad-core` contains ort/tract/burn/candle), `test`, `fmt`, `fixtures`, `thesis`, `watch thesis`, `docs-generated`.
 
 ### Claude
 
@@ -132,11 +132,11 @@ Checked against `expected` with abs tolerance `1e-6` by:
 
 | Item | Added when |
 | --- | --- |
-| `vadigo_train.data` subpackage, `benchmarking/vadigo-bench` member, polars | first data or scoring code |
-| `inferencing/vadigo-cli`, criterion `benches/` | engine has a real forward pass |
+| `openvad_train.data` subpackage, `benchmarking/openvad-bench` member, polars | first data or scoring code |
+| `inferencing/openvad-cli`, criterion `benches/` | engine has a real forward pass |
 | `benchmarking/adapters/{webrtc,TEMPLATE}`, `just bench-adapter` | first reference system is run |
 | Git LFS patterns in `.gitattributes` | first committed Parquet or released weights |
-| `VADIGO_CACHE_DIR` | caching code exists |
+| `OPENVAD_CACHE_DIR` | caching code exists |
 | Seed/determinism helpers, run-metadata writer, dirty-tree guard, config loader | training loop |
 | `docs/paper/` (ACL), `docs/defence/`, `docs/talks/`, `docs/project/cards/` | when that document is started |
 | `nix build .#thesis` package | needed only by CI, which is dropped |
@@ -147,14 +147,14 @@ Checked against `expected` with abs tolerance `1e-6` by:
 
 1. `build(nix): add flake, dev shells, direnv and pre-commit hooks`
 2. `chore: add repo basics, data layout and justfile`
-3. `build(rust): add cargo workspace with vadigo-core`
-4. `build(python): add uv workspace with vadigo and vadigo-train`
-5. `feat(bindings): add vadigo-rs and parity smoke test`
+3. `build(rust): add cargo workspace with openvad-core`
+4. `build(python): add uv workspace with openvad and openvad-train`
+5. `feat(bindings): add openvad-rs and parity smoke test`
 6. `docs: add thesis skeleton with tudcd-scr`
 7. `docs(project): add ADRs and benchmark prediction spec`
 8. `chore(claude): add Claude configuration and development setup`
 
-Each commit is verified inside Nix, with output shown: `nix flake check`, both shells via direnv, `uv sync --locked`, `cargo test`, `uv run pytest`, `python -c "import vadigo_rs"`, `just thesis` (no undefined references, no tudcd warnings), hooks on all files.
+Each commit is verified inside Nix, with output shown: `nix flake check`, both shells via direnv, `uv sync --locked`, `cargo test`, `uv run pytest`, `python -c "import openvad_rs"`, `just thesis` (no undefined references, no tudcd warnings), hooks on all files.
 Last: an Ubuntu Docker container (`--platform linux/amd64`, the architecture of the HPC and the workstation; slower under emulation on the Mac, run once) with uv + rustup only runs `uv sync --locked`, `cargo test --locked`, `uv run pytest`.
 
 ## Verified at setup time (not assumed)

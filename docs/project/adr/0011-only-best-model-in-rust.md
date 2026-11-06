@@ -14,4 +14,8 @@ Only the best model is ported to Rust.
 ## Consequences
 
 - Comparison models live in PyTorch only.
-- Which candidates are explored in PyTorch stays open in [0012](0012-classifier-backbone.md).
+- Which candidates are explored in PyTorch is open in [0012](0012-classifier-backbone.md).
+
+## Open questions
+
+- What does "best" mean: accuracy only, or accuracy at a given byte budget ([0008](0008-byte-size-budget.md))? No record defines it.

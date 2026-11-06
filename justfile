@@ -1,3 +1,6 @@
+# .env holds local secrets such as MDC_API_KEY (git-ignored)
+set dotenv-load
+
 default:
     just --list
 
@@ -20,7 +23,7 @@ test: test-rs
 
 # regenerate the parity fixture
 fixtures:
-    uv run python -m vadigo_train.export_smoke inferencing/fixtures/smoke/linear.safetensors
+    uv run python -m openvad_train.export_smoke inferencing/fixtures/smoke/linear.safetensors
 
 # fail if the committed fixture is stale
 check-fixtures:
@@ -57,7 +60,11 @@ watch doc:
 
 # regenerate numbers and figures under docs/
 docs-generated:
-    uv run python -m vadigo_train.export_docs docs
+    uv run python -m openvad_train.export_docs docs
+
+# fetch one dataset into $OPENVAD_DATA_DIR/datasets/raw (see data/README.md)
+fetch dataset:
+    uv run python -m openvad_train.fetch {{dataset}}
 
 # restore the Claude skills pinned in skills-lock.json (needs Node; experimental command)
 skills:

@@ -1,4 +1,4 @@
-# VADigo
+# OpenVAD
 
 A reproducible, real-time voice activity detector (VAD) for noisy telephone audio.
 
@@ -10,19 +10,15 @@ A reproducible, real-time voice activity detector (VAD) for noisy telephone audi
 
 Popular lightweight VADs such as Silero VAD and TEN VAD publish their model weights only. Their architecture, training recipe and training data are not open, which makes them hard to reproduce or build upon.
 
-VADigo aims to be fully reproducible: open architecture, open training code, public training data only, and open evaluation. The goal is not to beat Silero VAD. It is to show how far a fully open VAD can go, and why.
+OpenVAD aims to be fully reproducible: open architecture, open training code, public training data only, and open evaluation. The goal is not to beat Silero VAD. It is to show how far a fully open VAD can go, and why.
 
-VADigo is developed as part of the Master's thesis "Reproducible Real-Time Voice Activity Detection under Noisy Telephone Conditions" at TU Dresden.
-
-## Name origin
-
-The vadigo (*Campogramma glaycos*) is a Mediterranean fish. Its official FAO species code happens to be "VAD".
+OpenVAD is developed as part of the Master's thesis "Reproducible Real-Time Voice Activity Detection under Noisy Telephone Conditions" at TU Dresden.
 
 ## Goals
 
 - Streaming, real-time operation, lightweight enough for CPU inference
 - Focus on narrowband (8 kHz) and wideband (16 kHz) telephone and voice-call audio in noisy conditions
-- Per-frame outputs: speech probability, a calibrated confidence, and an estimated signal-to-noise ratio (SNR)
+- Per-frame output: a speech probability
 - Training on public datasets only
 - A neutral benchmark against existing VADs
 

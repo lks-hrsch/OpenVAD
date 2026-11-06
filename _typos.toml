@@ -1,0 +1,10 @@
+[default]
+# Mozilla Data Collective dataset IDs (cuid strings), as in fetch/commonvoice.py.
+extend-ignore-re = ["\"cm[0-9a-z]{23}\""]
+
+[default.extend-words]
+# Creative Commons NoDerivatives, as in CC BY-ND.
+ND = "ND"
+nd = "nd"
+# Bashkir (Common Voice locale) and Bosnia (FLEURS `bs_ba`).
+ba = "ba"

@@ -1,0 +1,12 @@
+[package]
+name = "openvad-core"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+safetensors = { workspace = true }
+
+[lints]
+workspace = true

@@ -7,8 +7,9 @@ The Master's thesis lives here, written in LuaLaTeX on the TU Dresden class bund
 - `thesis/`: the thesis, built with `latexmk` into `thesis/build/main.pdf`.
 - `shared/`: bibliography, acronyms and macros.
 - `shared/generated/` and `images/generated/`: numbers and figures written by `just docs-generated`.
-- `notes/`: build and hardware notes (Markdown).
+- `notes/`: build and hardware, dataset, forced-alignment and speech-quality notes (Markdown).
 - `project/`: ADRs, specs and design documents.
+- `superpowers/`: the historical datasets design and plan of 2026-10-31, superseded by ADRs 0023 and 0024 and the current fetchers.
 - `tudcd-scr/`: the class bundle, a git submodule pinned to `c436bf5`.
 
 Never edit files under `generated/` by hand.

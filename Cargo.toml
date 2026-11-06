@@ -1,5 +1,5 @@
 [workspace]
-members = ["inferencing/vadigo-core", "inferencing/vadigo-rs"]
+members = ["inferencing/openvad-core", "inferencing/openvad-rs"]
 resolver = "3"
 
 [workspace.package]

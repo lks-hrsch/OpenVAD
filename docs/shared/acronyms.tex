@@ -3,49 +3,122 @@
 % Spelling: "noise" (voice-to-noise, signal-to-noise) and "gammatone".
 \DeclareAcroProperty{definition}
 
+\DeclareAcronym{aac}{short = AAC, long = Advanced Audio Coding, definition = {Lossy audio codec; Simsamu ships its audio as AAC in \texttt{.m4a} files.}}
+\DeclareAcronym{agc}{short = AGC, long = automatic gain control, definition = {Level control that keeps the speech level roughly constant; part of handsets and telephone networks.}}
+\DeclareAcronym{ami}{short = AMI, long = Augmented Multi-party Interaction, definition = {The AMI Meeting Corpus: 100 h of English meetings with manual word-timed transcripts, CC BY 4.0. Source: Carletta et al. 2005.}}
+\DeclareAcronym{amr}{short = AMR, long = Adaptive Multi-Rate, definition = {Family of 3GPP speech codecs: AMR-NB (narrowband) and AMR-WB (wideband).}}
+\DeclareAcronym{amrnb}{short = AMR-NB, long = Adaptive Multi-Rate narrowband, definition = {3GPP speech codec for 8 kHz mobile telephony, 4.75 to 12.2 kbit/s. Source: 3GPP TS 26.071.}}
+\DeclareAcronym{amrwb}{short = AMR-WB, long = Adaptive Multi-Rate wideband, definition = {3GPP speech codec for 16 kHz mobile telephony, 6.6 to 23.85 kbit/s; also ITU-T G.722.2. Source: 3GPP TS 26.171.}}
 \DeclareAcronym{amx}{short = AMX, long = Advanced Matrix Extensions, definition = {Intel matrix-multiply unit in the CPU (Sapphire Rapids).}}
+\DeclareAcronym{ap}{short = AP, long = average precision, definition = {Area under the precision--recall curve.}}
+\DeclareAcronym{api}{short = API, long = application programming interface, definition = {Interface through which programs call a service or library.}}
+\DeclareAcronym{asr}{short = ASR, long = automatic speech recognition, definition = {Transcribing speech to text; not used as labels here (forced alignment starts from human transcripts), and ``full-corpus-ASR'' names an AMI partition.}}
 \DeclareAcronym{auc}{short = AUC, long = area under the receiver operating characteristic curve, definition = {Area under the ROC curve (ROC AUC); the primary threshold-free metric.}}
+\DeclareAcronym{avx2}{short = AVX2, long = Advanced Vector Extensions 2, definition = {256-bit x86 SIMD instruction set.}}
 \DeclareAcronym{avx512}{short = AVX-512, long = Advanced Vector Extensions 512, definition = {512-bit x86 SIMD instruction set.}}
 \DeclareAcronym{bce}{short = BCE, long = binary cross-entropy, definition = {Cross-entropy loss for two-class targets; the VAD loss.}}
 \DeclareAcronym{bf16}{short = BF16, long = bfloat16, definition = {16-bit floating-point format.}}
 \DeclareAcronym{bgfar}{short = BG-FAR, long = background false-alarm rate, definition = {False-alarm rate measured on background audio. Source: Foreground VAD (Yang et al. 2026).}}
+\DeclareAcronym{cc}{short = CC, long = Creative Commons, definition = {Family of public copyright licences such as CC BY and CC0.}}
+\DeclareAcronym{cer}{short = CER, long = character error rate, definition = {Edit distance between a hypothesis and a reference transcript in characters, divided by the reference length.}}
+\DeclareAcronym{chat}{short = CHAT, long = Codes for the Human Analysis of Transcripts, definition = {TalkBank's transcription format, used by the CallHome transcripts.}}
+\DeclareAcronym{ci}{short = CI, long = continuous integration, definition = {Automated builds and tests run on every change.}}
+\DeclareAcronym{cng}{short = CNG, long = comfort noise generation, definition = {Synthetic background noise a decoder plays while the sender transmits no speech frames (DTX).}}
 \DeclareAcronym{cnn}{short = CNN, long = convolutional neural network, definition = {Neural network built from convolutional layers.}}
+\DeclareAcronym{cpu}{short = CPU, long = central processing unit, definition = {General-purpose processor; all timing and RTF are measured on it.}}
 \DeclareAcronym{crnn}{short = CRNN, long = convolutional recurrent neural network, definition = {Convolutional encoder followed by an RNN (Silero-style).}}
+\DeclareAcronym{ctc}{short = CTC, long = connectionist temporal classification, definition = {Training loss and output scheme with a blank token for sequence models without frame alignment; the MMS forced aligner is a CTC model. Source: Graves et al. 2006.}}
+\DeclareAcronym{daz}{short = DAZ, long = denormals are zero, definition = {CPU mode that treats denormal inputs as zero.}}
+\DeclareAcronym{dcf}{short = DCF, long = detection cost function, definition = {Weighted sum of miss and false-alarm rates; Fearless Steps uses 0.75 times the miss rate plus 0.25 times the false-alarm rate.}}
+\DeclareAcronym{demand}{short = DEMAND, long = Diverse Environments Multichannel Acoustic Noise Database, definition = {Multichannel ambient noise recordings (Zenodo 1227121); training noise here. Source: Thiemann et al. 2013.}}
+\DeclareAcronym{dns}{short = DNS, long = Deep Noise Suppression, definition = {Microsoft challenge series (\texttt{microsoft/DNS-Challenge}) with a public speech and noise corpus and the DNSMOS (Deep Noise Suppression Mean Opinion Score) quality predictor.}}
+\DeclareAcronym{dtmf}{short = DTMF, long = dual-tone multi-frequency, definition = {Touch-tone signalling: one pair of tones per key press.}}
+\DeclareAcronym{dtx}{short = DTX, long = discontinuous transmission, definition = {Codec mode that stops sending speech frames during pauses; the decoder fills them with comfort noise (CNG).}}
+\DeclareAcronym{eer}{short = EER, long = equal error rate, definition = {Operating point where the miss and false-alarm rates are equal.}}
+\DeclareAcronym{evs}{short = EVS, long = Enhanced Voice Services, definition = {3GPP speech and audio codec for VoLTE, from narrowband to fullband. Source: 3GPP TS 26.441.}}
 \DeclareAcronym{f1}{short = F1, long = F1 score, definition = {Harmonic mean of precision and recall.}}
 \DeclareAcronym{far}{short = FAR, long = false-alarm rate, definition = {Rate at which non-speech is wrongly detected as speech.}}
 \DeclareAcronym{fbank}{short = FBANK, long = log-mel filterbank energies, definition = {Log-mel filterbank energies, i.e.\ log-mel without the DCT.}}
 \DeclareAcronym{ffn}{short = FFN, long = feed-forward network, definition = {A stack of fully connected layers applied per position or frame, without recurrence or attention.}}
+\DeclareAcronym{fft}{short = FFT, long = fast Fourier transform, definition = {Efficient algorithm for the discrete Fourier transform.}}
+\DeclareAcronym{flac}{short = FLAC, long = Free Lossless Audio Codec, definition = {Lossless audio format; the generated training set is stored in it.}}
+\DeclareAcronym{fleurs}{short = FLEURS, long = Few-shot Learning Evaluation of Universal Representations of Speech, definition = {Read speech in 102 languages, about 12 h each, the same sentences in every language, CC BY 4.0. Source: Conneau et al. 2022.}}
+\DeclareAcronym{fma}{short = FMA, long = fused multiply-add, definition = {Multiply and add with a single rounding step.}}
+\DeclareAcronym{fp16}{short = FP16, long = 16-bit floating point, definition = {IEEE half-precision format.}}
 \DeclareAcronym{fp32}{short = FP32, long = 32-bit floating point, definition = {The reference numeric precision.}}
+\DeclareAcronym{fpcr}{short = FPCR, long = floating-point control register, definition = {AArch64 register holding floating-point modes such as flush-to-zero.}}
+\DeclareAcronym{ftz}{short = FTZ, long = flush to zero, definition = {CPU mode that replaces denormal results with zero.}}
 \DeclareAcronym{g711}{short = G.711, long = ITU-T G.711, definition = {Narrowband (8 kHz) telephony codec using A-law or $\mu$-law companding. Source: ITU-T G.711.}}
 \DeclareAcronym{g722}{short = G.722, long = ITU-T G.722, definition = {Wideband (16 kHz) telephony codec. Source: ITU-T G.722.}}
+\DeclareAcronym{gemv}{short = GEMV, long = general matrix-vector multiplication, definition = {Basic linear algebra operation, matrix times vector.}}
 \DeclareAcronym{gfcc}{short = GFCC, long = gammatone frequency cepstral coefficients, definition = {Cepstral features computed from a gammatone filterbank. Source: Shao, Srinivasan \& Wang 2007 (origin).}}
+\DeclareAcronym{gfdl}{short = GFDL, long = GNU Free Documentation License, definition = {Licence of some Wikimedia Commons audio in SWC articles.}}
+\DeclareAcronym{gpu}{short = GPU, long = graphics processing unit, definition = {Accelerator used for training, never for timing.}}
 \DeclareAcronym{gru}{short = GRU, long = gated recurrent unit, definition = {Recurrent cell with update and reset gates and no separate memory cell.}}
+\DeclareAcronym{gtwop}{short = G2P, long = grapheme-to-phoneme, definition = {Conversion of spelling to pronunciation; MFA uses a G2P model for words missing from its dictionary.}}
+\DeclareAcronym{hpc}{short = HPC, long = high-performance computing, definition = {Shared compute clusters such as those at TU Dresden.}}
+\DeclareAcronym{ihm}{short = IHM, long = individual headset microphone, definition = {AMI recording with one close-talking headset per participant.}}
 \DeclareAcronym{int8}{short = INT8, long = 8-bit integer, definition = {Quantised number format.}}
+\DeclareAcronym{isa}{short = ISA, long = instruction set architecture, definition = {The instructions a CPU family supports, such as AVX2, AVX-512 or NEON; the kernel tiers follow it.}}
+\DeclareAcronym{itut}{short = ITU-T, long = International Telecommunication Union Telecommunication Standardization Sector, definition = {Publishes the G-series codec and P-series quality recommendations, e.g.\ G.711, P.56 and P.808.}}
 \DeclareAcronym{kv}{short = KV, long = key--value, definition = {As in KV cache: the cache of attention keys and values; Transformer inference memory.}}
 \DeclareAcronym{leaf}{short = LEAF, long = LEarnable Audio Frontend, definition = {A frontend whose filterbank, pooling and compression (sPCEN) are learned. Source: Zeghidour et al., ICLR 2021 (not Interspeech).}}
 \DeclareAcronym{lstm}{short = LSTM, long = long short-term memory, definition = {Recurrent cell with a separate memory cell and input, forget and output gates.}}
 \DeclareAcronym{mae}{short = MAE, long = mean absolute error, definition = {Mean of absolute differences; the VNR regression loss (not ``maximum average error'').}}
+\DeclareAcronym{mdc}{short = MDC, long = Mozilla Data Collective, definition = {Mozilla's data platform; the only distribution channel of Common Voice since October 2025, behind an account and terms of service.}}
 \DeclareAcronym{mfa}{short = MFA, long = Montreal Forced Aligner, definition = {Forced-alignment tool.}}
 \DeclareAcronym{mfcc}{short = MFCC, long = mel-frequency cepstral coefficients, definition = {Cepstral features computed from a mel filterbank. Source: Davis \& Mermelstein 1980.}}
+\DeclareAcronym{mindcf}{short = minDCF, long = minimum detection cost function, definition = {The lowest DCF over all decision thresholds.}}
+\DeclareAcronym{mls}{short = MLS, long = Multilingual LibriSpeech, definition = {Read LibriVox audiobooks in 8 languages, CC BY 4.0. Source: Pratap et al. 2020.}}
+\DeclareAcronym{mms}{short = MMS, long = Massively Multilingual Speech, definition = {Meta's speech models for over 1,100 languages; torchaudio ships its forced aligner as \texttt{MMS\_FA}. Source: Pratap et al. 2023.}}
+\DeclareAcronym{mos}{short = MOS, long = mean opinion score, definition = {Average of listener ratings of speech quality, usually on a 1 to 5 scale; NISQA (Non-Intrusive Speech Quality Assessment) and UTMOS (UTokyo-SaruLab Mean Opinion Score) predict it.}}
+\DeclareAcronym{musan}{short = MUSAN, long = {Music, Speech and Noise corpus}, definition = {OpenSLR 17: music, speech and noise recordings; our noise and music source. Source: Snyder et al. 2015.}}
+\DeclareAcronym{mxcsr}{short = MXCSR, long = Multimedia Extensions Control and Status Register, definition = {x86 register holding SIMD floating-point modes such as flush-to-zero.}}
+\DeclareAcronym{nas}{short = NAS, long = network-attached storage, definition = {File storage on the network; holds the datasets and weights.}}
+\DeclareAcronym{nc}{short = NC, long = non-commercial, definition = {Creative Commons licence term that forbids commercial use.}}
+\DeclareAcronym{nd}{short = ND, long = NoDerivatives, definition = {Creative Commons licence term that forbids sharing modified versions; some MUSAN music files carry it.}}
 \DeclareAcronym{nds}{short = NDS, long = noise detected as speech, definition = {Noise wrongly flagged as speech; a telephony boundary metric.}}
+\DeclareAcronym{neon}{short = NEON, long = Arm Advanced SIMD, definition = {128-bit SIMD instruction set of AArch64.}}
+\DeclareAcronym{onnx}{short = ONNX, long = Open Neural Network Exchange, definition = {Open file format for neural networks; ONNX Runtime executes it.}}
+\DeclareAcronym{osi}{short = OSI, long = Open Source Initiative, definition = {Body that approves open-source licences; a licence is OSI-approved or not.}}
 \DeclareAcronym{pbx}{short = PBX, long = private branch exchange, definition = {Private telephone exchange inside an organisation.}}
 \DeclareAcronym{pcen}{short = PCEN, long = per-channel energy normalisation, definition = {Causal adaptive compression of filterbank energies. Source: Wang et al. 2017.}}
 \DeclareAcronym{pcm}{short = PCM, long = pulse-code modulation, definition = {Digital representation of an analogue signal by sampled, quantised values.}}
 \DeclareAcronym{pcma}{short = PCMA, long = G.711 A-law, definition = {G.711 PCM with A-law companding.}}
 \DeclareAcronym{pcmu}{short = PCMU, long = G.711 $\mu$-law, definition = {G.711 PCM with $\mu$-law companding.}}
+\DeclareAcronym{pesq}{short = PESQ, long = Perceptual Evaluation of Speech Quality, definition = {Intrusive speech quality metric that compares a signal with its reference. Source: ITU-T P.862.}}
+\DeclareAcronym{plc}{short = PLC, long = packet loss concealment, definition = {Decoder technique that fills lost packets with a plausible continuation of the signal.}}
+\DeclareAcronym{pstn}{short = PSTN, long = public switched telephone network, definition = {The circuit-switched telephone network that landline and mobile calls cross between operators.}}
 \DeclareAcronym{qat}{short = QAT, long = quantisation-aware training, definition = {Training with quantisation simulated.}}
+\DeclareAcronym{rir}{short = RIR, long = room impulse response, definition = {Impulse response from a source to a microphone in a room; convolved with dry speech to add reverberation.}}
 \DeclareAcronym{rnn}{short = RNN, long = recurrent neural network, definition = {Neural network with recurrent connections.}}
+\DeclareAcronym{roc}{short = ROC, long = receiver operating characteristic, definition = {True-positive rate against false-positive rate over all thresholds; the Picovoice benchmark reports ROC curves.}}
+\DeclareAcronym{rq}{short = RQ, long = research question, definition = {One of the three research questions of the thesis.}}
 \DeclareAcronym{rtf}{short = RTF, long = real-time factor, definition = {Processing time divided by audio duration.}}
 \DeclareAcronym{rtp}{short = RTP, long = Real-time Transport Protocol, definition = {Protocol that carries real-time audio and video over IP networks.}}
+\DeclareAcronym{rttm}{short = RTTM, long = Rich Transcription Time Marked, definition = {Text format of the National Institute of Standards and Technology with one timed segment per line, e.g.\ a speaker turn. Source: Rich Transcription evaluations of the National Institute of Standards and Technology.}}
+\DeclareAcronym{sa}{short = SA, long = ShareAlike, definition = {Creative Commons licence term that requires derivatives under the same licence.}}
 \DeclareAcronym{sad}{short = SAD, long = speech activity detection, definition = {Synonym of VAD. Source: DIHARD, RATS.}}
 \DeclareAcronym{sdp}{short = SDP, long = Session Description Protocol, definition = {Text format that describes media sessions, e.g.\ codecs and ports.}}
 \DeclareAcronym{sed}{short = SED, long = sound event detection, definition = {Detecting and labelling sound events in audio.}}
+\DeclareAcronym{simd}{short = SIMD, long = {single instruction, multiple data}, definition = {One instruction applied to several values at once.}}
 \DeclareAcronym{sip}{short = SIP, long = Session Initiation Protocol, definition = {Signalling protocol that sets up and ends calls.}}
+\DeclareAcronym{sisdr}{short = SI-SDR, long = scale-invariant signal-to-distortion ratio, definition = {Reference-based signal quality in dB, unchanged by rescaling the estimate. Source: Le Roux et al. 2019.}}
+\DeclareAcronym{smb}{short = SMB, long = Server Message Block, definition = {Network file-sharing protocol of the NAS.}}
 \DeclareAcronym{snr}{short = SNR, long = signal-to-noise ratio, definition = {Ratio of signal level to noise level; define per utterance or segment and state the level reference (ITU-T P.56).}}
 \DeclareAcronym{spcen}{short = sPCEN, long = PCEN with learned per-channel smoothing, definition = {PCEN whose per-channel smoothing is learned; LEAF's compression.}}
-\DeclareAcronym{sre}{short = SRE, long = NIST Speaker Recognition Evaluation, definition = {NIST evaluation series for speaker recognition.}}
+\DeclareAcronym{sre}{short = SRE, long = National Institute of Standards and Technology Speaker Recognition Evaluation, definition = {Evaluation series of the National Institute of Standards and Technology for speaker recognition.}}
 \DeclareAcronym{ssr}{short = SSR, long = silence-to-speech ratio, definition = {Ratio of silence to speech. LibriVAD reports it as a percentage (\textasciitilde{}34\,\%) and also says ``speech-to-silence'', so define it precisely ourselves (e.g.\ share of non-speech frames). Source: LibriVAD.}}
 \DeclareAcronym{stft}{short = STFT, long = short-time Fourier transform, definition = {Fourier transform over short windowed frames.}}
+\DeclareAcronym{stl}{short = STL, long = ITU-T Software Tool Library, definition = {ITU-T G.191 reference tools for speech and audio coding experiments. Source: ITU-T G.191.}}
+\DeclareAcronym{stoi}{short = STOI, long = short-time objective intelligibility, definition = {Intrusive speech intelligibility metric. Source: Taal et al. 2011.}}
+\DeclareAcronym{swc}{short = SWC, long = Spoken Wikipedia Corpora, definition = {Read Wikipedia articles in English, German and Dutch with word alignments (Hamburg FDR record 1875), CC BY-SA 4.0.}}
+\DeclareAcronym{threegpp}{short = 3GPP, long = 3rd Generation Partnership Project, definition = {Standards body for mobile telephony; publishes the AMR, AMR-WB and EVS codecs with their reference code.}}
+\DeclareAcronym{tir}{short = TIR, long = target-to-interference ratio, definition = {Level ratio of the foreground speaker to a competing talker over speech-active frames. Source: Foreground VAD (Yang et al. 2026).}}
 \DeclareAcronym{vad}{short = VAD, long = voice activity detection, definition = {Detecting whether speech is present.}}
 \DeclareAcronym{vnni}{short = VNNI, long = Vector Neural Network Instructions, definition = {AVX-512 INT8 dot-product instructions.}}
 \DeclareAcronym{vnr}{short = VNR, long = voice-to-noise ratio, definition = {Segmental, auditory-weighted ratio of voice to noise; the label is VNR above a threshold. Source: Braun \& Tashev 2021.}}
+\DeclareAcronym{volte}{short = VoLTE, long = Voice over LTE, definition = {Telephony over the 4G mobile data network; carries AMR-WB or EVS.}}
+\DeclareAcronym{wadasnr}{short = WADA-SNR, long = Waveform Amplitude Distribution Analysis signal-to-noise ratio, definition = {Blind per-clip SNR estimate. Source: Kim and Stern 2008.}}
+\DeclareAcronym{wer}{short = WER, long = word error rate, definition = {Edit distance between a hypothesis and a reference transcript in words, divided by the number of reference words.}}
+\DeclareAcronym{wham}{short = WHAM!, long = WSJ0 Hipster Ambient Mixtures, definition = {Binaural ambient noise recorded in restaurants, cafes, bars and parks, with intelligible speech removed; CC BY-NC 4.0. Source: Wichern et al. 2019.}}

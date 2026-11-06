@@ -4,7 +4,8 @@ Status: Proposed
 
 ## Context
 
-All common frontends share four steps: auditory-scale filterbank → envelope + ~10 ms framing → compression → optional discrete cosine transform.
+All common frontends share four steps: auditory-scale filterbank → envelope + framing (commonly ~10 ms; ours is open in [0006](0006-window-and-stride.md)) → compression → optional discrete cosine transform.
+The framing (window and stride) is open in [0006](0006-window-and-stride.md).
 
 - Zhao & Wang 2013: GFCC's noise robustness comes from the cube-root compression, not the gammatone filters. MFCC with cube root beats GFCC (28.5 vs. 16.4 % SID at 0 dB).
 - LEAF: mel + PCEN already reaches 76.4 vs. 76.9 % for full LEAF.
@@ -19,6 +20,16 @@ All common frontends share four steps: auditory-scale filterbank → envelope + 
 - Fixed frontend (STFT magnitude or log-mel) as the baseline.
 - Ablations: (1) compression log vs. cube root vs. PCEN (PCEN is causal, cheap, suits telephone level variation); (2) mel vs. equivalent rectangular bandwidth (gammatone) weighting in the FFT domain (same cost); (3) MFCC vs. FBANK (discrete cosine transform on/off).
 - LEAF and SincNet are only cited, not implemented in Rust. Both use symmetric (non-causal) filters.
+
+## Consequences
+
+- One frontend at 16 kHz serves both input rates, because the engine upsamples 8 kHz input ([0009](0009-native-16khz-and-one-resampler.md)).
+- Engine output is bitwise identical across kernel tiers and uses no platform libm for transcendentals ([0026](0026-engine-determinism-and-kernel-tiers.md)). Log, cube-root and PCEN power functions therefore need a shared deterministic implementation in the Rust engine.
+
+## Open questions
+
+- Is the baseline STFT magnitude or log-mel?
+- Which further frontends, beyond the baseline and the three ablations, are explored in PyTorch?
 
 ## References
 

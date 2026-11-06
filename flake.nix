@@ -1,5 +1,5 @@
 {
-  description = "VADigo: training, inference engine and thesis";
+  description = "OpenVAD: training, inference engine and thesis";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
@@ -171,6 +171,7 @@
                 rust
                 pkgs.maturin
                 pkgs.uv
+                pkgs.ffmpeg
                 pkgs.python312
                 pkgs.just
                 pkgs.typos
