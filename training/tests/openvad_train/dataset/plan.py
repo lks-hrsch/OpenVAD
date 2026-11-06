@@ -248,6 +248,7 @@ def test_ablating_g_changes_only_the_gap_column():
     t = timing("a", speech=words(30, gap=150))
     base = clip_rows(clip("a", "swc", duration_s=40.0), t, SLICE)
     other = clip_rows(clip("a", "swc", duration_s=40.0), t, dataclasses.replace(SLICE, gap_ms=100))
+    assert len(base) == 3  # no gap is over G, so these are budget splits of one stretch
     assert [r | {"gap_ms": 0} for r in base] == [r | {"gap_ms": 0} for r in other]
     assert other[0]["gap_ms"] == 100
 

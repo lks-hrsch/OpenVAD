@@ -5,6 +5,8 @@
 
 from itertools import pairwise
 
+import pytest
+
 from openvad_train.dataset.cutting import Chunk, cut_long, rebase
 from openvad_train.dataset.labels import apply_gap_rule
 from openvad_train.dataset.schema import Timing
@@ -42,19 +44,70 @@ def test_cut_only_at_gaps_over_g():
         assert after - before > 200
 
 
-def test_a_gap_of_exactly_g_is_not_a_cut_but_one_ms_more_is():
-    assert len(cut_long(timing(words(30, gap=200)))) == 1
-    assert len(cut_long(timing(words(30, gap=201)))) == 3
+def test_a_gap_of_exactly_g_is_split_only_by_the_budget_and_one_ms_more_is_a_pause_cut():
+    # A budget split shares its midpoint; a cut at a pause leaves the rest of the gap out.
+    inside_a_stretch = cut_long(timing(words(30, gap=200)))
+    assert len(inside_a_stretch) == 3
+    assert all(left.end_ms == right.start_ms for left, right in pairwise(inside_a_stretch))
+    at_pauses = cut_long(timing(words(30, gap=201)))
+    assert len(at_pauses) == 3
+    assert all(left.end_ms + 1 == right.start_ms for left, right in pairwise(at_pauses))
 
 
 def test_a_word_longer_than_the_limit_stays_one_chunk():
     assert cut_long(timing([(1000, 9000)])) == [Chunk(900, 9100)]
 
 
-def test_a_run_without_a_cuttable_gap_stays_whole_and_its_neighbours_are_split_off():
+def test_a_run_over_the_limit_is_split_by_the_budget_and_its_neighbours_stay_apart():
     long_run = words(20, gap=100, first=10_000)
     t = timing([(8000, 8500), *long_run, (30_000, 30_500)])
-    assert [speech_in(c, t) for c in cut_long(t)] == [500, 10_000, 500]
+    # 13 words of 500 ms fit the budget, and the 3500 ms left are over the 1 s floor.
+    assert [speech_in(c, t) for c in cut_long(t)] == [500, 6500, 3500, 500]
+
+
+def test_a_budget_cut_sits_at_the_midpoint_of_the_gap_without_a_margin():
+    t = timing(words(14, gap=100, first=1000))
+    # 14 words overflow by one, whose 500 ms are under the floor, so the cut moves to even the two pieces.
+    assert cut_long(t) == [Chunk(900, 1000 + 7 * 600 - 50), Chunk(1000 + 7 * 600 - 50, 1000 + 13 * 600 + 500 + 100)]
+
+
+def test_a_last_piece_of_a_second_or_more_keeps_the_greedy_cut():
+    t = timing(words(15, gap=100))
+    assert [speech_in(c, t) for c in cut_long(t)] == [6500, 1000]
+
+
+def test_a_last_piece_under_a_second_is_evened_with_the_one_before():
+    t = timing(words(14, gap=100))
+    assert [speech_in(c, t) for c in cut_long(t)] == [3500, 3500]
+
+
+def test_only_the_last_two_pieces_are_evened():
+    t = timing(words(27, gap=100))
+    assert [speech_in(c, t) for c in cut_long(t)] == [6500, 3500, 3500]
+
+
+def test_words_touching_with_no_gap_are_split_between_them():
+    t = timing(words(30, gap=0))
+    chunks = cut_long(t)
+    assert [speech_in(c, t) for c in chunks] == [6500, 6500, 2000]
+    assert all(left.end_ms == right.start_ms for left, right in pairwise(chunks))
+    # The cut lands on the boundary of two words, so neither is shortened.
+    assert all(c.start_ms == 900 or any(s == c.start_ms for s, _ in t.speech_ms) for c in chunks)
+
+
+@pytest.mark.parametrize("gap", [0, 1, 37, 100, 199, 200])
+def test_a_budget_split_puts_every_word_whole_in_exactly_one_chunk(gap):
+    t = timing(words(60, length=317, gap=gap))
+    chunks = cut_long(t)
+    assert all(left.end_ms <= right.start_ms for left, right in pairwise(chunks))
+    for s, e in t.speech_ms:
+        assert sum(c.start_ms <= s and e <= c.end_ms for c in chunks) == 1
+    assert all(speech_in(c, t) <= 6600 for c in chunks)
+
+
+def test_a_single_word_over_the_limit_inside_a_run_stays_whole():
+    t = timing([(1000, 1500), (1600, 9600), (9700, 11_000)])
+    assert [speech_in(c, t) for c in cut_long(t)] == [500, 8000, 1300]
 
 
 def test_chunks_cover_every_word_whole_and_do_not_overlap():
