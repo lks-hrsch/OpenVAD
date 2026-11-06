@@ -62,6 +62,8 @@ def protect_peak(x: np.ndarray) -> np.ndarray:
     """Scale the whole sample down only when its peak exceeds 1.0, which keeps the SNR."""
     x = x.astype(np.float32)
     peak = np.abs(x).max(initial=0.0)
+    if not np.isfinite(peak):
+        raise ValueError("cannot protect the peak of a sample with NaN or infinity")
     return x / peak if peak > 1.0 else x
 
 

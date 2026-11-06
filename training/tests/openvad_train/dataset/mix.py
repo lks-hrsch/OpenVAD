@@ -112,6 +112,12 @@ def test_peak_protection_leaves_quiet_samples_alone():
     assert protect_peak(x).tolist() == x.tolist()
 
 
+@pytest.mark.parametrize("bad", [np.nan, np.inf, -np.inf])
+def test_peak_protection_rejects_non_finite_samples(bad):
+    with pytest.raises(ValueError, match="NaN or infinity"):
+        protect_peak(np.array([0.5, bad], np.float32))
+
+
 def test_transient_peak_ratio_and_cut_at_end():
     x = sine(1000)  # peak 0.3
     out = overlay_transient(x, np.array([0.0, 1.0, -0.5], np.float32), 998, -6.0)
