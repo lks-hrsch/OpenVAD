@@ -3,7 +3,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-"""Spoken Wikipedia Corpora 2.0: one clip per article, word timings from `aligned.swc`.
+"""Spoken Wikipedia Corpora 2.0: one clip per audio file of an article, word timings from `aligned.swc`.
 
 Adapter contract: `clips(raw, languages)` (language codes, None for all; it reads nothing of the others) and,
 for sources that are not forced-aligned by MFA, `timings(raw, clips)`. `raw` is `datasets/raw/swc`.
@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import xml.etree.ElementTree as ET
 from collections.abc import Iterable, Iterator
+from functools import cache, lru_cache
 from pathlib import Path
 from typing import Literal
 
@@ -111,37 +112,51 @@ def _licence(folder: Path) -> str:
     return audio_licence(meta.read_text(errors="replace")) if meta.exists() else "unknown"
 
 
+def _parts(folder: Path) -> list[Path]:
+    """An article's audio: one `audio.ogg`, or `audio1.ogg`, `audio2.ogg` ... in order."""
+    single = folder / "audio.ogg"
+    if single.exists():
+        return [single]
+    parts = sorted(folder.glob("audio[0-9]*.ogg"), key=lambda p: int(p.stem.removeprefix("audio")))
+    if not parts:
+        raise FileNotFoundError(f"{folder}: an aligned article without audio")
+    return parts
+
+
+@cache
+def _durations(folder: Path) -> tuple[float, ...]:
+    return tuple(audio_duration_s(p) for p in _parts(folder))
+
+
 def clips(raw: Path, languages: set[str] | None = None) -> Iterator[Clip]:
+    """One clip per audio file; an article in several parts gives `<language>/<article>#<part>` per part."""
     articles = []
     for language_dir, language in LANGUAGES.items():
         if languages is not None and language not in languages:
             continue
         for article in sorted((raw / language_dir).glob("*/aligned.swc")):
             folder = article.parent
-            audio = folder / "audio.ogg"
-            if not audio.exists():
-                # shortcut: 135 aligned articles are split over audio1.ogg, audio2.ogg ... and their word times
-                # run over the concatenation, so they need one joined file first; skipped until that is built.
-                continue
             names = article_readers(json.loads((folder / "info.json").read_text()))
-            articles.append((language_dir, language, folder, audio, names))
+            articles.append((language_dir, language, folder, names))
     canonical = merge_readers(names for *_, names in articles)
-    for language_dir, language, folder, audio, names in articles:
+    for language_dir, language, folder, names in articles:
         reader = canonical[min(names)] if names else None
-        key = f"{language_dir}/{folder.name}"
-        yield Clip(
-            clip_id=key,
-            source=SOURCE,
-            language=language,
-            speaker=reader,
-            split=split_of(reader),
-            path=(RAW_PREFIX / key / "audio.ogg").as_posix(),
-            offset_s=0.0,
-            # The header's length, not the last word's end: the mask after the last word needs it.
-            duration_s=audio_duration_s(audio),
-            licence=_licence(folder),
-            transcript=None,
-        )
+        parts = _parts(folder)
+        for part, duration in zip(parts, _durations(folder), strict=True):
+            key = f"{language_dir}/{folder.name}"
+            yield Clip(
+                clip_id=key if len(parts) == 1 else f"{key}#{part.stem.removeprefix('audio')}",
+                source=SOURCE,
+                language=language,
+                speaker=reader,
+                split=split_of(reader),
+                path=(RAW_PREFIX / key / part.name).as_posix(),
+                offset_s=0.0,
+                # The header's length, not the last word's end: the mask after the last word needs it.
+                duration_s=duration,
+                licence=_licence(folder),
+                transcript=None,
+            )
 
 
 def _span(n: ET.Element) -> tuple[int, int] | None:
@@ -202,9 +217,27 @@ def _word_timings(doc: ET.Element, duration_ms: int) -> tuple[list[tuple[int, in
     return words, sorted([m for m in masks + edges if m[1] > m[0]])
 
 
+@lru_cache(maxsize=4)
+def _article_timings(folder: Path) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+    """Words and masks over the article's whole timeline, which runs over the concatenation of its parts."""
+    doc = ET.parse(folder / "aligned.swc").getroot().find("d")
+    assert doc is not None
+    return _word_timings(doc, round(sum(_durations(folder)) * 1000))
+
+
+def _rebase(intervals: list[tuple[int, int]], start: int, end: int) -> list[tuple[int, int]]:
+    """The parts of the intervals inside [start, end), counted from `start`; a word crossing a boundary is cut."""
+    return [(max(s, start) - start, min(e, end) - start) for s, e in intervals if min(e, end) > max(s, start)]
+
+
 def timings(raw: Path, clips: Iterable[Clip]) -> Iterator[Timing]:
     for clip in clips:
-        doc = ET.parse(raw / Path(clip.path).relative_to(RAW_PREFIX).parent / "aligned.swc").getroot().find("d")
-        assert doc is not None
-        speech, mask = _word_timings(doc, round(clip.duration_s * 1000))
-        yield Timing(clip.clip_id, "word", speech, mask, None, "swc:aligned.swc")
+        path = Path(clip.path).relative_to(RAW_PREFIX)
+        folder = raw / path.parent
+        durations = _durations(folder)
+        k = [p.name for p in _parts(folder)].index(path.name)
+        start, end = (round(sum(durations[:i]) * 1000) for i in (k, k + 1))
+        speech, mask = _article_timings(folder)
+        yield Timing(
+            clip.clip_id, "word", _rebase(speech, start, end), _rebase(mask, start, end), None, "swc:aligned.swc"
+        )

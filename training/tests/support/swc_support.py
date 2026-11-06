@@ -46,10 +46,14 @@ def add_article(
     words=ARTICLE_WORDS,
     swc=True,
     boilerplate=True,
+    parts: tuple[float, ...] | None = None,
 ) -> None:
     folder = raw / language / name
     folder.mkdir(parents=True)
-    sf.write(folder / "audio.ogg", np.zeros(int(16000 * seconds)), 16000, format="OGG", subtype="VORBIS")
+    # An article in several parts has audio1.ogg, audio2.ogg ... and no audio.ogg.
+    audio = {"audio.ogg": seconds} if parts is None else {f"audio{i}.ogg": d for i, d in enumerate(parts, 1)}
+    for name_, length in audio.items():
+        sf.write(folder / name_, np.zeros(int(16000 * length)), 16000, format="OGG", subtype="VORBIS")
     info = {"article_parsed": {"reader": article_reader}, "audio_file_parsed": {"reader": reader}}
     (folder / "info.json").write_text(json.dumps(info))
     (folder / "audiometa.txt").write_text("{{self|cc-by-sa-3.0}}")
@@ -64,6 +68,4 @@ def make_swc_tree(raw: Path) -> Path:
     add_article(raw, "german", "Ddd", "Zed_Q")
     add_article(raw, "dutch", "Eee", "zed q")
     add_article(raw, "dutch", "Fff", "Other", swc=False)
-    add_article(raw, "dutch", "Ggg", "Other")
-    (raw / "dutch/Ggg/audio.ogg").rename(raw / "dutch/Ggg/audio1.ogg")  # an article in several parts
     return raw

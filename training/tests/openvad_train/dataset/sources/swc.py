@@ -19,7 +19,7 @@ def swc_tree(tmp_path):
     return make_swc_tree(tmp_path)
 
 
-def test_one_clip_per_aligned_single_file_article(swc_tree):
+def test_one_clip_per_aligned_article(swc_tree):
     clips = {c.clip_id: c for c in swc.clips(swc_tree)}
     assert sorted(clips) == ["dutch/Eee", "english/Aaa", "english/Bbb", "german/Ccc", "german/Ddd"]
     c = clips["english/Aaa"]
@@ -166,4 +166,30 @@ def test_languages_filter_before_any_article_is_read(tmp_path):
     (tmp_path / "english/Broken/info.json").write_text("not json")
     assert [c.clip_id for c in swc.clips(tmp_path, {"de"})] == ["german/Fine"]
     with pytest.raises(ValueError, match="Expecting value"):
+        list(swc.clips(tmp_path))
+
+
+def test_a_multi_part_article_gives_one_clip_per_part_with_rebased_words(tmp_path):
+    # Word times run over the concatenation of the parts (1.0 s then 1.5 s); the word 900 to 1300 crosses the boundary.
+    words = [(100, 300), (900, 1300), (1500, 1800)]
+    add_article(tmp_path, "german", "Multi", "Alice", parts=(1.0, 1.5), words=words, boilerplate=False)
+    got = list(swc.clips(tmp_path))
+    assert [(c.clip_id, c.path, c.duration_s) for c in got] == [
+        ("german/Multi#1", "datasets/raw/swc/german/Multi/audio1.ogg", 1.0),
+        ("german/Multi#2", "datasets/raw/swc/german/Multi/audio2.ogg", 1.5),
+    ]
+    first, second = swc.timings(tmp_path, got)
+    assert (first.speech_ms, first.mask_ms) == ([(100, 300), (900, 1000)], [(0, 100)])
+    assert (second.speech_ms, second.mask_ms) == ([(0, 300), (500, 800)], [(800, 1500)])
+
+
+def test_parts_are_ordered_by_number_not_by_name(tmp_path):
+    add_article(tmp_path, "german", "Ten", "Alice", parts=(0.2,) * 10)
+    assert [c.clip_id.split("#")[1] for c in swc.clips(tmp_path)] == [str(i) for i in range(1, 11)]
+
+
+def test_an_aligned_article_without_audio_is_an_error(tmp_path):
+    add_article(tmp_path, "german", "Lost", "Alice")
+    (tmp_path / "german/Lost/audio.ogg").unlink()
+    with pytest.raises(FileNotFoundError, match="without audio"):
         list(swc.clips(tmp_path))
