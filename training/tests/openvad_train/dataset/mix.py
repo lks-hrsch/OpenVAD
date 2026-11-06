@@ -85,6 +85,15 @@ def test_noise_shorter_than_sample_loops():
     assert loop_slice(np.arange(4.0), 3, 6).tolist() == [3, 0, 1, 2, 3, 0]
 
 
+def test_loop_slice_rejects_stereo_empty_and_negative_length():
+    with pytest.raises(ValueError, match="one-dimensional"):
+        loop_slice(np.zeros((4, 2)), 0, 3)
+    with pytest.raises(ValueError, match="one-dimensional"):
+        loop_slice(np.zeros(0), 0, 3)
+    with pytest.raises(ValueError, match="samples"):
+        loop_slice(np.arange(4.0), 0, -1)
+
+
 def test_dither_level_and_reproducibility():
     d = dither(160000, -80.0, np.random.default_rng(3))
     assert 20 * np.log10(np.sqrt(np.mean(d.astype(np.float64) ** 2))) == pytest.approx(-80.0, abs=0.2)

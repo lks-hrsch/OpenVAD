@@ -46,8 +46,10 @@ def place(speech: np.ndarray, total_n: int, offset_n: int) -> np.ndarray:
 
 def loop_slice(noise: np.ndarray, offset_n: int, n: int) -> np.ndarray:
     """`n` samples from `offset_n`, wrapping around the end when the noise is shorter."""
-    if len(noise) == 0:
-        raise ValueError("cannot slice empty noise")
+    if noise.ndim != 1 or len(noise) == 0:
+        raise ValueError(f"noise must be non-empty and one-dimensional, got shape {noise.shape}")
+    if n < 0:
+        raise ValueError(f"cannot take {n} samples")
     return np.take(noise, np.arange(offset_n, offset_n + n), mode="wrap")
 
 
