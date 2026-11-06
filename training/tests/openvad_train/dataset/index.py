@@ -229,6 +229,7 @@ def test_run_index_counts_speech_seconds_and_drops_clips_without_any(caplog):
         kept, speech_s, dropped = index._index_source("swc", cast(ModuleType, fake), None)
     assert {c.clip_id for c in kept} == {"c2", "c4"}
     assert dropped == {"no_aligned_word": 1, "over_cap": 2}
+    assert speech_s is not None
     assert speech_s["c2"] == 12 * 3600
     assert "dropped {'no_aligned_word': 1, 'over_cap': 2}" in caplog.text
 
