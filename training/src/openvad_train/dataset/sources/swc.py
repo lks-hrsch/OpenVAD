@@ -29,21 +29,58 @@ LANGUAGES = {"english": "en", "german": "de", "dutch": "nl"}
 # Pointers are relative to $OPENVAD_DATA_DIR; `raw` itself is only the place to read from.
 RAW_PREFIX = Path("datasets/raw/swc")
 
-_USER_LINK = re.compile(r"\[\[:?(?:[a-z]{2}:)?user:([^|\]]+)", re.IGNORECASE)
-_MANGLED_USER = re.compile(r"user at project(.+)wikipedia[a-z]{2}$", re.IGNORECASE)
+# Wiki prefixes of a reader field: `:nl:`, and a user namespace with optional language and project (`w:en:User:`).
+_COLON_PREFIX = re.compile(r"^:(?:[a-z]{1,3}:)*", re.IGNORECASE)
+_USER_NAMESPACE = re.compile(r"^(?:[a-z]{1,3}:)*(?:user|benutzer|gebruiker|speakthings):", re.IGNORECASE)
+_HOME_WIKI = re.compile(r"~\w+wiki$", re.IGNORECASE)
+_WIKI_LINK = re.compile(r"\[\[([^\]]+)\]\]")
+_MANGLED = re.compile(r"(?:user at project|original uploader)(.+?)wikipedia[a-z]{2}", re.IGNORECASE)
+_SPOKEN_BY = re.compile(r"spoken by:\s*(.+?)(?:\s+sound editing by:.*)?$", re.IGNORECASE | re.DOTALL)
 
 
-def reader_name(info: dict) -> str | None:
-    """The reader of an article's audio, with wiki-link forms and case merged.
-
-    `[[User:Jcb|Jcb]]`, `Jcb`, `jcb` and `user at projectJcbwikipedianl` are one reader; with several
-    links the first one counts, because one article gets one speaker.
+def reader_name(raw: str | None) -> str | None:
+    """One reader field with wiki-link forms and case merged: `[[User:Jcb|Jcb]]`, `[[Benutzer:Jcb]]`, `Jcb`,
+    `jcb` and `user at projectJcbwikipedianl` are one name. The first link counts when there are several, and
+    anything that is not a user form (a publisher, say) stays as written.
     """
-    raw = (info.get("audio_file_parsed") or {}).get("reader") or (info.get("article_parsed") or {}).get("reader")
     if not raw:
         return None
-    name = m.group(1) if (m := _USER_LINK.search(raw) or _MANGLED_USER.search(raw)) else raw
-    return " ".join(name.replace("_", " ").split()).casefold() or None
+    text = raw
+    if m := _SPOKEN_BY.search(text):
+        text = m.group(1)
+    if m := _WIKI_LINK.search(text):
+        text = m.group(1).split("|")[0]
+    elif m := _MANGLED.search(text):
+        text = m.group(1)
+    text = _HOME_WIKI.sub("", _USER_NAMESPACE.sub("", _COLON_PREFIX.sub("", text.strip())))
+    return " ".join(text.replace("_", " ").split()).casefold() or None
+
+
+def article_readers(info: dict) -> set[str]:
+    """Every name an article's info.json gives its reader: the audio file's and the article's."""
+    fields = ((info.get("audio_file_parsed") or {}).get("reader"), (info.get("article_parsed") or {}).get("reader"))
+    return {name for field in fields if (name := reader_name(field))}
+
+
+def merge_readers(articles: Iterable[set[str]]) -> dict[str, str]:
+    """Canonical name per name: names that share an article are one person (connected components), and the
+    alphabetically first name of a component stands for it.
+    """
+    parent: dict[str, str] = {}
+
+    def find(x: str) -> str:
+        while parent.setdefault(x, x) != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for names in articles:
+        for other in names:
+            parent[find(other)] = find(min(names))
+    components: dict[str, set[str]] = {}
+    for name in parent:
+        components.setdefault(find(name), set()).add(name)
+    return {name: min(members) for members in components.values() for name in members}
 
 
 def split_of(reader: str | None) -> Literal["train", "validation", "test"]:
@@ -71,30 +108,34 @@ def audio_duration_s(audio: Path) -> float:
 
 def clips(raw: Path) -> Iterator[Clip]:
     licences = swc_licences(raw)
+    articles = []
     for language_dir, language in LANGUAGES.items():
         for article in sorted((raw / language_dir).glob("*/aligned.swc")):
             folder = article.parent
-            info = json.loads((folder / "info.json").read_text())
-            reader = reader_name(info)
             audio = folder / "audio.ogg"
             if not audio.exists():
                 # shortcut: 135 aligned articles are split over audio1.ogg, audio2.ogg ... and their word times
                 # run over the concatenation, so they need one joined file first; skipped until that is built.
                 continue
-            key = f"{language_dir}/{folder.name}"
-            yield Clip(
-                clip_id=key,
-                source=SOURCE,
-                language=language,
-                speaker=reader,
-                split=split_of(reader),
-                path=(RAW_PREFIX / key / "audio.ogg").as_posix(),
-                offset_s=0.0,
-                # The header's length, not the last word's end: the mask after the last word needs it.
-                duration_s=audio_duration_s(audio),
-                licence=licences.get(key, "unknown"),
-                transcript=None,
-            )
+            names = article_readers(json.loads((folder / "info.json").read_text()))
+            articles.append((language_dir, language, folder, audio, names))
+    canonical = merge_readers(names for *_, names in articles)
+    for language_dir, language, folder, audio, names in articles:
+        reader = canonical[min(names)] if names else None
+        key = f"{language_dir}/{folder.name}"
+        yield Clip(
+            clip_id=key,
+            source=SOURCE,
+            language=language,
+            speaker=reader,
+            split=split_of(reader),
+            path=(RAW_PREFIX / key / "audio.ogg").as_posix(),
+            offset_s=0.0,
+            # The header's length, not the last word's end: the mask after the last word needs it.
+            duration_s=audio_duration_s(audio),
+            licence=licences.get(key, "unknown"),
+            transcript=None,
+        )
 
 
 def _span(n: ET.Element) -> tuple[int, int] | None:

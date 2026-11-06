@@ -41,6 +41,7 @@ def add_article(
     name: str,
     reader: str | None,
     *,
+    article_reader: str | None = None,
     seconds: float = 2.0,
     words=ARTICLE_WORDS,
     swc=True,
@@ -49,7 +50,7 @@ def add_article(
     folder = raw / language / name
     folder.mkdir(parents=True)
     sf.write(folder / "audio.ogg", np.zeros(int(16000 * seconds)), 16000, format="OGG", subtype="VORBIS")
-    info = {"article_parsed": {"reader": None}, "audio_file_parsed": {"reader": reader}}
+    info = {"article_parsed": {"reader": article_reader}, "audio_file_parsed": {"reader": reader}}
     (folder / "info.json").write_text(json.dumps(info))
     (folder / "audiometa.txt").write_text("{{self|cc-by-sa-3.0}}")
     if swc:

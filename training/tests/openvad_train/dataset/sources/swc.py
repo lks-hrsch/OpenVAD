@@ -27,11 +27,37 @@ def test_one_clip_per_aligned_single_file_article(swc_tree):
     assert c.path == "datasets/raw/swc/english/Aaa/audio.ogg"
 
 
-def test_reader_is_in_exactly_one_split(swc_tree):
-    by_reader = defaultdict(set)
-    for c in swc.clips(swc_tree):
-        by_reader[c.speaker].add(c.split)
-    assert all(len(s) == 1 for s in by_reader.values())
+# (audio file reader, article reader) of real articles that are one person; the forms are the corpus's.
+SAME_PERSON = [
+    [("[[User:Vikarino|Vikarino]]", "Vikarino"), ("Sarah Oltmanns", "Vikarino")],
+    [("[[User:Mnntoino|Mnntoino]]", "[[Benutzer:mnntoino]]"), ("[[User:Mnntoino|Mnntoino]]", "mnntoino")],
+    [("", "[[Denis Apel|Benutzer:Denis_Apel]]"), ("[[Denis Apel|Benutzer:Denis Apel]]", None)],
+    [("Martin Schlederer (Sprecher)", "Martin Schlederer"), ("Reader: Martin Schlederer", "Martin Schlederer")],
+    [("Blanki_Ostfalen", "Blanki Ostfalen"), ("[[User:Blanki Ostfalen|Blanki Ostfalen]]", "Blanki Ostfalen")],
+    [("Spoken by:  Hi878  Sound editing by:  London Rook", None), ("Hi878", None)],
+    [("SpeakThings:Mellerbeck", None), ("[[User:Mellerbeck|Mellerbeck]]", None)],
+]
+
+
+def test_reader_is_in_exactly_one_split(tmp_path):
+    names = {}
+    for i, group in enumerate(SAME_PERSON):
+        for j, (audio, article) in enumerate(group):
+            add_article(tmp_path, "german", f"g{i}_{j}", audio, article_reader=article)
+            names[f"german/g{i}_{j}"] = i
+    add_article(tmp_path, "german", "alone", "Verlagsgruppe Random House")
+    by_person = defaultdict(set)
+    for c in swc.clips(tmp_path):
+        if c.clip_id in names:
+            by_person[names[c.clip_id]].add((c.speaker, c.split))
+    assert all(len(pairs) == 1 for pairs in by_person.values()), dict(by_person)
+    assert len({next(iter(pairs))[0] for pairs in by_person.values()}) == len(SAME_PERSON)
+
+
+def test_different_people_stay_apart(tmp_path):
+    add_article(tmp_path, "german", "a", "Alice", article_reader="Alice")
+    add_article(tmp_path, "german", "b", "Bob")
+    assert len({c.speaker for c in swc.clips(tmp_path)}) == 2
 
 
 def test_reader_forms_merge(swc_tree):
@@ -46,18 +72,42 @@ def test_reader_forms_merge(swc_tree):
     [
         ("[[User:Zanimum|Nicholas Moreau]]", "zanimum"),
         ("user at projectJcbwikipedianl", "jcb"),
+        ("original uploaderAfrocatzwikipediaen", "afrocatz"),
+        ("User at projectTdxiangwikipediaen.", "tdxiang"),
+        ("user at projectWouter Druwéwikipedianl<br/>\n(original textnobold=11=Wouter)", "wouter druwé"),
+        ("Original uploader was [[:nl:User:Jcb|Jcb]] at [http://nl.wikipedia.org nl.wikipedia]", "jcb"),
         ("[[:en:User:Alexkillby|Alexkillby]] ([[:en:User talk:Alexkillby|talk]])", "alexkillby"),
         ("[[User:Jcb|Jcb]] and [[User:VR-Land|VR-Land]]", "jcb"),
+        ("[[w:en:User:CaptainComedy|James Avestruz]]", "captaincomedy"),
+        ("Author assumed[[User:Kander|Kander]]", "kander"),
+        ("[[Denis Apel|Benutzer:Denis Apel]]", "denis apel"),
+        ("[[Die.keimzelle]]", "die.keimzelle"),
+        ("[[Benutzer:mnntoino]]", "mnntoino"),
+        ("Simon Jäckel [[Benutzer:Ahdar-Ruafo]]", "ahdar-ruafo"),
+        ("Spoken by:  Hi878  Sound editing by:  London Rook", "hi878"),
+        ("SpeakThings:Mellerbeck", "mellerbeck"),
+        (":nl:Paus", "paus"),
+        ("Synon~commonswiki", "synon"),
         ("S_Whistler", "s whistler"),
+        ("Verlagsgruppe Random House", "verlagsgruppe random house"),
         ("", None),
+        (None, None),
     ],
 )
 def test_reader_name_rules(raw, name):
-    assert swc.reader_name({"audio_file_parsed": {"reader": raw}}) == name
+    assert swc.reader_name(raw) == name
 
 
-def test_article_reader_is_the_fallback():
-    assert swc.reader_name({"article_parsed": {"reader": "Blik"}, "audio_file_parsed": {"reader": None}}) == "blik"
+def test_article_readers_take_both_fields():
+    info = {"article_parsed": {"reader": "Blik"}, "audio_file_parsed": {"reader": "[[User:Blik|Blik]]"}}
+    assert swc.article_readers(info) == {"blik"}
+    assert swc.article_readers({"article_parsed": {"reader": "A"}, "audio_file_parsed": {"reader": "B"}}) == {"a", "b"}
+    assert swc.article_readers({"article_parsed": {"reader": None}, "audio_file_parsed": None}) == set()
+
+
+def test_merge_readers_joins_connected_components_to_the_first_name():
+    merged = swc.merge_readers([{"b", "c"}, {"c", "d"}, {"x"}, {"a", "d"}])
+    assert merged == {"a": "a", "b": "a", "c": "a", "d": "a", "x": "x"}
 
 
 def test_split_is_80_10_10_by_rank_and_no_reader_is_train():
