@@ -8,3 +8,5 @@ ND = "ND"
 nd = "nd"
 # Bashkir (Common Voice locale) and Bosnia (FLEURS `bs_ba`).
 ba = "ba"
+# NumPy's `np.arange`.
+arange = "arange"
