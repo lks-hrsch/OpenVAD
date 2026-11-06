@@ -431,6 +431,7 @@ These are not owner decisions yet. They are settled at the owner checkpoint at t
 9. Babble is exactly 6 talkers and SSN uses 12th-order LPC, following the LibriVAD paper (arXiv 2512.17281).
 10. SCAFE exists only at 48 kHz and stays out, so Street has two scenes (SPSQUARE, STRAFFIC) where LibriVAD has three.
 11. Because LibriVAD's `medium` beat its `large` on its own test but `large` won on VOiCES, the checkpoint compares a shorter rank prefix of Large against the full one before headline results.
+12. WADA-SNR saturates at its table ends on about half or more of sampled Common Voice clips, and the resulting correction to speech power is at most about 0.11 dB. `baseline_snr_db` is therefore informational unless the owner asks for Brouhaha.
 
 ## Left to the builder
 
