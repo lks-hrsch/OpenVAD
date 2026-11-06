@@ -7,21 +7,13 @@ import numpy as np
 import pytest
 import soundfile as sf
 
+from demand_support import make_demand_tree
 from openvad_train.dataset.noise import NoisePool, category_of_demand, demand_channels
-
-
-def make_tree(root, scenes):
-    for scene in scenes:
-        (root / scene).mkdir(parents=True)
-        for channel in range(1, 17):
-            sf.write(root / scene / f"ch{channel:02d}.wav", np.zeros(1600, np.float32), 16000, subtype="PCM_16")
-    (root / "manifest.json").write_text("{}")
-    return root
 
 
 @pytest.fixture
 def demand_tree(tmp_path):
-    return make_tree(tmp_path / "demand", ["DKITCHEN", "DLIVING", "TBUS"])
+    return make_demand_tree(tmp_path / "demand", ["DKITCHEN", "DLIVING", "TBUS"])
 
 
 def test_demand_scene_categories():
@@ -50,8 +42,8 @@ def test_pool_draws_only_split_channels(demand_tree):
 
 
 def test_pool_draw_is_a_function_of_rng_and_not_listing_order(tmp_path):
-    forward = NoisePool(make_tree(tmp_path / "a", ["DKITCHEN", "DLIVING", "DWASHING"]))
-    backward = NoisePool(make_tree(tmp_path / "b", ["DWASHING", "DLIVING", "DKITCHEN"]))
+    forward = NoisePool(make_demand_tree(tmp_path / "a", ["DKITCHEN", "DLIVING", "DWASHING"]))
+    backward = NoisePool(make_demand_tree(tmp_path / "b", ["DWASHING", "DLIVING", "DKITCHEN"]))
     for i in range(20):
         a = forward.draw("domestic", "train", np.random.default_rng(i))
         b = backward.draw("domestic", "train", np.random.default_rng(i))

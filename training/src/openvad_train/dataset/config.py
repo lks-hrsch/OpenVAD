@@ -16,7 +16,7 @@ SPEAKER_CAP_HOURS = 30.0
 
 # 9 LibriVAD noise categories plus clean and competing talker.
 _NOISE_CATEGORIES = ("babble", "ssn", "city", "domestic", "nature", "office", "public", "street", "transport")
-_DEMAND_CATEGORIES = ("domestic", "nature", "office", "public", "street", "transport")
+DEMAND_CATEGORIES = ("domestic", "nature", "office", "public", "street", "transport")
 
 
 def _full_shares() -> dict[str, float]:
@@ -25,7 +25,7 @@ def _full_shares() -> dict[str, float]:
 
 def _slice_shares() -> dict[str, float]:
     # The slice has DEMAND only: clean plus its six scenes.
-    return {"clean": 0.15} | {c: 0.85 / len(_DEMAND_CATEGORIES) for c in _DEMAND_CATEGORIES}
+    return {"clean": 0.15} | {c: 0.85 / len(DEMAND_CATEGORIES) for c in DEMAND_CATEGORIES}
 
 
 @dataclass(frozen=True)
@@ -42,6 +42,9 @@ class BuildConfig:
     speech_fraction: float = 0.33
     gap_ms: int = 200
     dither_dbfs: tuple[float, float] = (-90.0, -70.0)
+    # Sources cut at word gaps: speech per chunk and the length of the padded sample.
+    max_chunk_speech_s: float = 6.6
+    chunk_total_s: tuple[float, float] = (10.0, 20.0)
     # Competing talker (ADR 0022) and babble.
     competing_segments: tuple[int, int] = (1, 3)
     competing_coverage: tuple[float, float] = (0.10, 0.50)
@@ -79,6 +82,7 @@ class BuildConfig:
         }
     )
     p_narrow: float = 0.35  # training parameter: share of wide samples narrowed at train time
+    flac_mb_per_hour: float = 63.0  # estimate for shard sizes until the slice measures it
 
 
 FULL = BuildConfig(
