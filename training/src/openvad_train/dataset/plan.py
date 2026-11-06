@@ -287,8 +287,14 @@ def _has_speech_frame(timing: Timing, start_ms: int, end_ms: int) -> bool:
     return bool((rasterise(speech, mask, (end_ms - start_ms) * SAMPLES_PER_MS) == 1).any())
 
 
-def clip_rows(clip: Clip, timing: Timing, cfg: BuildConfig, pool: NoisePool | None = None) -> list[dict]:
-    """The rows of one clip: none if it is reserved, and an augmented sample only if a frame of it is speech."""
+def clip_rows(
+    clip: Clip, timing: Timing, cfg: BuildConfig, pool: NoisePool | None = None, counts: Counter | None = None
+) -> list[dict]:
+    """The rows of one clip: none if it is reserved, and an augmented sample only if a frame of it is speech.
+
+    A chunk also needs `cfg.min_chunk_speech_s` of speech, since one word in a padded sample teaches nothing.
+    `counts` adds up the chunks left out, as `short_chunks` and `masked_chunks`.
+    """
     if clip.reserved:
         return []
     if clip.source not in AUGMENTED_SOURCES:
@@ -300,10 +306,19 @@ def clip_rows(clip: Clip, timing: Timing, cfg: BuildConfig, pool: NoisePool | No
     inside = dataclasses.replace(
         timing, speech_ms=rebase(timing.speech_ms, 0, duration_ms), mask_ms=rebase(timing.mask_ms, 0, duration_ms)
     )
+    counts = Counter() if counts is None else counts
+    rows = []
     # The default G of `cut_long`, never cfg.gap_ms: ablating G must change labels and leave the audio identical.
-    chunks = cut_long(inside, cfg.max_chunk_speech_s, max_span_s=cfg.chunk_total_s[1])
-    chunks = [Chunk(c.start_ms, min(c.end_ms, duration_ms)) for c in chunks]
-    return [draw_sample(clip, inside, cfg, pool, c) for c in chunks if _has_speech_frame(inside, *c)]
+    for c in cut_long(inside, cfg.max_chunk_speech_s, max_span_s=cfg.chunk_total_s[1]):
+        chunk = Chunk(c.start_ms, min(c.end_ms, duration_ms))
+        speech_ms = sum(e - s for s, e in apply_gap_rule(rebase(inside.speech_ms, *chunk), 0))
+        if speech_ms < round(cfg.min_chunk_speech_s * 1000):
+            counts["short_chunks"] += 1
+        elif not _has_speech_frame(inside, *chunk):
+            counts["masked_chunks"] += 1
+        else:
+            rows.append(draw_sample(clip, inside, cfg, pool, chunk))
+    return rows
 
 
 def assign_shards(rows: list[dict], bytes_per_hour: float, target_bytes: int = 1_000_000_000) -> None:
@@ -404,11 +419,12 @@ def run_plan(cfg: BuildConfig, limit: str | None = None) -> None:
         timings = _timings(cfg, name, SOURCES[name], clips)
         counts = Counter(reserved=sum(c.reserved for c in clips))
         for clip in clips:
-            sample_rows = clip_rows(clip, timings[clip.clip_id], cfg, pool)
+            sample_rows = clip_rows(clip, timings[clip.clip_id], cfg, pool, counts)
             rows += sample_rows
             counts["samples"] += len(sample_rows)
             counts["without_sample"] += not sample_rows and not clip.reserved
-        per_source[name] = {"clips": len(clips), **{k: counts[k] for k in ("reserved", "without_sample", "samples")}}
+        kinds = ("reserved", "without_sample", "short_chunks", "masked_chunks", "samples")
+        per_source[name] = {"clips": len(clips), **{k: counts[k] for k in kinds}}
         log.info("%s: %s", name, per_source[name])
 
     # Sorted before the limit too: `assign_shards` only sees what the limit keeps.

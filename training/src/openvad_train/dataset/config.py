@@ -44,6 +44,7 @@ class BuildConfig:
     dither_dbfs: tuple[float, float] = (-90.0, -70.0)
     # Sources cut at word gaps: speech per chunk and the length of the padded sample.
     max_chunk_speech_s: float = 6.6
+    min_chunk_speech_s: float = 0.2
     chunk_total_s: tuple[float, float] = (10.0, 20.0)
     # Competing talker (ADR 0022) and babble.
     competing_segments: tuple[int, int] = (1, 3)

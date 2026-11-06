@@ -239,6 +239,27 @@ def test_a_fully_masked_or_speechless_sample_gives_no_row():
     assert clip_rows(clip("a"), masked, SLICE) == []
 
 
+def test_a_chunk_under_200_ms_of_speech_gives_no_row_and_is_counted():
+    # A long pause cuts both words off into chunks of their own.
+    short = timing("a", speech=[(1000, 1199), (30_000, 30_200)])
+    counts: Counter = Counter()
+    rows = clip_rows(clip("a", "swc", duration_s=40.0), short, SLICE, counts=counts)
+    assert [r["sample_id"] for r in rows] == ["swc/a@29900"]
+    assert counts == {"short_chunks": 1}
+
+
+def test_a_short_clip_of_a_source_that_does_not_cut_stays():
+    assert len(clip_rows(clip("a"), timing("a", speech=[(500, 600)]), SLICE)) == 1
+
+
+def test_a_fully_masked_chunk_is_counted_apart():
+    masked = timing("a", speech=[(1000, 2000), (30_000, 31_000)], mask=[(0, 3000)])
+    counts: Counter = Counter()
+    rows = clip_rows(clip("a", "swc", duration_s=40.0), masked, SLICE, counts=counts)
+    assert len(rows) == 1
+    assert counts == {"masked_chunks": 1}
+
+
 def test_a_masked_chunk_goes_and_its_neighbour_stays():
     t = timing("a", speech=[(1000, 8000), (10_000, 17_000)], mask=[(9000, 18_000)])
     assert [r["sample_id"] for r in clip_rows(clip("a", "swc", duration_s=30.0), t, SLICE)] == ["swc/a@900"]
@@ -426,7 +447,14 @@ def test_run_plan_writes_one_row_per_clip_in_rank_order_with_a_manifest(data, ca
     manifest = json.loads((data / "datasets/processed/work/openvad-slice/plan/manifest.json").read_text())
     assert manifest["samples"] == 5
     assert manifest["plan_version"] == "v1"
-    assert manifest["per_source"]["swc"] == {"clips": 5, "reserved": 0, "without_sample": 0, "samples": 5}
+    assert manifest["per_source"]["swc"] == {
+        "clips": 5,
+        "reserved": 0,
+        "without_sample": 0,
+        "short_chunks": 0,
+        "masked_chunks": 0,
+        "samples": 5,
+    }
     first = df.row(0, named=True)
     assert f"swc {first['split']} " in capsys.readouterr().out
 
@@ -516,7 +544,7 @@ def test_a_source_without_adapter_is_named(data):
 def test_a_repeated_sample_id_is_refused(data, monkeypatch):
     run_index(CONFIG)
     monkeypatch.setattr(
-        plan_module, "clip_rows", lambda c, t, cfg, pool: [draw_sample(c, t, cfg, pool, Chunk(0, 1))] * 2
+        plan_module, "clip_rows", lambda c, t, cfg, pool, counts: [draw_sample(c, t, cfg, pool, Chunk(0, 1))] * 2
     )
     with pytest.raises(ValueError, match="repeated"):
         run_plan(CONFIG)
