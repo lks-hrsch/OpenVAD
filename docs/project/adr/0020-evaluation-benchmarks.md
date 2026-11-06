@@ -29,8 +29,8 @@ Published Picovoice curves are cited only; Cobra is commercial and is not run.
 - Test-broad: the test split of every [0023](0023-dataset-composition.md) source, with conditions drawn like train, reported per dataset (owner, 2026-11-03). Its size follows from the 0023 splits. It gives the headline numbers. Its DEMAND noise comes from channels 15 and 16, and its LibriVAD part is `medium` test as generated (owner, 2026-11-06). Its City noise is WHAM! `tt` (proposed, as in LibriVAD).
 - Test-grid: a paired factorial grid on LibriSpeech `test-clean` and SWC German test, with 19 acoustic × 7 channel cells plus 32 packet-loss cells (165 cells), about 60 utterances per language in every cell, about 130 h. It shows where each system breaks.
 - Test-unseen-noise: the same draws as Test-broad with WHAM! `tt` in place of the ambient pool. `tt` is this pool's noise (owner, 2026-11-03). Since `tt` is also City noise in Test-broad, its definition is revisited when it is built (deferred).
-- Metrics: frame AUC and AP, F1 at the dev threshold, miss and false-alarm rates, BG-FAR ([0022](0022-frame-labels.md)) and DCF (0.75 P_miss + 0.25 P_FA, as for Fearless Steps). BG-FAR needs the reference without the competing talker, so it is available only on samples where we mixed one (owner, 2026-11-06).
-- LibriSpeech `test-clean` is benchmark audio only and never enters dataset creation ([0023](0023-dataset-composition.md)). Its labels are the Zenodo alignments (owner, 2026-11-04).
+- Metrics: frame AUC and AP, F1 at the dev threshold, miss and false-alarm rates, BG-FAR ([0022](0022-frame-labels.md)) and DCF (0.75 P_miss + 0.25 P_FA, as for Fearless Steps). BG-FAR needs the reference without the competing talker, so it is available only on samples where we mixed one.
+- LibriSpeech `test-clean` is benchmark audio and is never read directly; it reaches the test split through LibriVAD only ([0023](0023-dataset-composition.md)). Its labels are the Zenodo alignments (owner, 2026-11-04).
 
 ### Conditions
 
@@ -57,7 +57,7 @@ Samples whose `band` is `narrow_leg` or `narrow_native` stay in every condition 
 
 ### Noise in the test audio
 
-- The Picovoice benchmark mixes whole files from all 16 channels of 10 DEMAND environments (DKITCHEN, DWASHING, NFIELD, NPARK, NRIVER, OHALLWAY, OOFFICE, PSTATION, STRAFFIC, TCAR) into LibriSpeech `test-clean`. Its speech is held out, but DEMAND is training noise with no hold-out (owner, 2026-11-01), so Picovoice results are reported as seen noise.
+- The Picovoice benchmark mixes whole files from all 16 channels of 10 DEMAND environments (DKITCHEN, DWASHING, NFIELD, NPARK, NRIVER, OHALLWAY, OOFFICE, PSTATION, STRAFFIC, TCAR) into LibriSpeech `test-clean`. Its speech is held out, but all DEMAND environments appear in training (channels 1 to 12), so Picovoice results are reported as seen noise.
 - LibriVAD's City noise is cut from WHAM! by split: train from `tr`, validation from `cv`, test from `tt` ([0018](0018-datasets.md)). WHAM! `tt` never enters training, so the City test noise is unseen; `tr` is training noise ([0023](0023-dataset-composition.md)).
 - The LibriVAD paper calls Babble, SSN and Domestic noise unseen for its models. OpenVAD trains on all nine categories, so for OpenVAD they are seen noise, and this is stated wherever LibriVAD results are reported.
 
