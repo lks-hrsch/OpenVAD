@@ -158,3 +158,12 @@ def test_a_clip_without_an_aligned_word_is_masked_whole(tmp_path):
     add_article(tmp_path, "german", "Empty", None, words=[None, None])
     t = next(swc.timings(tmp_path, swc.clips(tmp_path)))
     assert (t.speech_ms, t.mask_ms) == ([], [(0, 2000)])
+
+
+def test_languages_filter_before_any_article_is_read(tmp_path):
+    add_article(tmp_path, "german", "Fine", "Alice")
+    add_article(tmp_path, "english", "Broken", "Bob")
+    (tmp_path / "english/Broken/info.json").write_text("not json")
+    assert [c.clip_id for c in swc.clips(tmp_path, {"de"})] == ["german/Fine"]
+    with pytest.raises(ValueError, match="Expecting value"):
+        list(swc.clips(tmp_path))

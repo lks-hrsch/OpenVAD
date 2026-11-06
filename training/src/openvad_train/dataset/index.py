@@ -84,7 +84,8 @@ def apply_cap_rank(clips: Iterable[Clip], hours: float = 30.0) -> Iterator[Clip]
     return (c for c in clips if c.speaker is None or c.clip_id in kept)
 
 
-# An adapter has `clips(raw)`; one that is not forced-aligned by MFA also has `timings(raw, clips)` and is capped here.
+# An adapter has `clips(raw, languages)`; one that is not forced-aligned by MFA also has `timings(raw, clips)`
+# and is capped here.
 SOURCES: dict[str, ModuleType] = {"swc": swc}
 
 _SCHEMA = {
@@ -118,7 +119,7 @@ def run_index(cfg: BuildConfig) -> None:
         if name not in SOURCES:
             raise ValueError(f"no index adapter for source {name!r}; have {sorted(SOURCES)}")
         module = SOURCES[name]
-        clips = [c for c in module.clips(raw_dir(name)) if cfg.languages is None or c.language in cfg.languages]
+        clips = list(module.clips(raw_dir(name), None if cfg.languages is None else set(cfg.languages)))
         for c in clips:
             guard_path(c.path, c.split)
         # MFA sources get their cap in `align`, after the drop rules.

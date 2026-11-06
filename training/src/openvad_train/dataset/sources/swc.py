@@ -5,8 +5,8 @@
 
 """Spoken Wikipedia Corpora 2.0: one clip per article, word timings from `aligned.swc`.
 
-Adapter contract: `clips(raw)` and, for sources that are not forced-aligned by MFA,
-`timings(raw, clips)`. `raw` is `datasets/raw/swc`.
+Adapter contract: `clips(raw, languages)` (language codes, None for all; it reads nothing of the others) and,
+for sources that are not forced-aligned by MFA, `timings(raw, clips)`. `raw` is `datasets/raw/swc`.
 """
 
 import json
@@ -21,7 +21,7 @@ from typing import Literal
 import soundfile as sf
 
 from openvad_train.dataset.schema import Clip, Timing, rank
-from openvad_train.fetch.swc import swc_licences
+from openvad_train.fetch.swc import audio_licence
 
 
 SOURCE = "swc"
@@ -106,10 +106,16 @@ def audio_duration_s(audio: Path) -> float:
         return float(out)
 
 
-def clips(raw: Path) -> Iterator[Clip]:
-    licences = swc_licences(raw)
+def _licence(folder: Path) -> str:
+    meta = folder / "audiometa.txt"
+    return audio_licence(meta.read_text(errors="replace")) if meta.exists() else "unknown"
+
+
+def clips(raw: Path, languages: set[str] | None = None) -> Iterator[Clip]:
     articles = []
     for language_dir, language in LANGUAGES.items():
+        if languages is not None and language not in languages:
+            continue
         for article in sorted((raw / language_dir).glob("*/aligned.swc")):
             folder = article.parent
             audio = folder / "audio.ogg"
@@ -133,7 +139,7 @@ def clips(raw: Path) -> Iterator[Clip]:
             offset_s=0.0,
             # The header's length, not the last word's end: the mask after the last word needs it.
             duration_s=audio_duration_s(audio),
-            licence=licences.get(key, "unknown"),
+            licence=_licence(folder),
             transcript=None,
         )
 

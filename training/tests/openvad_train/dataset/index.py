@@ -165,7 +165,7 @@ def test_run_index_reserves_a_speaker_per_split_and_language(data_dir):
 
 def test_run_index_rejects_a_forbidden_path(data_dir, monkeypatch):
     bad = SimpleNamespace(
-        clips=lambda _raw: iter([dataclasses.replace(clip(language="de"), path="raw/ava-speech/a.flac")])
+        clips=lambda _raw, _languages: iter([dataclasses.replace(clip(language="de"), path="raw/ava-speech/a.flac")])
     )
     monkeypatch.setitem(index.SOURCES, "swc", bad)
     with pytest.raises(ForbiddenSource):
@@ -178,8 +178,8 @@ def test_run_index_caps_only_sources_without_mfa(data_dir, monkeypatch):
         for n in ("swc", "mfa")
         for i in range(40)
     ]
-    swc_like = SimpleNamespace(clips=lambda _raw: iter(many[:40]), timings=lambda *_: iter(()))
-    mfa_like = SimpleNamespace(clips=lambda _raw: iter(many[40:]))
+    swc_like = SimpleNamespace(clips=lambda _raw, _languages: iter(many[:40]), timings=lambda *_: iter(()))
+    mfa_like = SimpleNamespace(clips=lambda _raw, _languages: iter(many[40:]))
     monkeypatch.setitem(index.SOURCES, "swc", swc_like)
     monkeypatch.setitem(index.SOURCES, "mfa", mfa_like)
     run_index(dataclasses.replace(SLICE, sources=("swc", "mfa"), languages=None))
@@ -190,3 +190,13 @@ def test_run_index_caps_only_sources_without_mfa(data_dir, monkeypatch):
 def test_run_index_names_a_source_without_adapter(data_dir):
     with pytest.raises(ValueError, match="no index adapter for source 'ami'"):
         run_index(dataclasses.replace(SLICE, sources=("ami",)))
+
+
+def test_run_index_asks_the_adapter_for_the_configured_languages_only(data_dir, monkeypatch):
+    asked = []
+    monkeypatch.setitem(
+        index.SOURCES, "swc", SimpleNamespace(clips=lambda _raw, languages: asked.append(languages) or iter(()))
+    )
+    run_index(SLICE)
+    run_index(dataclasses.replace(SLICE, languages=None))
+    assert asked == [{"de"}, None]
