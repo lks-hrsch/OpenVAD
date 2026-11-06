@@ -11,6 +11,8 @@ Adapter contract: `clips(raw)` and, for sources that are not forced-aligned by M
 
 import json
 import re
+import shutil
+import subprocess
 import xml.etree.ElementTree as ET
 from collections.abc import Iterable, Iterator
 from pathlib import Path
@@ -51,6 +53,22 @@ def split_of(reader: str | None) -> Literal["train", "validation", "test"]:
     return ("train", "validation", "test")[max(0, rank(reader) % 10 - 7)]
 
 
+def audio_duration_s(audio: Path) -> float:
+    """Length from the file header. Some articles are Ogg with a Skeleton stream, which libsndfile cannot open."""
+    try:
+        return sf.info(audio).duration
+    except sf.LibsndfileError:
+        if shutil.which("ffprobe") is None:
+            raise
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", audio],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        return float(out)
+
+
 def clips(raw: Path) -> Iterator[Clip]:
     licences = swc_licences(raw)
     for language_dir, language in LANGUAGES.items():
@@ -59,6 +77,10 @@ def clips(raw: Path) -> Iterator[Clip]:
             info = json.loads((folder / "info.json").read_text())
             reader = reader_name(info)
             audio = folder / "audio.ogg"
+            if not audio.exists():
+                # shortcut: 135 aligned articles are split over audio1.ogg, audio2.ogg ... and their word times
+                # run over the concatenation, so they need one joined file first; skipped until that is built.
+                continue
             key = f"{language_dir}/{folder.name}"
             yield Clip(
                 clip_id=key,
@@ -69,7 +91,7 @@ def clips(raw: Path) -> Iterator[Clip]:
                 path=(RAW_PREFIX / key / "audio.ogg").as_posix(),
                 offset_s=0.0,
                 # The header's length, not the last word's end: the mask after the last word needs it.
-                duration_s=sf.info(audio).duration,
+                duration_s=audio_duration_s(audio),
                 licence=licences.get(key, "unknown"),
                 transcript=None,
             )

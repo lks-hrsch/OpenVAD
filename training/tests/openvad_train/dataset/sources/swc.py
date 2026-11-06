@@ -3,9 +3,11 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+import shutil
 from collections import defaultdict
 
 import pytest
+import soundfile as sf
 
 from openvad_train.dataset.schema import rank
 from openvad_train.dataset.sources import swc
@@ -17,7 +19,7 @@ def swc_tree(tmp_path):
     return make_swc_tree(tmp_path)
 
 
-def test_one_clip_per_aligned_article(swc_tree):
+def test_one_clip_per_aligned_single_file_article(swc_tree):
     clips = {c.clip_id: c for c in swc.clips(swc_tree)}
     assert sorted(clips) == ["dutch/Eee", "english/Aaa", "english/Bbb", "german/Ccc", "german/Ddd"]
     c = clips["english/Aaa"]
@@ -82,3 +84,14 @@ def test_only_gaps_beside_unaligned_tokens_are_masked(swc_tree):
     assert t.speech_ms == [(100, 300), (450, 600), (700, 800)]
     # The intro leads, the outro trails and the ignored block counts for nothing; 600 to 700 has no unaligned token.
     assert t.mask_ms == [(0, 100), (300, 450), (800, 2000)]
+
+
+def test_duration_falls_back_to_ffprobe_for_files_libsndfile_cannot_open(swc_tree, monkeypatch):
+    if shutil.which("ffprobe") is None:
+        pytest.skip("ffprobe is not installed")
+
+    def refuse(_):
+        raise sf.LibsndfileError(1, "unimplemented format")
+
+    monkeypatch.setattr(swc.sf, "info", refuse)
+    assert swc.audio_duration_s(swc_tree / "english/Aaa/audio.ogg") == pytest.approx(2.0, abs=0.05)

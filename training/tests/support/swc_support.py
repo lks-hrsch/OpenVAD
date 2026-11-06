@@ -54,4 +54,6 @@ def make_swc_tree(raw: Path) -> Path:
     add_article(raw, "german", "Ddd", "Zed_Q")
     add_article(raw, "dutch", "Eee", "zed q")
     add_article(raw, "dutch", "Fff", "Other", swc=False)
+    add_article(raw, "dutch", "Ggg", "Other")
+    (raw / "dutch/Ggg/audio.ogg").rename(raw / "dutch/Ggg/audio1.ogg")  # an article in several parts
     return raw
