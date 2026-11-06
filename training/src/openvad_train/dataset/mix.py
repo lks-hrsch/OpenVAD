@@ -132,15 +132,23 @@ _WADA_G = np.maximum.accumulate(
 )
 # fmt: on
 _WADA_DB = np.arange(-20, 98, dtype=np.float64)
+_EPS = 1e-10
 
 
 def wada_snr(x: np.ndarray) -> float:
     """Blind SNR estimate in dB, clamped to [-20, 97] (WADA-SNR, Kim and Stern 2008).
 
+    Input is 16-bit audio as decoded for storage, as float. The clip is
+    peak-normalised and magnitudes are clipped to `_EPS`, as in the public
+    reference, so exact zeros count as near-silence rather than being dropped:
+    the value then does not depend on the float scale, but it does depend on
+    the 16-bit quantisation, so never feed it a different decode form.
     Assumes speech-like amplitudes: for a pure tone the estimate is meaningless.
     """
-    amplitude = np.abs(x[x != 0], dtype=np.float64)
-    if len(amplitude) == 0:
+    amplitude = np.abs(x, dtype=np.float64)
+    peak = amplitude.max(initial=0.0)
+    if peak == 0:
         raise ValueError("a silent signal has no SNR")
+    amplitude = np.maximum(amplitude / peak, _EPS)
     g = np.log(amplitude.mean()) - np.log(amplitude).mean()
     return float(np.interp(g, _WADA_G, _WADA_DB))

@@ -150,3 +150,17 @@ def test_wada_snr_recovers_known_snr(snr_db):
 def test_wada_snr_rejects_silence():
     with pytest.raises(ValueError, match="silent"):
         wada_snr(np.zeros(100, np.float32))
+
+
+def test_wada_snr_counts_exact_zeros_as_near_silence_not_as_missing():
+    x = speech_like()
+    x = mix_at_snr(x, white(len(x), 7), np.ones_like(x, bool), 5.0)
+    with_zeros = x.copy()
+    with_zeros[::2] = 0.0
+    assert wada_snr(with_zeros) > wada_snr(x[1::2]) + 10  # dropping the zeros would give the same value
+
+
+def test_wada_snr_does_not_depend_on_float_scale_of_16_bit_audio():
+    ints = np.round(speech_like() * 32768).astype(np.float32)  # many exact zeros after quantisation
+    assert (ints == 0).any()
+    assert wada_snr(ints / 32768) == pytest.approx(wada_snr(ints))
