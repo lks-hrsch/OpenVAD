@@ -4,6 +4,7 @@
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 import dataclasses
+from collections import Counter
 from typing import Literal
 
 import pytest
@@ -12,7 +13,7 @@ from demand_support import make_demand_tree
 from openvad_train.dataset.config import DEMAND_CATEGORIES, FULL, SLICE
 from openvad_train.dataset.cutting import Chunk
 from openvad_train.dataset.noise import NoisePool, demand_channels
-from openvad_train.dataset.plan import clip_rows, draw_sample
+from openvad_train.dataset.plan import assign_shards, clip_rows, draw_sample
 from openvad_train.dataset.schema import Clip, Timing, rank, sample_seed
 
 
@@ -348,3 +349,38 @@ def test_as_is_row_points_into_raw_and_skips_every_draw():
 
 def test_as_is_row_without_speech_stays():
     assert len(clip_rows(clip("a", "speech-commands"), timing("a", speech=[]), SLICE)) == 1
+
+
+def plan_rows(sources: list[str], n: int = 300) -> list[dict]:
+    splits: tuple[Split, ...] = ("train", "validation", "test")
+    return [
+        draw_sample(clip(f"c{i}", source, splits[i % 3]), timing(f"c{i}"), SLICE)
+        for source in sources
+        for i in range(n)
+    ]
+
+
+def test_only_augmented_rows_get_shards_in_rank_order():
+    rows = plan_rows(sources=["swc", "voxpopuli"])
+    assign_shards(rows, bytes_per_hour=63e6)
+    assert all((r["shard"] is None) == (r["treatment"] == "as_is") for r in rows)
+    built = [r for r in rows if r["shard"] is not None and r["split"] == "train"]
+    assert built
+    assert [r["rank"] for r in built] == sorted(r["rank"] for r in built)
+
+
+def test_shards_are_numbered_per_split_and_rise_with_rank():
+    rows = plan_rows(sources=["swc"])
+    # 5 s samples at 3600 MB per hour are 5 MB each: 4 fit in 20 MB.
+    assign_shards(rows, bytes_per_hour=3600e6, target_bytes=20_000_000)
+    for split in ("train", "validation", "test"):
+        shards = [r["shard"] for r in rows if r["split"] == split]
+        assert shards[:5] == [f"{split}/00000"] * 4 + [f"{split}/00001"]
+        assert shards == sorted(shards)
+        assert max(Counter(shards).values()) == 4
+
+
+def test_a_sample_over_the_target_has_its_own_shard():
+    rows = plan_rows(sources=["swc"], n=3)
+    assign_shards(rows, bytes_per_hour=3600e6, target_bytes=1)
+    assert len({r["shard"] for r in rows}) == 3

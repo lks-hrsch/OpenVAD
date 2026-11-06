@@ -6,6 +6,7 @@
 """Stage `plan`: one row per sample with every random draw resolved, so construction is a pure function of a row."""
 
 import dataclasses
+from collections import defaultdict
 
 import numpy as np
 
@@ -223,3 +224,22 @@ def clip_rows(clip: Clip, timing: Timing, cfg: BuildConfig, pool: NoisePool | No
     chunks = cut_long(inside, cfg.max_chunk_speech_s, max_span_s=cfg.chunk_total_s[1])
     chunks = [Chunk(c.start_ms, min(c.end_ms, duration_ms)) for c in chunks]
     return [draw_sample(clip, inside, cfg, pool, c) for c in chunks if _has_speech_frame(inside, *c)]
+
+
+def assign_shards(rows: list[dict], bytes_per_hour: float, target_bytes: int = 1_000_000_000) -> None:
+    """Sort `rows` by rank and give each augmented one a `shard`, `<split>/<number>`, the tar's path under `data/`.
+
+    Shards fill in rank order within a split, so an early stop leaves a clean prefix. As-is rows have none.
+    """
+    rows.sort(key=lambda r: r["rank"])
+    number: dict[str, int] = defaultdict(int)
+    filled: dict[str, float] = defaultdict(float)
+    for row in rows:
+        if row["treatment"] != "augmented":
+            continue
+        split, size = row["split"], row["duration"] / 3600 * bytes_per_hour
+        if filled[split] and filled[split] + size > target_bytes:
+            number[split] += 1
+            filled[split] = 0.0
+        filled[split] += size
+        row["shard"] = f"{split}/{number[split]:05d}"
