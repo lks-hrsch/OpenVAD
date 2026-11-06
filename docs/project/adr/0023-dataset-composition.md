@@ -121,14 +121,14 @@ The conditions are LibriVAD's nine noise categories plus clean and competing tal
 | --- | --- | --- |
 | Clean | 15% | |
 | Competing talker | 15% | [0022](0022-frame-labels.md) |
-| Babble | 70/9 % | 6 energy-normalised talkers summed, as LibriVAD; same language from reserved speakers; Japanese and Mandarin: same language with p = 0.5, any language otherwise (owner, 2026-11-03) |
+| Babble | 70/9 % | 6 energy-normalised talkers summed, as LibriVAD; same language from train speakers never used as foreground (owner, 2026-11-04), the reserved speakers; Japanese and Mandarin: same language with p = 0.5, any language otherwise (owner, 2026-11-03) |
 | SSN | 70/9 % | Gaussian white noise through a 12th-order linear-predictive all-pole filter fitted to one reserved speaker, as LibriVAD |
 | City | 70/9 % | WHAM!: `tr` train, `cv` dev, `tt` test (the `tt` use is proposed); one random channel per draw |
 | Domestic, Nature, Office, Public, Street, Transport | 70/9 % each | DEMAND scenes by first letter (D, N, O, P, S, T), as LibriVAD, one random channel per draw: channels 1 to 12 train, 13 and 14 validation, 15 and 16 test (owner, 2026-11-06) |
 
 - The 70% left after clean and competing talker splits evenly over the nine categories, so babble falls from 20% to about 8% (proposed).
 - Noise comes from our pools, not LibriVAD's noise files (owner, 2026-11-06). DEMAND is split by channel, replacing the one shared pool; WHAM! `tt` never trains.
-- MUSAN noise files are sorted into the nine categories by keyword, so its 6.2 h add variety to the thin DEMAND categories (owner, 2026-11-06). A committed table holds the result of a one-time keyword pass plus manual review, and files that fit no category are listed as unused. MUSAN contributes noise only, and is shared across splits.
+- MUSAN noise files are sorted into the nine categories by keyword, so its 6.2 h add variety to the thin DEMAND categories (owner, 2026-11-06). A committed table holds the result of a one-time keyword pass plus manual review, and files that fit no category are listed as unused. MUSAN contributes noise only, and is shared across splits (owner, 2026-11-03).
 - SNR is uniform over {−5, 0, 5, 10, 15, 20} dB, LibriVAD's grid (owner, 2026-11-06), replacing the bimodal ranges. It is computed from speech RMS over speech-active frames and noise RMS over the same span, then applied to the noise over the whole sample.
 - Transients are synthetic clicks and DTMF only (owner, 2026-11-06), overlaid on any sample with p = 0.3 and mixed by peak ratio at 0 to −18 dB. Typing and handling noise are dropped.
 - The channel chain follows [0021](0021-telephone-channel-simulation.md).
