@@ -1,0 +1,146 @@
+# Copyright (c) 2026 Lukas Hirsch
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+"""Acoustic mix primitives. Audio is float32 in [-1, 1] at 16 kHz."""
+
+import numpy as np
+
+
+SAMPLE_RATE = 16_000
+_DTMF_ROWS = (697, 770, 852, 941)
+_DTMF_COLUMNS = (1209, 1336, 1477, 1633)
+
+
+def _rms(x: np.ndarray) -> float:
+    return float(np.sqrt(np.mean(np.square(x, dtype=np.float64))))
+
+
+def mix_at_snr(speech: np.ndarray, noise: np.ndarray, active: np.ndarray, snr_db: float) -> np.ndarray:
+    """Speech plus noise, the noise gain set so speech RMS over `active` samples
+    is `snr_db` above noise RMS over the same samples. The gain applies to the
+    whole noise, including outside `active`.
+    """
+    if not speech.shape == noise.shape == active.shape:
+        raise ValueError("speech, noise and active must have the same shape")
+    if not active.any():
+        raise ValueError("no active samples to measure the SNR on")
+    speech_rms, noise_rms = _rms(speech[active]), _rms(noise[active])
+    if speech_rms == 0 or noise_rms == 0:
+        raise ValueError("speech or noise is silent over the active samples; the SNR is undefined")
+    gain = speech_rms / (noise_rms * 10 ** (snr_db / 20))
+    return (speech + gain * noise).astype(np.float32)
+
+
+def place(speech: np.ndarray, total_n: int, offset_n: int) -> np.ndarray:
+    """`speech` in one block at `offset_n` inside `total_n` samples of digital silence."""
+    if offset_n < 0 or offset_n + len(speech) > total_n:
+        raise ValueError(f"{len(speech)} samples at offset {offset_n} do not fit in {total_n}")
+    out = np.zeros(total_n, dtype=np.float32)
+    out[offset_n : offset_n + len(speech)] = speech
+    return out
+
+
+def loop_slice(noise: np.ndarray, offset_n: int, n: int) -> np.ndarray:
+    """`n` samples from `offset_n`, wrapping around the end when the noise is shorter."""
+    if len(noise) == 0:
+        raise ValueError("cannot slice empty noise")
+    return np.take(noise, np.arange(offset_n, offset_n + n), mode="wrap")
+
+
+def dither(n: int, dbfs: float, rng: np.random.Generator) -> np.ndarray:
+    """Gaussian noise of RMS `dbfs`, so padding is never digital silence."""
+    return (rng.standard_normal(n) * 10 ** (dbfs / 20)).astype(np.float32)
+
+
+def protect_peak(x: np.ndarray) -> np.ndarray:
+    """Scale the whole sample down only when its peak exceeds 1.0, which keeps the SNR."""
+    x = x.astype(np.float32)
+    peak = np.abs(x).max(initial=0.0)
+    return x / peak if peak > 1.0 else x
+
+
+def overlay_transient(x: np.ndarray, event: np.ndarray, offset_n: int, peak_ratio_db: float) -> np.ndarray:
+    """Add `event` at `offset_n`, scaled so its peak is `peak_ratio_db` relative to the peak of `x`.
+
+    An event running past the end is cut. The sum may exceed 1.0; call `protect_peak` after.
+    """
+    if not 0 <= offset_n < len(x):
+        raise ValueError(f"offset {offset_n} is outside a sample of {len(x)}")
+    x_peak, event_peak = np.abs(x).max(), np.abs(event).max()
+    if x_peak == 0 or event_peak == 0:
+        raise ValueError("a silent sample or event has no peak to scale against")
+    out = x.astype(np.float32)
+    cut = event[: len(x) - offset_n]
+    out[offset_n : offset_n + len(cut)] += cut * (x_peak * 10 ** (peak_ratio_db / 20) / event_peak)
+    return out
+
+
+def synth_click(rng: np.random.Generator) -> np.ndarray:
+    """A 0.5 to 5 ms burst of exponentially decaying Gaussian noise with unit peak."""
+    n = int(rng.integers(SAMPLE_RATE // 2000, SAMPLE_RATE // 200 + 1))
+    click = rng.standard_normal(n) * np.exp(-5 * np.arange(n) / n)
+    return (click / np.abs(click).max()).astype(np.float32)
+
+
+def synth_dtmf(rng: np.random.Generator) -> np.ndarray:
+    """One DTMF digit of 50 to 150 ms with 5 ms fades and unit peak."""
+    n = int(rng.integers(SAMPLE_RATE // 20, SAMPLE_RATE * 3 // 20 + 1))
+    t = np.arange(n) / SAMPLE_RATE
+    low, high = _DTMF_ROWS[rng.integers(4)], _DTMF_COLUMNS[rng.integers(4)]
+    tone = np.sin(2 * np.pi * low * t) + np.sin(2 * np.pi * high * t)
+    fade = np.minimum(1.0, np.minimum(np.arange(n), np.arange(n)[::-1]) / (SAMPLE_RATE // 200))
+    tone *= fade
+    return (tone / np.abs(tone).max()).astype(np.float32)
+
+
+def padded_length(speech_s: float, target: float = 0.33, edge_s: float = 0.0) -> float:
+    """Total length in seconds that makes `speech_s` about `target` of the sample.
+
+    `edge_s` is non-speech already in the clip (natural clip edges) and counts
+    towards the padding. A clip already at or below `target` is not shortened.
+    """
+    if speech_s <= 0 or edge_s < 0 or not 0 < target <= 1:
+        raise ValueError(f"invalid padding arguments: {speech_s=}, {target=}, {edge_s=}")
+    return max(speech_s / target, speech_s + edge_s)
+
+
+# G(SNR) for SNR = -20 to 97 dB in 1 dB steps: log(mean|x|) - mean(log|x|) of Gamma(0.4)
+# speech amplitudes plus Gaussian noise (Kim and Stern 2008, Table 1).
+# fmt: off
+_WADA_G = np.maximum.accumulate(
+    np.array(
+        [
+            0.40974774, 0.40986926, 0.40998566, 0.40969089, 0.40986186, 0.40999006, 0.41027138, 0.41052627,
+            0.41101024, 0.41143264, 0.41231718, 0.41337272, 0.41526426, 0.4178192, 0.42077252, 0.42452799,
+            0.42918886, 0.43510373, 0.44234195, 0.45161485, 0.46221153, 0.47491647, 0.48883809, 0.50509236,
+            0.52353709, 0.54372088, 0.56532427, 0.58847532, 0.61346212, 0.63954496, 0.66750818, 0.69583724,
+            0.72454762, 0.75414799, 0.78323148, 0.81240985, 0.84219775, 0.87166406, 0.90030504, 0.92880418,
+            0.95655449, 0.9835349, 1.01047155, 1.0362095, 1.06136425, 1.08579312, 1.1094819, 1.13277995,
+            1.15472826, 1.17627308, 1.19703503, 1.21671694, 1.23535898, 1.25364313, 1.27103891, 1.28718029,
+            1.30302865, 1.31839527, 1.33294817, 1.34700935, 1.3605727, 1.37345513, 1.38577122, 1.39733504,
+            1.40856397, 1.41959619, 1.42983624, 1.43958467, 1.44902176, 1.45804831, 1.46669568, 1.47486938,
+            1.48269965, 1.49034339, 1.49748214, 1.50435106, 1.51076426, 1.51698915, 1.5229097, 1.528578,
+            1.53389835, 1.5391211, 1.5439065, 1.54858517, 1.55310776, 1.55744391, 1.56164927, 1.56566348,
+            1.56938671, 1.57307767, 1.57654764, 1.57980083, 1.58304129, 1.58602496, 1.58880681, 1.59162477,
+            1.59419982, 1.59671568, 1.59907946, 1.60135846, 1.60352614, 1.60558286, 1.60766405, 1.60970592,
+            1.61161603, 1.61343689, 1.61526494, 1.61697957, 1.6187069, 1.62026286, 1.62178528, 1.62331528,
+            1.62477064, 1.62614226, 1.62748432, 1.62880497, 1.63012469, 1.63137379,
+        ]
+    )
+)
+# fmt: on
+_WADA_DB = np.arange(-20, 98, dtype=np.float64)
+
+
+def wada_snr(x: np.ndarray) -> float:
+    """Blind SNR estimate in dB, clamped to [-20, 97] (WADA-SNR, Kim and Stern 2008).
+
+    Assumes speech-like amplitudes: for a pure tone the estimate is meaningless.
+    """
+    amplitude = np.abs(x[x != 0], dtype=np.float64)
+    if len(amplitude) == 0:
+        raise ValueError("a silent signal has no SNR")
+    g = np.log(amplitude.mean()) - np.log(amplitude).mean()
+    return float(np.interp(g, _WADA_G, _WADA_DB))
