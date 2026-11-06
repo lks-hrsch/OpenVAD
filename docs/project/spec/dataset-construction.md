@@ -222,7 +222,7 @@ A build missing planned shards is marked `state: interim`.
 
 ### Labels
 
-- All label logic runs on intervals in sample precision and rasterises last: `rasterise(intervals, masks, G, shifts) -> frames`.
+- All label logic runs on integer-millisecond intervals and rasterises last: `rasterise(speech_ms, mask_ms, n_samples, shift_ms) -> frames`, with `round(n_samples / 160)` frames so the label length matches the audio. G is applied earlier by `apply_gap_rule`. Seconds are converted with `round(s * 1000)`; floats are rejected.
 - A frame is masked if any mask covers it; otherwise it takes the majority class.
 - G = 200 ms (owner, 2026-11-06), applied only at rasterisation, so a change of G never reruns MFA.
 - Audio decisions, such as the 20% coverage drop, padding to 33% and TIR over active frames, use the word union at G = 0, so a G ablation changes labels and leaves audio bytes identical.

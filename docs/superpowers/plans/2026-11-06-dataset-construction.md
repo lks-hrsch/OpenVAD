@@ -161,7 +161,7 @@ def test_failed_write_leaves_no_file(tmp_path):
 
 - Produces:
   - `apply_gap_rule(words_ms: list[tuple[int,int]], gap_ms: int) -> list[tuple[int,int]]`.
-  - `rasterise(speech_ms, mask_ms, duration_ms: int, shift_ms: int = 0) -> np.ndarray` of `uint8`, length `round(duration_ms / 10)`.
+  - `rasterise(speech_ms, mask_ms, n_samples: int, shift_ms: int = 0) -> np.ndarray` of `uint8`, length `round(n_samples / 160)`. Intervals are integer ms; float arguments raise `TypeError`.
   - `speech_ratio(words_ms, duration_ms) -> float`, using the word union at G = 0.
 
 - [ ] **Step 1: Write the failing tests.**
@@ -174,21 +174,24 @@ def test_gap_of_exactly_g_is_non_speech():
     assert apply_gap_rule([(100, 300), (500, 600)], 200) == [(100, 300), (500, 600)]
 
 def test_rasterise_grid():
-    y = rasterise([(100, 300)], [], 500)
+    y = rasterise([(100, 300)], [], 8000)
     assert y.dtype == np.uint8 and len(y) == 50
     assert y[9] == 0 and y[10] == 1 and y[29] == 1 and y[30] == 0
 
 def test_mask_wins_and_any_overlap_masks():
-    y = rasterise([(0, 500)], [(25, 26)], 500)
+    y = rasterise([(0, 500)], [(25, 26)], 8000)
     assert y[2] == 2 and y[1] == 1
 
 def test_tie_is_non_speech():
-    assert rasterise([(5, 10)], [], 20)[0] == 0
-    assert rasterise([(4, 10)], [], 20)[0] == 1
+    assert rasterise([(5, 10)], [], 320)[0] == 0
+    assert rasterise([(4, 10)], [], 320)[0] == 1
 
 def test_shift_moves_labels():
-    assert rasterise([(100, 200)], [], 500, shift_ms=30)[12] == 0
-    assert rasterise([(100, 200)], [], 500, shift_ms=30)[13] == 1
+    assert rasterise([(100, 200)], [], 8000, shift_ms=30)[12] == 0
+    assert rasterise([(100, 200)], [], 8000, shift_ms=30)[13] == 1
+
+def test_length_follows_samples():
+    assert len(rasterise([], [], 16081)) == 101
 ```
 
 - [ ] **Step 2: Run.** Expected: FAIL.
