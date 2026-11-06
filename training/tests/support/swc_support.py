@@ -62,6 +62,8 @@ def add_article(
 
 
 def make_swc_tree(raw: Path) -> Path:
+    raw.mkdir(parents=True, exist_ok=True)
+    (raw / "manifest.json").write_text('{"dataset": "swc"}')
     add_article(raw, "english", "Aaa", "[[User:Jcb|Jcb]]")
     add_article(raw, "english", "Bbb", "jcb")
     add_article(raw, "german", "Ccc", None)

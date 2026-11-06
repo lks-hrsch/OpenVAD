@@ -22,7 +22,7 @@ from openvad_train.dataset.labels import apply_gap_rule
 from openvad_train.dataset.parquet_io import write_parquet
 from openvad_train.dataset.schema import Clip, Timing, rank
 from openvad_train.dataset.sources import swc
-from openvad_train.fetch.common import raw_dir
+from openvad_train.fetch.common import MANIFEST, file_hash, raw_dir, write_manifest
 
 
 log = logging.getLogger(__name__)
@@ -130,12 +130,15 @@ def _speech_s(timings: Iterable[Timing]) -> dict[str, float]:
 
 def _index_source(
     name: str, module: ModuleType, languages: tuple[str, ...] | None
-) -> tuple[list[Clip], dict[str, int]]:
-    """The clips of one source that survive its rules, and how many were dropped for which reason."""
+) -> tuple[list[Clip], dict[str, float] | None, dict[str, int]]:
+    """The clips of one source that survive its rules, their speech seconds (non-MFA sources), and how many
+    were dropped for which reason.
+    """
     raw = raw_dir(name)
     clips = list(module.clips(raw, None if languages is None else set(languages)))
     for c in clips:
         guard_path(c.path, c.split)
+    speech_s = None
     dropped: dict[str, int] = {}
     if hasattr(module, "timings"):
         # MFA sources get their cap in `align`, after the drop rules. Here a clip without speech yields no labels
@@ -146,23 +149,56 @@ def _index_source(
         dropped = {"no_aligned_word": len(clips) - len(with_speech), "over_cap": len(with_speech) - len(capped)}
         clips = capped
     log.info("%s: %d clips, dropped %s", name, len(clips), dropped)
-    return clips, dropped
+    return clips, speech_s, dropped
+
+
+def _totals(clips: list[Clip], speech_s: dict[str, float] | None) -> dict:
+    totals = {
+        "clips": len(clips),
+        "speakers": len({c.speaker for c in clips if c.speaker is not None}),
+        "hours": round(sum(c.duration_s for c in clips) / 3600, 3),
+    }
+    if speech_s is not None:
+        totals["speech_hours"] = round(sum(speech_s[c.clip_id] for c in clips) / 3600, 3)
+    return totals
+
+
+def _source_manifest(name: str, clips: list[Clip], speech_s: dict[str, float] | None, dropped: dict[str, int]) -> dict:
+    by_split = {split: [c for c in clips if c.split == split] for split in sorted({c.split for c in clips})}
+    by_language = {lang: [c for c in clips if c.language == lang] for lang in sorted({c.language for c in clips})}
+    return {
+        **_totals(clips, speech_s),
+        "by_split": {split: _totals(cs, speech_s) for split, cs in by_split.items()},
+        "by_language": {lang: _totals(cs, speech_s) for lang, cs in by_language.items()},
+        "dropped": dropped,
+        "raw_manifest_sha256": file_hash(raw_dir(name) / MANIFEST, "sha256"),
+    }
 
 
 def run_index(cfg: BuildConfig) -> None:
-    """Write `work/<name>/index/<source>.parquet` for every source of `cfg`."""
-    per_source: dict[str, list[Clip]] = {}
+    """Write `work/<name>/index/<source>.parquet` for every source of `cfg`, and the stage's `manifest.json`."""
+    indexed = {}
     for name in cfg.sources:
         if name not in SOURCES:
             raise ValueError(f"no index adapter for source {name!r}; have {sorted(SOURCES)}")
-        per_source[name], _ = _index_source(name, SOURCES[name], cfg.languages)
+        indexed[name] = _index_source(name, SOURCES[name], cfg.languages)
     out = work_dir(cfg) / "index"
     out.mkdir(parents=True, exist_ok=True)
     frames = {
         out / f"{name}.parquet": _frame(clips, reserve_speakers(clips, cfg.reserved_share))
-        for name, clips in per_source.items()
+        for name, (clips, _, _) in indexed.items()
     }
     asyncio.run(write_parquet(frames))
+    write_manifest(
+        out,
+        {
+            "stage": "index",
+            "config": cfg.name,
+            "sources": list(cfg.sources),
+            "languages": None if cfg.languages is None else list(cfg.languages),
+            "per_source": {name: _source_manifest(name, *parts) for name, parts in indexed.items()},
+        },
+    )
 
 
 def main(args: list[str]) -> None:

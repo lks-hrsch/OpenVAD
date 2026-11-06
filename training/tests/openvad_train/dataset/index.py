@@ -5,6 +5,8 @@
 
 import asyncio
 import dataclasses
+import hashlib
+import json
 from types import ModuleType, SimpleNamespace
 from typing import Literal, cast
 
@@ -134,6 +136,9 @@ def test_cap_leaves_clips_without_a_speaker_alone():
 def data_dir(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENVAD_DATA_DIR", str(tmp_path))
     make_swc_tree(tmp_path / "datasets/raw/swc")
+    for other in ("mfa", "other"):
+        (tmp_path / "datasets/raw" / other).mkdir()
+        (tmp_path / "datasets/raw" / other / "manifest.json").write_text("{}")
     return tmp_path
 
 
@@ -221,9 +226,10 @@ def test_run_index_counts_speech_seconds_and_drops_clips_without_any(caplog):
         timings=lambda _raw, cs: (Timing(c.clip_id, "word", speech[c.clip_id], [], None, "t") for c in cs),
     )
     with caplog.at_level("INFO", logger=index.log.name):
-        kept, dropped = index._index_source("swc", cast(ModuleType, fake), None)
+        kept, speech_s, dropped = index._index_source("swc", cast(ModuleType, fake), None)
     assert {c.clip_id for c in kept} == {"c2", "c4"}
     assert dropped == {"no_aligned_word": 1, "over_cap": 2}
+    assert speech_s["c2"] == 12 * 3600
     assert "dropped {'no_aligned_word': 1, 'over_cap': 2}" in caplog.text
 
 
@@ -249,3 +255,19 @@ def test_run_index_reserves_per_source_and_for_all_languages_of_a_split(data_dir
         # Both languages of a reserved speaker are reserved, and nobody else is.
         assert set(df.filter(pl.col("reserved"))["speaker"]) == speakers
         assert df.filter(pl.col("speaker").is_in(speakers))["reserved"].all()
+
+
+def test_run_index_writes_a_stage_manifest(data_dir):
+    run_index(dataclasses.replace(SLICE, languages=None))
+    m = json.loads((data_dir / "datasets/processed/work/openvad-slice/index/manifest.json").read_text())
+    swc_m = m["per_source"]["swc"]
+    assert (m["stage"], m["config"], m["sources"], m["languages"]) == ("index", "openvad-slice", ["swc"], None)
+    assert swc_m["clips"] == 5
+    assert sum(v["clips"] for v in swc_m["by_split"].values()) == 5
+    assert set(swc_m["by_language"]) == {"en", "de", "nl"}
+    assert swc_m["dropped"] == {"no_aligned_word": 0, "over_cap": 0}
+    # Five articles of 2.0 s with 600 ms of aligned words each.
+    assert swc_m["hours"] == pytest.approx(5 * 2.0 / 3600, abs=1e-3)
+    assert swc_m["speech_hours"] == pytest.approx(5 * 0.6 / 3600, abs=1e-3)
+    raw_manifest = data_dir / "datasets/raw/swc/manifest.json"
+    assert swc_m["raw_manifest_sha256"] == hashlib.sha256(raw_manifest.read_bytes()).hexdigest()
