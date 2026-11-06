@@ -83,6 +83,11 @@ def test_reserve_five_percent_per_split_and_language():
     assert len([r for r in reserved if r[:2] == ("test", "en")]) == 1
 
 
+def test_reserve_nothing_from_a_group_with_a_single_speaker():
+    assert reserve_speakers([clip(speaker="only"), clip(id="d", speaker="only")]) == set()
+    assert len(reserve_speakers([clip(speaker="a"), clip(speaker="b")])) == 1
+
+
 def test_reserve_ignores_clips_without_a_speaker():
     assert reserve_speakers([clip(speaker=None) for _ in range(5)]) == set()
 
@@ -153,14 +158,9 @@ def test_run_index_keeps_the_configured_languages(data_dir):
     assert set(_read(data_dir)["language"]) == {"de"}
 
 
-def test_run_index_reserves_a_speaker_per_split_and_language(data_dir):
+def test_run_index_reserves_nothing_for_speakerless_clips_or_single_speaker_groups(data_dir):
     run_index(dataclasses.replace(SLICE, languages=None))
-    df = _read(data_dir)
-    assert df.filter(pl.col("speaker").is_null())["reserved"].to_list() == [False]
-    named = df.filter(pl.col("speaker").is_not_null())
-    # Every (split, language) holds its own lowest salted rank, and equal readers agree.
-    assert named.group_by("split", "language", "speaker").agg(pl.col("reserved").n_unique())["reserved"].max() == 1
-    assert named.group_by("split", "language").agg(pl.col("reserved").any())["reserved"].all()
+    assert not _read(data_dir)["reserved"].any()
 
 
 def test_run_index_rejects_a_forbidden_path(data_dir, monkeypatch):
@@ -225,3 +225,27 @@ def test_run_index_counts_speech_seconds_and_drops_clips_without_any(caplog):
     assert {c.clip_id for c in kept} == {"c2", "c4"}
     assert dropped == {"no_aligned_word": 1, "over_cap": 2}
     assert "dropped {'no_aligned_word': 1, 'over_cap': 2}" in caplog.text
+
+
+def test_run_index_reserves_per_source_and_for_all_languages_of_a_split(data_dir, monkeypatch):
+    def source(name):
+        clips = [
+            clip(id=f"{lang}{i}", speaker=f"s{i}", language=lang, source=name)
+            for lang in ("en", "de")
+            for i in range(20)
+        ]
+        return SimpleNamespace(clips=lambda _raw, _languages: iter(clips))
+
+    monkeypatch.setitem(index.SOURCES, "swc", source("swc"))
+    monkeypatch.setitem(index.SOURCES, "other", source("other"))
+    run_index(dataclasses.replace(SLICE, sources=("swc", "other"), languages=None))
+    for name in ("swc", "other"):
+        df = _read(data_dir, name)
+        picked = reserve_speakers(
+            [clip(speaker=r["speaker"], language=r["language"]) for r in df.iter_rows(named=True)]
+        )
+        speakers = {speaker for _, _, speaker in picked}
+        assert 1 <= len(speakers) <= 2
+        # Both languages of a reserved speaker are reserved, and nobody else is.
+        assert set(df.filter(pl.col("reserved"))["speaker"]) == speakers
+        assert df.filter(pl.col("speaker").is_in(speakers))["reserved"].all()

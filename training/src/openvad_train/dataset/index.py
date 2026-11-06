@@ -55,7 +55,8 @@ def guard_path(path: str, split: str) -> None:
 def reserve_speakers(clips: Iterable[Clip], share: float = 0.05) -> set[tuple[str, str, str]]:
     """`share` of the speakers of each (split, language), at least one, lowest salted rank first.
 
-    A clip without a speaker (FLEURS) never reserves anything.
+    A clip without a speaker (FLEURS) never reserves anything, and a group with a single speaker reserves none,
+    because reserving it would leave no foreground speaker. The caller passes one source's clips.
     """
     speakers: dict[tuple[str, str], set[str]] = defaultdict(set)
     for c in clips:
@@ -64,6 +65,7 @@ def reserve_speakers(clips: Iterable[Clip], share: float = 0.05) -> set[tuple[st
     return {
         (split, language, speaker)
         for (split, language), names in speakers.items()
+        if len(names) > 1
         # The salt keeps the reserved choice independent of a split drawn from rank(speaker) itself.
         for speaker in sorted(names, key=lambda s: (rank(f"reserved:{s}"), s))[: max(1, floor(len(names) * share))]
     }
@@ -113,8 +115,10 @@ _SCHEMA = {
 
 
 def _frame(clips: list[Clip], reserved: set[tuple[str, str, str]]) -> pl.LazyFrame:
+    # A speaker reserved in one language of a split is reserved for all its clips there, so it is never foreground.
+    reserved_in_split = {(split, speaker) for split, _, speaker in reserved}
     rows = [
-        dataclasses.asdict(c) | {"reserved": (c.split, c.language, c.speaker) in reserved, "rank": rank(c.clip_id)}
+        dataclasses.asdict(c) | {"reserved": (c.split, c.speaker) in reserved_in_split, "rank": rank(c.clip_id)}
         for c in clips
     ]
     return pl.DataFrame(rows, schema=_SCHEMA).lazy()
@@ -152,11 +156,13 @@ def run_index(cfg: BuildConfig) -> None:
         if name not in SOURCES:
             raise ValueError(f"no index adapter for source {name!r}; have {sorted(SOURCES)}")
         per_source[name], _ = _index_source(name, SOURCES[name], cfg.languages)
-    # Reservation sees every source of a language together, so a speaker is reserved once, not per source.
-    reserved = reserve_speakers((c for clips in per_source.values() for c in clips), cfg.reserved_share)
     out = work_dir(cfg) / "index"
     out.mkdir(parents=True, exist_ok=True)
-    asyncio.run(write_parquet({out / f"{name}.parquet": _frame(clips, reserved) for name, clips in per_source.items()}))
+    frames = {
+        out / f"{name}.parquet": _frame(clips, reserve_speakers(clips, cfg.reserved_share))
+        for name, clips in per_source.items()
+    }
+    asyncio.run(write_parquet(frames))
 
 
 def main(args: list[str]) -> None:
