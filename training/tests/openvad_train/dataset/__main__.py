@@ -9,8 +9,8 @@ from openvad_train.dataset import __main__ as cli
 
 
 def test_unimplemented_stage_is_an_error():
-    with pytest.raises(SystemExit, match="not yet implemented stage 'index'"):
-        cli.main(["index"])
+    with pytest.raises(SystemExit, match="not yet implemented stage 'align'"):
+        cli.main(["align"])
 
 
 def test_stage_receives_its_arguments(monkeypatch):

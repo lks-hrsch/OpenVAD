@@ -3,12 +3,20 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+import asyncio
+import dataclasses
+from types import SimpleNamespace
 from typing import Literal
 
+import polars as pl
 import pytest
 
-from openvad_train.dataset.index import ForbiddenSource, apply_cap_rank, guard_path, reserve_speakers
+from openvad_train.dataset import index
+from openvad_train.dataset.config import SLICE
+from openvad_train.dataset.index import ForbiddenSource, apply_cap_rank, guard_path, reserve_speakers, run_index
+from openvad_train.dataset.parquet_io import read_parquet
 from openvad_train.dataset.schema import Clip, rank
+from swc_support import make_swc_tree
 
 
 Split = Literal["train", "validation", "test"]
@@ -115,3 +123,70 @@ def test_cap_counts_each_speaker_and_source_on_its_own():
 def test_cap_leaves_clips_without_a_speaker_alone():
     clips = [clip(id=f"c{i}", speaker=None, duration_s=3600.0) for i in range(40)]
     assert list(apply_cap_rank(clips)) == clips
+
+
+@pytest.fixture
+def data_dir(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENVAD_DATA_DIR", str(tmp_path))
+    make_swc_tree(tmp_path / "datasets/raw/swc")
+    return tmp_path
+
+
+def _read(data_dir, source="swc") -> pl.DataFrame:
+    return asyncio.run(read_parquet(data_dir / "datasets/processed/work/index" / f"{source}.parquet"))
+
+
+def test_run_index_writes_one_parquet_per_source(data_dir):
+    run_index(dataclasses.replace(SLICE, languages=None))
+    df = _read(data_dir)
+    assert df.height == 5
+    assert df.schema["rank"] == pl.UInt64
+    assert df.schema["speaker"] == pl.String
+    row = df.filter(pl.col("clip_id") == "english/Aaa").row(0, named=True)
+    assert row["rank"] == rank("english/Aaa")
+    assert row["path"] == "datasets/raw/swc/english/Aaa/audio.ogg"
+    assert not (data_dir / "datasets/processed/work/index/swc.parquet.tmp").exists()
+
+
+def test_run_index_keeps_the_configured_languages(data_dir):
+    run_index(SLICE)
+    assert set(_read(data_dir)["language"]) == {"de"}
+
+
+def test_run_index_reserves_a_speaker_per_split_and_language(data_dir):
+    run_index(dataclasses.replace(SLICE, languages=None))
+    df = _read(data_dir)
+    assert df.filter(pl.col("speaker").is_null())["reserved"].to_list() == [False]
+    named = df.filter(pl.col("speaker").is_not_null())
+    # Every (split, language) holds its own lowest salted rank, and equal readers agree.
+    assert named.group_by("split", "language", "speaker").agg(pl.col("reserved").n_unique())["reserved"].max() == 1
+    assert named.group_by("split", "language").agg(pl.col("reserved").any())["reserved"].all()
+
+
+def test_run_index_rejects_a_forbidden_path(data_dir, monkeypatch):
+    bad = SimpleNamespace(
+        clips=lambda _raw: iter([dataclasses.replace(clip(language="de"), path="raw/ava-speech/a.flac")])
+    )
+    monkeypatch.setitem(index.SOURCES, "swc", bad)
+    with pytest.raises(ForbiddenSource):
+        run_index(SLICE)
+
+
+def test_run_index_caps_only_sources_without_mfa(data_dir, monkeypatch):
+    many = [
+        clip(id=f"c{i}", speaker="s", language="de", duration_s=3600.0, source=n)
+        for n in ("swc", "mfa")
+        for i in range(40)
+    ]
+    swc_like = SimpleNamespace(clips=lambda _raw: iter(many[:40]), timings=lambda *_: iter(()))
+    mfa_like = SimpleNamespace(clips=lambda _raw: iter(many[40:]))
+    monkeypatch.setitem(index.SOURCES, "swc", swc_like)
+    monkeypatch.setitem(index.SOURCES, "mfa", mfa_like)
+    run_index(dataclasses.replace(SLICE, sources=("swc", "mfa"), languages=None))
+    assert _read(data_dir, "swc").height == 30
+    assert _read(data_dir, "mfa").height == 40
+
+
+def test_run_index_names_a_source_without_adapter(data_dir):
+    with pytest.raises(ValueError, match="no index adapter for source 'ami'"):
+        run_index(dataclasses.replace(SLICE, sources=("ami",)))

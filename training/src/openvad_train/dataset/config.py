@@ -109,3 +109,8 @@ SLICE = BuildConfig(
 
 def dataset_root(cfg: BuildConfig) -> Path:
     return data_dir() / "datasets/processed" / cfg.name
+
+
+def work_dir(cfg: BuildConfig) -> Path:
+    """Working state of every stage, next to the dataset root (spec, Layout)."""
+    return dataset_root(cfg).parent / "work"

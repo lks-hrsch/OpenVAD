@@ -5,12 +5,22 @@
 
 """Stage `index`: what clips exist, which split each is in, and which speakers are capped or reserved."""
 
+import argparse
+import asyncio
+import dataclasses
 from collections import defaultdict
 from collections.abc import Iterable, Iterator
 from math import floor
 from pathlib import PurePosixPath
+from types import ModuleType
 
+import polars as pl
+
+from openvad_train.dataset.config import FULL, SLICE, BuildConfig, work_dir
+from openvad_train.dataset.parquet_io import write_parquet
 from openvad_train.dataset.schema import Clip, rank
+from openvad_train.dataset.sources import swc
+from openvad_train.fetch.common import raw_dir
 
 
 class ForbiddenSource(Exception):  # noqa: N818  (the name the plan and its tests use)
@@ -72,3 +82,56 @@ def apply_cap_rank(clips: Iterable[Clip], hours: float = 30.0) -> Iterator[Clip]
                 break
             kept.add(c.clip_id)
     return (c for c in clips if c.speaker is None or c.clip_id in kept)
+
+
+# An adapter has `clips(raw)`; one that is not forced-aligned by MFA also has `timings(raw, clips)` and is capped here.
+SOURCES: dict[str, ModuleType] = {"swc": swc}
+
+_SCHEMA = {
+    "clip_id": pl.String,
+    "source": pl.String,
+    "language": pl.String,
+    "speaker": pl.String,
+    "split": pl.String,
+    "path": pl.String,
+    "offset_s": pl.Float64,
+    "duration_s": pl.Float64,
+    "licence": pl.String,
+    "transcript": pl.String,
+    "reserved": pl.Boolean,
+    "rank": pl.UInt64,
+}
+
+
+def _frame(clips: list[Clip], reserved: set[tuple[str, str, str]]) -> pl.LazyFrame:
+    rows = [
+        dataclasses.asdict(c) | {"reserved": (c.split, c.language, c.speaker) in reserved, "rank": rank(c.clip_id)}
+        for c in clips
+    ]
+    return pl.DataFrame(rows, schema=_SCHEMA).lazy()
+
+
+def run_index(cfg: BuildConfig) -> None:
+    """Write `work/index/<source>.parquet` for every source of `cfg`."""
+    per_source: dict[str, list[Clip]] = {}
+    for name in cfg.sources:
+        if name not in SOURCES:
+            raise ValueError(f"no index adapter for source {name!r}; have {sorted(SOURCES)}")
+        module = SOURCES[name]
+        clips = [c for c in module.clips(raw_dir(name)) if cfg.languages is None or c.language in cfg.languages]
+        for c in clips:
+            guard_path(c.path, c.split)
+        # MFA sources get their cap in `align`, after the drop rules.
+        per_source[name] = list(apply_cap_rank(clips)) if hasattr(module, "timings") else clips
+    # Reservation sees every source of a language together, so a speaker is reserved once, not per source.
+    reserved = reserve_speakers((c for clips in per_source.values() for c in clips), cfg.reserved_share)
+    out = work_dir(cfg) / "index"
+    out.mkdir(parents=True, exist_ok=True)
+    asyncio.run(write_parquet({out / f"{name}.parquet": _frame(clips, reserved) for name, clips in per_source.items()}))
+
+
+def main(args: list[str]) -> None:
+    parser = argparse.ArgumentParser(prog="dataset index", description=__doc__)
+    parser.add_argument("--config", choices=("slice", "full"), required=True)
+    ns = parser.parse_args(args)
+    run_index({"slice": SLICE, "full": FULL}[ns.config])

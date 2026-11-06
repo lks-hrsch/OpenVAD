@@ -5,7 +5,7 @@
 
 import pytest
 
-from openvad_train.dataset.config import FULL, SLICE, dataset_root
+from openvad_train.dataset.config import FULL, SLICE, dataset_root, work_dir
 
 
 def test_full_condition_shares_sum_to_one():
@@ -40,3 +40,8 @@ def test_slice_is_swc_german_demand_with_two_codecs():
 def test_dataset_root_follows_data_dir(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENVAD_DATA_DIR", str(tmp_path))
     assert dataset_root(FULL) == tmp_path / "datasets/processed/openvad-v1"
+
+
+def test_work_dir_sits_next_to_the_dataset_root(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENVAD_DATA_DIR", str(tmp_path))
+    assert work_dir(FULL) == tmp_path / "datasets/processed/work"
