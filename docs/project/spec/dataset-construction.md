@@ -86,7 +86,7 @@ $OPENVAD_DATA_DIR/datasets/processed/openvad-v1/
     test/00000.tar
 ```
 
-Working state sits next to it, under `datasets/processed/work/`: `index/<source>.parquet`, `words/<source>/<language>/<batch>.parquet`, `plan/plan.parquet` and one `fragments/<shard>.parquet` per finished shard.
+Working state sits next to it, under `datasets/processed/work/<name>/` with the build configuration's name, so a slice run never overwrites the full build's state: `index/<source>.parquet` and `index/manifest.json` (every stage writes its manifest into its own directory), `words/<source>/<language>/<batch>.parquet`, `plan/plan.parquet` and one `fragments/<shard>.parquet` per finished shard.
 
 - `publish` merges the fragments and as-is rows into the split files.
 - Polars reads with `scan_parquet(...).collect_async()` and writes with `sink_parquet(..., lazy=True)` under `collect_all_async`, inside `asyncio`, through one small module. Polars marks `collect_async` unstable, so the version is pinned in `uv.lock`.

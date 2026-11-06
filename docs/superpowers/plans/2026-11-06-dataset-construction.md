@@ -215,7 +215,7 @@ def test_length_follows_samples():
   - `guard_path(path: str, split: str) -> None`, raising `ForbiddenSource` for benchmark paths, direct LibriSpeech evaluation paths, and LibriVAD val or test in the wrong split.
   - `reserve_speakers(clips, share: float = 0.05) -> set[tuple[str, str, str]]`, keyed (split, language, speaker).
   - `apply_cap_rank(clips, hours: float = 30.0) -> Iterator[Clip]`, walking rank order per speaker per source.
-  - `run_index(cfg) -> None`, writing `work/index/<source>.parquet`.
+  - `run_index(cfg) -> None`, writing `work_dir(cfg)/index/<source>.parquet` and `index/manifest.json`, where `work_dir(cfg)` is `datasets/processed/work/<cfg.name>/` (every later `work/...` path in this plan sits under it).
 
 - [ ] **Step 1: Write the failing tests** on a synthetic `aligned.swc`, `info.json` and `audiometa.txt` tree in `tmp_path`:
 
