@@ -38,7 +38,3 @@ Without Nix:
 4. The thesis builds in the Nix docs shell, see [docs/README.md](docs/README.md).
 
 With Nix: run `direnv allow`, then `just setup` and `just check`.
-
-## License
-
-To be decided (a permissive open-source license is planned).

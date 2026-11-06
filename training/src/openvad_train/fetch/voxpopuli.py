@@ -1,3 +1,8 @@
+# Copyright (c) 2026 Lukas Hirsch
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 """VoxPopuli transcribed (ASR) data: the annotation tables and the source session audio; segments are cut later.
 
 The VoxPopuli code is CC BY-NC 4.0 and not vendored; this reimplements the two downloads it needs.

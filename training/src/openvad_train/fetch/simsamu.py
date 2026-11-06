@@ -1,3 +1,8 @@
+# Copyright (c) 2026 Lukas Hirsch
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 """Simsamu: simulated French emergency calls (8 kHz, RTTM speaker turns) from Hugging Face, evaluation only."""
 
 from openvad_train.fetch.common import download, hf_source, hf_tree, raw_dir, write_manifest

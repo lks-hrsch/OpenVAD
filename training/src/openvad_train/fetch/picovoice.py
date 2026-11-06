@@ -1,3 +1,8 @@
+# Copyright (c) 2026 Lukas Hirsch
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 """Picovoice voice-activity-benchmark test audio, built by its own mixer at a pinned commit (Apache-2.0)."""
 
 import subprocess

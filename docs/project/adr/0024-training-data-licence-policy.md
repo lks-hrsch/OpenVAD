@@ -15,7 +15,7 @@ The project needs one rule for what may be trained on, what is recorded, and whe
    - This is not a finding of the university legal office, and this record claims nothing beyond the owner's decision and that reasoning.
 2. These rules hold:
    - Public data only: anyone can obtain it, and it needs no paid licence (no Linguistic Data Consortium or European Language Resources Association corpora). Free account gates and accepted terms count as public, as long as access needs neither payment nor individual approval (owner, 2026-11-04).
-   - Datasets and third-party weights are never redistributed; scripts fetch the data (owner, 2026-11-04). OpenVAD's own weights are published ([0004](0004-project-scope.md)).
+   - Datasets and third-party weights are never redistributed; scripts fetch the data (owner, 2026-11-04). OpenVAD's own weights are published ([0004](0004-project-scope.md)) under the Mozilla Public License 2.0 ([0027](0027-project-licence.md)) (owner, 2026-11-06).
    - Reproducibility is the claim of the thesis, not licence purity.
    - Labelling tools under an NC licence are acceptable; they are not shipped. MFA models trained partly on GlobalPhone (European Language Resources Association) are labelling tools, not training data, so the public-data rule does not exclude them ([0025](0025-alignment-labelling.md)).
 3. Every manifest records the licence of each source, and per file where it varies.
@@ -50,6 +50,5 @@ The project needs one rule for what may be trained on, what is recorded, and whe
 ## Open questions
 
 - Whether trained weights count as adapted material under CC BY-NC-SA is legally unsettled. Ask the university legal office before release.
-- Which licence OpenVAD's own weights carry.
 - Whether anything built from LibriVAD (generated audio, labels, checkpoints) must be marked NC in the repo docs and the manifests.
 - Whether Fearless Steps registration and the TalkBank login meet decision 2 (neither payment nor individual approval). Their access terms have not been checked.
