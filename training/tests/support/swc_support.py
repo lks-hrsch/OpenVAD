@@ -21,21 +21,30 @@ ARTICLE_WORDS = [
 ]
 
 
-def _swc(words: list[tuple[int, int] | None]) -> str:
+def _swc(words: list[tuple[int, int] | None], boilerplate: bool) -> str:
     tokens = "".join(
         '<t text="w"><n pronunciation="w" /></t>' if w is None else f'<t text="w"><n start="{w[0]}" end="{w[1]}" /></t>'
         for w in words
     )
+    extra = '<extra><s><t text="intro"><n /></t></s><s><t text="outro"><n /></t></s></extra>' if boilerplate else ""
     return (
         "<article><meta /><d>"
-        '<extra><s><t text="intro"><n /></t></s><s><t text="outro"><n /></t></s></extra>'
+        f"{extra}"
         f'<ignored><s><t text="image"><n /></t></s></ignored><p><s>{tokens}<t text="." /></s></p>'
         "</d></article>"
     )
 
 
 def add_article(
-    raw: Path, language: str, name: str, reader: str | None, *, seconds: float = 2.0, words=ARTICLE_WORDS, swc=True
+    raw: Path,
+    language: str,
+    name: str,
+    reader: str | None,
+    *,
+    seconds: float = 2.0,
+    words=ARTICLE_WORDS,
+    swc=True,
+    boilerplate=True,
 ) -> None:
     folder = raw / language / name
     folder.mkdir(parents=True)
@@ -44,7 +53,7 @@ def add_article(
     (folder / "info.json").write_text(json.dumps(info))
     (folder / "audiometa.txt").write_text("{{self|cc-by-sa-3.0}}")
     if swc:
-        (folder / "aligned.swc").write_text(_swc(words))
+        (folder / "aligned.swc").write_text(_swc(words, boilerplate))
 
 
 def make_swc_tree(raw: Path) -> Path:

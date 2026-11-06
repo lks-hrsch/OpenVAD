@@ -11,7 +11,7 @@ import soundfile as sf
 
 from openvad_train.dataset.schema import rank
 from openvad_train.dataset.sources import swc
-from swc_support import make_swc_tree
+from swc_support import add_article, make_swc_tree
 
 
 @pytest.fixture
@@ -95,3 +95,16 @@ def test_duration_falls_back_to_ffprobe_for_files_libsndfile_cannot_open(swc_tre
 
     monkeypatch.setattr(swc.sf, "info", refuse)
     assert swc.audio_duration_s(swc_tree / "english/Aaa/audio.ogg") == pytest.approx(2.0, abs=0.05)
+
+
+def test_never_aligned_clip_edges_are_masked_without_unaligned_tokens(tmp_path):
+    add_article(tmp_path, "german", "Edges", None, words=[(100, 300), (400, 500)], boilerplate=False)
+    t = next(swc.timings(tmp_path, swc.clips(tmp_path)))
+    assert t.speech_ms == [(100, 300), (400, 500)]
+    assert t.mask_ms == [(0, 100), (500, 2000)]
+
+
+def test_a_clip_without_an_aligned_word_is_masked_whole(tmp_path):
+    add_article(tmp_path, "german", "Empty", None, words=[None, None])
+    t = next(swc.timings(tmp_path, swc.clips(tmp_path)))
+    assert (t.speech_ms, t.mask_ms) == ([], [(0, 2000)])

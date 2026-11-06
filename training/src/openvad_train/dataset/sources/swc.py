@@ -128,7 +128,10 @@ def _tokens(doc: ET.Element) -> list[ET.Element]:
 
 
 def _word_timings(doc: ET.Element, duration_ms: int) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
-    """Aligned words, and the gaps between two aligned words (or the clip edges) with an unaligned token inside."""
+    """Aligned words, and the masks: everything before the first and after the last aligned word, and each gap
+    between two aligned words that has an unaligned token inside. Stretches the aligner never reached are unknown
+    (ADR 0023), so they are masked and not labelled non-speech.
+    """
     words: list[tuple[int, int]] = []
     masks: list[tuple[int, int]] = []
     last_end = 0
@@ -140,14 +143,16 @@ def _word_timings(doc: ET.Element, duration_ms: int) -> tuple[list[tuple[int, in
                 unaligned = True
                 continue
             start, end = span
-            if unaligned and start > last_end:
+            if words and unaligned and start > last_end:
                 masks.append((last_end, start))
             unaligned = False
             words.append((start, end))
             last_end = max(last_end, end)
-    if unaligned and duration_ms > last_end:
-        masks.append((last_end, duration_ms))
-    return words, masks
+    if not words:
+        return [], [(0, duration_ms)] if duration_ms > 0 else []
+    first_start = min(s for s, _ in words)
+    edges = [(0, first_start), (last_end, duration_ms)]
+    return words, sorted([m for m in masks + edges if m[1] > m[0]])
 
 
 def timings(raw: Path, clips: Iterable[Clip]) -> Iterator[Timing]:
