@@ -9,7 +9,8 @@ import argparse
 import asyncio
 import dataclasses
 import logging
-from collections import Counter, defaultdict
+from collections import Counter
+from collections.abc import Iterable
 from types import ModuleType
 
 import numpy as np
@@ -30,6 +31,8 @@ log = logging.getLogger(__name__)
 
 SAMPLES_PER_MS = 16
 SAMPLE_RATE = 16_000
+_CLIPS_PER_BATCH = 1024
+_ROWS_PER_FRAME = 50_000
 
 AUGMENTED_SOURCES = {"common-voice", "mls", "fleurs", "swc"}
 _CUT_SOURCES = {"mls", "swc"}
@@ -321,23 +324,23 @@ def clip_rows(
     return rows
 
 
-def assign_shards(rows: list[dict], bytes_per_hour: float, target_bytes: int = 1_000_000_000) -> None:
-    """Sort `rows` by rank and give each augmented one a `shard`, `<split>/<number>`, the tar's path under `data/`.
+def assign_shards(frame: pl.DataFrame, bytes_per_hour: float, target_bytes: int = 1_000_000_000) -> pl.DataFrame:
+    """`frame` sorted by rank, with each augmented row's `shard` as `<split>/<number>`, the tar's path under `data/`.
 
-    Shards fill in rank order within a split, so an early stop leaves a clean prefix. As-is rows have none.
+    Shards fill in rank order within a split, so an early stop leaves a clean prefix. A new shard starts once the
+    target is reached, so one can pass it by its last sample, and numbers have no holes. As-is rows have none.
     """
-    rows.sort(key=lambda r: r["rank"])
-    number: dict[str, int] = defaultdict(int)
-    filled: dict[str, float] = defaultdict(float)
-    for row in rows:
-        if row["treatment"] != "augmented":
-            continue
-        split, size = row["split"], row["duration"] / 3600 * bytes_per_hour
-        if filled[split] and filled[split] + size > target_bytes:
-            number[split] += 1
-            filled[split] = 0.0
-        filled[split] += size
-        row["shard"] = f"{split}/{number[split]:05d}"
+    augmented = pl.col("treatment") == "augmented"
+    size = pl.when(augmented).then((pl.col("duration") / 3600 * bytes_per_hour).round()).otherwise(0).cast(pl.Int64)
+    number = pl.col("_number").rank("dense").over("split") - 1
+    return (
+        frame.sort("rank")
+        .with_columns(_number=size.cum_sum().shift(1, fill_value=0).over("split") // target_bytes)
+        .with_columns(
+            shard=pl.when(augmented).then(pl.format("{}/{}", pl.col("split"), number.cast(pl.String).str.zfill(5)))
+        )
+        .drop("_number")
+    )
 
 
 def _parse_limit(limit: str | None) -> tuple[int | None, float | None]:
@@ -354,28 +357,49 @@ def _parse_limit(limit: str | None) -> tuple[int | None, float | None]:
     return (None, float(value)) if hours else (int(value), None)
 
 
-def _lowest_ranks(rows: list[dict], samples: int | None, hours: float | None) -> list[dict]:
-    """The prefix of rank-sorted `rows` within the limit; a sample that would pass the hours is not taken."""
+def _lowest_ranks(frame: pl.DataFrame, samples: int | None, hours: float | None) -> pl.DataFrame:
+    """The prefix of rank-sorted `frame` within the limit; a sample that would pass the hours is not taken."""
     if samples is not None:
-        return rows[:samples]
+        return frame.head(samples)
     if hours is None:
-        return rows
-    kept, total_s = [], 0.0
-    for row in rows:
-        total_s += row["duration"]
-        if total_s > hours * 3600:
-            break
-        kept.append(row)
-    return kept
+        return frame
+    return frame.filter(pl.col("duration").cum_sum() <= hours * 3600)
 
 
-def _timings(cfg: BuildConfig, name: str, module: ModuleType, clips: list[Clip]) -> dict[str, Timing]:
+def _timings(cfg: BuildConfig, name: str, module: ModuleType, clips: list[Clip]) -> Iterable[Timing]:
     if hasattr(module, "timings"):
-        return {t.clip_id: t for t in module.timings(raw_dir(name), clips)}
+        return module.timings(raw_dir(name), clips)
     words = work_dir(cfg) / "words" / name
     if not words.is_dir():
         raise FileNotFoundError(f"{name} is labelled by MFA and {words} does not exist: run the align stage first")
     raise NotImplementedError(f"reading the MFA word tables under {words} arrives with the align stage")
+
+
+def _plan_source(cfg: BuildConfig, name: str, pool: NoisePool) -> tuple[list[pl.DataFrame], dict]:
+    """The rows of one source as frames, and its counts. Clips, timings and row dicts stay in memory only per batch:
+    a dict is about 4 KB, which at 15 M rows would cost over 60 GB.
+    """
+    fields = [f.name for f in dataclasses.fields(Clip)]
+    index = asyncio.run(read_parquet(work_dir(cfg) / "index" / f"{name}.parquet", fields))
+    frames: list[pl.DataFrame] = []
+    rows: list[dict] = []
+    counts: Counter = Counter()
+    for batch in index.iter_slices(_CLIPS_PER_BATCH):
+        clips = [Clip(**row) for row in batch.iter_rows(named=True)]
+        for clip, timing in zip(clips, _timings(cfg, name, SOURCES[name], clips), strict=True):
+            if timing.clip_id != clip.clip_id:
+                raise ValueError(f"{name}: timings out of clip order at {clip.clip_id!r}, got {timing.clip_id!r}")
+            sample_rows = clip_rows(clip, timing, cfg, pool, counts)
+            rows += sample_rows
+            counts["reserved"] += clip.reserved
+            counts["samples"] += len(sample_rows)
+            counts["without_sample"] += not sample_rows and not clip.reserved
+            if len(rows) >= _ROWS_PER_FRAME:
+                frames.append(pl.DataFrame(rows, schema=_PLAN_SCHEMA))
+                rows = []
+    frames.append(pl.DataFrame(rows, schema=_PLAN_SCHEMA))
+    kinds = ("reserved", "without_sample", "short_chunks", "masked_chunks", "samples")
+    return frames, {"clips": index.height, **{k: counts[k] for k in kinds}}
 
 
 def _print_summary(df: pl.DataFrame, bytes_per_hour: float) -> list[dict]:
@@ -410,31 +434,19 @@ def run_plan(cfg: BuildConfig, limit: str | None = None) -> None:
         raise ValueError(f"no index adapter for source {unknown[0]!r}; have {sorted(SOURCES)}")
 
     pool = NoisePool(raw_dir("demand"))
-    rows: list[dict] = []
+    frames: list[pl.DataFrame] = []
     per_source: dict[str, dict] = {}
     for name in cfg.sources:
-        fields = [f.name for f in dataclasses.fields(Clip)]
-        index = asyncio.run(read_parquet(work_dir(cfg) / "index" / f"{name}.parquet", fields))
-        clips = [Clip(**row) for row in index.iter_rows(named=True)]
-        timings = _timings(cfg, name, SOURCES[name], clips)
-        counts = Counter(reserved=sum(c.reserved for c in clips))
-        for clip in clips:
-            sample_rows = clip_rows(clip, timings[clip.clip_id], cfg, pool, counts)
-            rows += sample_rows
-            counts["samples"] += len(sample_rows)
-            counts["without_sample"] += not sample_rows and not clip.reserved
-        kinds = ("reserved", "without_sample", "short_chunks", "masked_chunks", "samples")
-        per_source[name] = {"clips": len(clips), **{k: counts[k] for k in kinds}}
+        source_frames, per_source[name] = _plan_source(cfg, name, pool)
+        frames += source_frames
         log.info("%s: %s", name, per_source[name])
 
     # Sorted before the limit too: `assign_shards` only sees what the limit keeps.
-    rows.sort(key=lambda r: r["rank"])
-    rows = _lowest_ranks(rows, samples, hours)
-    if len({r["sample_id"] for r in rows}) != len(rows):
+    df = _lowest_ranks(pl.concat(frames).sort("rank"), samples, hours)
+    if df["sample_id"].n_unique() != df.height:
         raise ValueError("a sample id is repeated: rows would overwrite each other's rank and seed")
     bytes_per_hour = cfg.flac_mb_per_hour * 1e6
-    assign_shards(rows, bytes_per_hour)
-    df = pl.DataFrame(rows, schema=_PLAN_SCHEMA)
+    df = assign_shards(df, bytes_per_hour)
     out = work_dir(cfg) / "plan"
     out.mkdir(parents=True, exist_ok=True)
     asyncio.run(write_parquet({out / "plan.parquet": df.lazy()}))

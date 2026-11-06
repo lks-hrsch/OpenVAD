@@ -383,39 +383,50 @@ def test_as_is_row_without_speech_stays():
     assert len(clip_rows(clip("a", "speech-commands"), timing("a", speech=[]), SLICE)) == 1
 
 
-def plan_rows(sources: list[str], n: int = 300) -> list[dict]:
+def plan_frame(sources: list[str], n: int = 300) -> pl.DataFrame:
     splits: tuple[Split, ...] = ("train", "validation", "test")
-    return [
+    rows = [
         draw_sample(clip(f"c{i}", source, splits[i % 3]), timing(f"c{i}"), SLICE)
         for source in sources
         for i in range(n)
     ]
+    return pl.DataFrame(rows, schema=plan_module._PLAN_SCHEMA)
 
 
 def test_only_augmented_rows_get_shards_in_rank_order():
-    rows = plan_rows(sources=["swc", "voxpopuli"])
-    assign_shards(rows, bytes_per_hour=63e6)
-    assert all((r["shard"] is None) == (r["treatment"] == "as_is") for r in rows)
-    built = [r for r in rows if r["shard"] is not None and r["split"] == "train"]
-    assert built
-    assert [r["rank"] for r in built] == sorted(r["rank"] for r in built)
+    planned = assign_shards(plan_frame(sources=["swc", "voxpopuli"]), bytes_per_hour=63e6)
+    assert (planned["shard"].is_null() == (planned["treatment"] == "as_is")).all()
+    built = planned.filter(pl.col("shard").is_not_null() & (pl.col("split") == "train"))
+    assert built.height > 0
+    assert built["rank"].to_list() == sorted(built["rank"].to_list())
 
 
 def test_shards_are_numbered_per_split_and_rise_with_rank():
-    rows = plan_rows(sources=["swc"])
     # 5 s samples at 3600 MB per hour are 5 MB each: 4 fit in 20 MB.
-    assign_shards(rows, bytes_per_hour=3600e6, target_bytes=20_000_000)
+    planned = assign_shards(plan_frame(sources=["swc"]), bytes_per_hour=3600e6, target_bytes=20_000_000)
     for split in ("train", "validation", "test"):
-        shards = [r["shard"] for r in rows if r["split"] == split]
+        shards = planned.filter(pl.col("split") == split)["shard"].to_list()
         assert shards[:5] == [f"{split}/00000"] * 4 + [f"{split}/00001"]
         assert shards == sorted(shards)
         assert max(Counter(shards).values()) == 4
 
 
-def test_a_sample_over_the_target_has_its_own_shard():
-    rows = plan_rows(sources=["swc"], n=3)
-    assign_shards(rows, bytes_per_hour=3600e6, target_bytes=1)
-    assert len({r["shard"] for r in rows}) == 3
+def test_a_sample_over_the_target_has_its_own_shard_and_numbers_stay_dense():
+    planned = assign_shards(plan_frame(sources=["swc"], n=9), bytes_per_hour=3600e6, target_bytes=1)
+    for split in ("train", "validation", "test"):
+        shards = planned.filter(pl.col("split") == split)["shard"].to_list()
+        assert shards == [f"{split}/00000", f"{split}/00001", f"{split}/00002"]
+
+
+def test_as_is_rows_do_not_fill_a_shard():
+    mixed = plan_frame(sources=["swc", "voxpopuli"])
+    planned = assign_shards(mixed, bytes_per_hour=3600e6, target_bytes=20_000_000)
+    assert max(Counter(planned["shard"].drop_nulls().to_list()).values()) == 4
+
+
+def test_assign_shards_gives_a_frame_with_the_same_columns():
+    frame = plan_frame(sources=["swc"], n=3)
+    assert assign_shards(frame, bytes_per_hour=63e6).schema == frame.schema
 
 
 @pytest.fixture
@@ -470,6 +481,25 @@ def test_a_row_read_back_feeds_the_labels(data):
     assert row["speech_ms"][0] == [100, 300]
     labels = rasterise(row["speech_ms"], row["mask_ms"], row["total_n"], row["speech_offset_n"] // 16)
     assert labels.sum() > 0
+
+
+def test_batching_does_not_change_the_plan(data, monkeypatch):
+    run_index(CONFIG)
+    run_plan(CONFIG)
+    first = plan_of(data)
+    monkeypatch.setattr(plan_module, "_ROWS_PER_FRAME", 2)
+    monkeypatch.setattr(plan_module, "_CLIPS_PER_BATCH", 2)
+    run_plan(CONFIG)
+    assert plan_of(data).equals(first)
+
+
+def test_timings_out_of_clip_order_are_refused(data, monkeypatch):
+    run_index(CONFIG)
+    real = plan_module.SOURCES["swc"]
+    backwards = SimpleNamespace(timings=lambda raw, clips: reversed(list(real.timings(raw, clips))))
+    monkeypatch.setitem(plan_module.SOURCES, "swc", backwards)
+    with pytest.raises(ValueError, match="clip order"):
+        run_plan(CONFIG)
 
 
 def test_a_rerun_gives_the_same_plan(data):
