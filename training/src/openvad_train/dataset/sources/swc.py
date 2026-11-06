@@ -23,6 +23,7 @@ from typing import Literal
 import soundfile as sf
 
 from openvad_train.dataset.config import SPEAKER_CAP_HOURS
+from openvad_train.dataset.cutting import rebase
 from openvad_train.dataset.labels import apply_gap_rule
 from openvad_train.dataset.schema import Clip, Timing, rank
 from openvad_train.fetch.swc import audio_licence
@@ -257,11 +258,6 @@ def _article_timings(folder: Path) -> tuple[list[tuple[int, int]], list[tuple[in
     return _word_timings(doc, round(sum(_durations(folder)) * 1000))
 
 
-def _rebase(intervals: list[tuple[int, int]], start: int, end: int) -> list[tuple[int, int]]:
-    """The parts of the intervals inside [start, end), counted from `start`; a word crossing a boundary is cut."""
-    return [(max(s, start) - start, min(e, end) - start) for s, e in intervals if min(e, end) > max(s, start)]
-
-
 def timings(raw: Path, clips: Iterable[Clip]) -> Iterator[Timing]:
     for clip in clips:
         path = Path(clip.path).relative_to(RAW_PREFIX)
@@ -271,5 +267,5 @@ def timings(raw: Path, clips: Iterable[Clip]) -> Iterator[Timing]:
         start, end = (round(sum(durations[:i]) * 1000) for i in (k, k + 1))
         speech, mask = _article_timings(folder)
         yield Timing(
-            clip.clip_id, "word", _rebase(speech, start, end), _rebase(mask, start, end), None, "swc:aligned.swc"
+            clip.clip_id, "word", rebase(speech, start, end), rebase(mask, start, end), None, "swc:aligned.swc"
         )
