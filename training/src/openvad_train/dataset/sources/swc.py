@@ -33,6 +33,10 @@ SOURCE = "swc"
 LANGUAGES = {"english": "en", "german": "de", "dutch": "nl"}
 # Pointers are relative to $OPENVAD_DATA_DIR; `raw` itself is only the place to read from.
 RAW_PREFIX = Path("datasets/raw/swc")
+# Unmasked gaps can hold speech-level audio: of 30 sampled per length, 23 over 10 s, 5 at 5 to 10 s, 3 at 2 to 5 s and
+# 2 at 1 to 2 s did. Words over 5 s are mostly not speech. Masking is safe: padding supplies ample non-speech.
+SWC_MAX_LABELLED_GAP_MS = 2000
+SWC_MAX_WORD_MS = 5000
 
 # Wiki prefixes of a reader field: `:nl:`, and a user namespace with optional language and project (`w:en:User:`).
 _COLON_PREFIX = re.compile(r"^:(?:[a-z]{1,3}:)*", re.IGNORECASE)
@@ -223,8 +227,9 @@ def _tokens(doc: ET.Element) -> list[ET.Element]:
 
 
 def _word_timings(doc: ET.Element, duration_ms: int) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
-    """Aligned words, and the masks: everything before the first and after the last aligned word, and each gap
-    between two aligned words that has an unaligned token inside. Stretches the aligner never reached are unknown
+    """Aligned words, and the masks: everything before the first and after the last aligned word, each gap between
+    two aligned words that has an unaligned token inside or lasts `SWC_MAX_LABELLED_GAP_MS` or more, and each word
+    over `SWC_MAX_WORD_MS`, which counts as an unaligned token. Stretches the aligner never reached are unknown
     (ADR 0023), so they are masked and not labelled non-speech.
     """
     words: list[tuple[int, int]] = []
@@ -238,7 +243,11 @@ def _word_timings(doc: ET.Element, duration_ms: int) -> tuple[list[tuple[int, in
                 unaligned = True
                 continue
             start, end = span
-            if words and unaligned and start > last_end:
+            if end - start > SWC_MAX_WORD_MS:
+                masks.append(span)
+                unaligned = True
+                continue
+            if words and start > last_end and (unaligned or start - last_end >= SWC_MAX_LABELLED_GAP_MS):
                 masks.append((last_end, start))
             unaligned = False
             words.append((start, end))

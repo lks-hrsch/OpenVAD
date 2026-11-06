@@ -188,6 +188,35 @@ def test_a_clip_without_an_aligned_word_is_masked_whole(tmp_path):
     assert (t.speech_ms, t.mask_ms) == ([], [(0, 2000)])
 
 
+def word_timing(tmp_path, words, seconds=30.0):
+    add_article(tmp_path, "german", "Gaps", None, words=words, boilerplate=False, seconds=seconds)
+    return next(swc.timings(tmp_path, swc.clips(tmp_path)))
+
+
+def test_an_inner_gap_of_two_seconds_is_masked_and_a_shorter_one_is_not(tmp_path):
+    t = word_timing(tmp_path, [(100, 300), (2300, 2500), (4499, 4600)])
+    assert t.speech_ms == [(100, 300), (2300, 2500), (4499, 4600)]
+    assert t.mask_ms == [(0, 100), (300, 2300), (4600, 30000)]
+
+
+def test_a_word_of_five_seconds_stays_and_a_longer_one_becomes_a_mask(tmp_path):
+    t = word_timing(tmp_path, [(100, 5100), (5200, 10_201), (10_300, 10_400)])
+    assert t.speech_ms == [(100, 5100), (10_300, 10_400)]
+    # The mask runs over the gaps beside it too, as it does around an unaligned token.
+    assert t.mask_ms == [(0, 100), (5100, 10_300), (5200, 10_201), (10_400, 30000)]
+
+
+def test_an_over_long_first_or_last_word_falls_inside_the_edge_masks(tmp_path):
+    t = word_timing(tmp_path, [(100, 6000), (6100, 6200), (6300, 12_000)])
+    assert t.speech_ms == [(6100, 6200)]
+    assert t.mask_ms == [(0, 6100), (100, 6000), (6200, 30000), (6300, 12_000)]
+
+
+def test_a_clip_of_only_over_long_words_is_masked_whole(tmp_path):
+    t = word_timing(tmp_path, [(100, 6000)])
+    assert (t.speech_ms, t.mask_ms) == ([], [(0, 30000)])
+
+
 def test_languages_filter_before_any_article_is_read(tmp_path):
     add_article(tmp_path, "german", "Fine", "Alice")
     add_article(tmp_path, "english", "Broken", "Bob")
