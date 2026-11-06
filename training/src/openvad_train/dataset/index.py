@@ -205,4 +205,5 @@ def main(args: list[str]) -> None:
     parser = argparse.ArgumentParser(prog="dataset index", description=__doc__)
     parser.add_argument("--config", choices=("slice", "full"), required=True)
     ns = parser.parse_args(args)
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     run_index({"slice": SLICE, "full": FULL}[ns.config])

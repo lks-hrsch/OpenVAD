@@ -272,3 +272,10 @@ def test_run_index_writes_a_stage_manifest(data_dir):
     assert swc_m["speech_hours"] == pytest.approx(5 * 0.6 / 3600, abs=1e-3)
     raw_manifest = data_dir / "datasets/raw/swc/manifest.json"
     assert swc_m["raw_manifest_sha256"] == hashlib.sha256(raw_manifest.read_bytes()).hexdigest()
+
+
+def test_the_stage_runs_a_named_configuration_and_requires_one(data_dir):
+    index.main(["--config", "slice"])
+    assert set(_read(data_dir)["language"]) == {"de"}
+    with pytest.raises(SystemExit):
+        index.main([])
