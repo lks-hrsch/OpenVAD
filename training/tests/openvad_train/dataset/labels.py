@@ -92,6 +92,23 @@ def test_length_is_rounded_for_non_multiples_of_ten():
     assert len(rasterise([], [], 0)) == 0
 
 
+def test_length_follows_samples_not_whole_ms():
+    # 16081 samples is 1005.0625 ms; whole ms would give 100 frames, the audio rounds to 101.
+    assert len(rasterise([], [], 16081)) == 101
+
+
+@pytest.mark.parametrize("n_samples", [80, 240, 400, 16080, 16240, 176081, 226961])
+def test_length_is_pythons_round_including_half_way_ties(n_samples):
+    assert len(rasterise([], [], n_samples)) == round(n_samples / 160)
+
+
+def test_sub_ms_tail_decides_the_last_partial_frame():
+    # Both clips have 102 frames; the last covers ms 1010..1020 but audio ends at ceil(n / 16).
+    # n=16240 ends at 1015 ms: 5 ms of speech is a tie, non-speech. n=16241 ends at 1016 ms: 6 ms.
+    assert rasterise([(0, 5000)], [], 16240)[-1] == 0
+    assert rasterise([(0, 5000)], [], 16241)[-1] == 1
+
+
 def test_interval_past_duration_does_not_cover_the_rounded_up_tail():
     # 496 ms rounds up to 50 frames; ms 496..500 is not audio and must not count.
     assert rasterise([(496, 600)], [], 7936)[49] == 0
