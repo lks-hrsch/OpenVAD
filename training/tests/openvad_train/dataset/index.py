@@ -133,7 +133,7 @@ def data_dir(monkeypatch, tmp_path):
 
 
 def _read(data_dir, source="swc") -> pl.DataFrame:
-    return asyncio.run(read_parquet(data_dir / "datasets/processed/work/index" / f"{source}.parquet"))
+    return asyncio.run(read_parquet(data_dir / "datasets/processed/work/openvad-slice/index" / f"{source}.parquet"))
 
 
 def test_run_index_writes_one_parquet_per_source(data_dir):
@@ -145,7 +145,7 @@ def test_run_index_writes_one_parquet_per_source(data_dir):
     row = df.filter(pl.col("clip_id") == "english/Aaa").row(0, named=True)
     assert row["rank"] == rank("english/Aaa")
     assert row["path"] == "datasets/raw/swc/english/Aaa/audio.ogg"
-    assert not (data_dir / "datasets/processed/work/index/swc.parquet.tmp").exists()
+    assert not (data_dir / "datasets/processed/work/openvad-slice/index/swc.parquet.tmp").exists()
 
 
 def test_run_index_keeps_the_configured_languages(data_dir):

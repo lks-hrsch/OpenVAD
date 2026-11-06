@@ -112,5 +112,5 @@ def dataset_root(cfg: BuildConfig) -> Path:
 
 
 def work_dir(cfg: BuildConfig) -> Path:
-    """Working state of every stage, next to the dataset root (spec, Layout)."""
-    return dataset_root(cfg).parent / "work"
+    """Working state of every stage of one configuration, so a slice run never overwrites the full build's."""
+    return dataset_root(cfg).parent / "work" / cfg.name
