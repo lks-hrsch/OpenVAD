@@ -133,7 +133,7 @@ Working state sits next to it, under `datasets/processed/work/`: `index/<source>
 | `band` | string | `wide`, `narrow_leg` or `narrow_native`, see [train time](#train-time-narrowband) |
 | `in_small` | boolean, nullable | train only, null until Small is set |
 
-Metadata columns follow: `rank`, `source`, `language`, `speaker` (nullable), `licence`, `treatment` (`augmented`, `as_is`), `speech_ratio`, `condition`, `noise_source_ids`, `noise_offsets`, `snr_db` (nullable), `tir_db` (nullable), `baseline_snr_db` (nullable), `rir_id` (nullable), `handset`, `agc`, `clip_drive_db`, `suppression`, `codec`, `bitrate`, `codec_delay_ms`, `transients`, `gap_ms`, `aligner` (nullable), `seed`.
+Metadata columns follow: `rank`, `source`, `language`, `speaker` (nullable), `licence`, `treatment` (`augmented`, `as_is`), `speech_ratio`, `condition`, `noise_source_ids`, `noise_offsets`, `snr_db` (nullable), `tir_db` (nullable), `baseline_snr_db` (nullable), `rir_id` (nullable), `handset`, `agc`, `clip_drive_db`, `suppression`, `codec`, `bitrate`, `codec_delay_ms`, `transients`, `gap_ms`, `dither_dbfs`, `segments`, `aligner` (nullable), `seed`.
 
 These cover the manifest fields of ADR 0023; loss pattern is absent because v1 has no packet loss.
 
