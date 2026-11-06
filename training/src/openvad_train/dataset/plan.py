@@ -9,6 +9,7 @@ import argparse
 import asyncio
 import dataclasses
 import logging
+import math
 from collections import Counter
 from collections.abc import Iterable
 from types import ModuleType
@@ -352,8 +353,8 @@ def _parse_limit(limit: str | None) -> tuple[int | None, float | None]:
         value = float(limit[:-1]) if hours else int(limit)
     except ValueError:
         raise ValueError(f"limit must be a sample count or hours such as 1000h, got {limit!r}") from None
-    if not value > 0:  # also refuses NaN
-        raise ValueError(f"limit must be positive, got {limit!r}")
+    if not (math.isfinite(value) and value > 0):
+        raise ValueError(f"limit must be positive and finite, got {limit!r}")
     return (None, float(value)) if hours else (int(value), None)
 
 
@@ -392,13 +393,12 @@ def _plan_source(cfg: BuildConfig, name: str, pool: NoisePool) -> tuple[list[pl.
             sample_rows = clip_rows(clip, timing, cfg, pool, counts)
             rows += sample_rows
             counts["reserved"] += clip.reserved
-            counts["samples"] += len(sample_rows)
             counts["without_sample"] += not sample_rows and not clip.reserved
             if len(rows) >= _ROWS_PER_FRAME:
                 frames.append(pl.DataFrame(rows, schema=_PLAN_SCHEMA))
                 rows = []
     frames.append(pl.DataFrame(rows, schema=_PLAN_SCHEMA))
-    kinds = ("reserved", "without_sample", "short_chunks", "masked_chunks", "samples")
+    kinds = ("reserved", "without_sample", "short_chunks", "masked_chunks")
     return frames, {"clips": index.height, **{k: counts[k] for k in kinds}}
 
 
@@ -443,10 +443,14 @@ def run_plan(cfg: BuildConfig, limit: str | None = None) -> None:
 
     # Sorted before the limit too: `assign_shards` only sees what the limit keeps.
     df = _lowest_ranks(pl.concat(frames).sort("rank"), samples, hours)
+    if df.is_empty() and limit is not None:
+        raise ValueError(f"limit {limit!r} selects no sample")
     if df["sample_id"].n_unique() != df.height:
         raise ValueError("a sample id is repeated: rows would overwrite each other's rank and seed")
     bytes_per_hour = cfg.flac_mb_per_hour * 1e6
     df = assign_shards(df, bytes_per_hour)
+    for name, per in per_source.items():
+        per["samples"] = df.filter(pl.col("source") == name).height
     out = work_dir(cfg) / "plan"
     out.mkdir(parents=True, exist_ok=True)
     asyncio.run(write_parquet({out / "plan.parquet": df.lazy()}))

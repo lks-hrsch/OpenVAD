@@ -548,13 +548,29 @@ def test_limit_keeps_the_lowest_ranks_by_hours(data):
     assert plan_of(data)["sample_id"].to_list() == everything["sample_id"].to_list()[:2]
 
 
-@pytest.mark.parametrize("limit", ["abc", "-1", "0", "-2h", "h", "nanh"])
-def test_a_bad_limit_is_refused_before_any_work(limit):
+@pytest.mark.parametrize("limit", ["abc", "-1", "0", "-2h", "h", "nanh", "infh"])
+def test_a_bad_limit_is_refused_before_any_work(data, limit):
     with pytest.raises(ValueError, match="limit"):
         run_plan(SLICE, limit=limit)
 
 
-def test_full_refuses_conditions_without_a_draw_before_any_work():
+def test_a_limit_selecting_no_row_is_refused_and_writes_nothing(data):
+    run_index(CONFIG)
+    with pytest.raises(ValueError, match=r"limit '0\.0001h' selects no sample"):
+        run_plan(CONFIG, limit="0.0001h")
+    assert not (data / "datasets/processed/work/openvad-slice/plan/plan.parquet").exists()
+
+
+def test_manifest_counts_samples_after_the_limit(data):
+    run_index(CONFIG)
+    run_plan(CONFIG, limit="2")
+    manifest = json.loads((data / "datasets/processed/work/openvad-slice/plan/manifest.json").read_text())
+    assert manifest["samples"] == 2
+    assert manifest["per_source"]["swc"]["samples"] == 2
+    assert manifest["per_source"]["swc"]["clips"] == 5
+
+
+def test_full_refuses_conditions_without_a_draw_before_any_work(data):
     with pytest.raises(NotImplementedError, match="babble"):
         run_plan(FULL)
 
