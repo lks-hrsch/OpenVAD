@@ -45,6 +45,10 @@ lint-rs:
     cargo fmt --all --check
     cargo clippy --workspace --all-targets --locked -- -D warnings
 
+# regenerate the resampler coefficients
+design-resampler:
+    uv run python -m openvad_train.design_resampler
+
 # fail if any Rust crate pulls in a third-party inference runtime
 guard-engine:
     out=$(cargo tree --workspace --locked -e normal,build,dev) && ! echo "$out" | grep -E '(^|[^A-Za-z0-9_-])(ort|tract|burn|candle)(-[A-Za-z0-9_-]+)? v[0-9]'
