@@ -4,7 +4,9 @@
 [submodule "tools/montreal-forced-aligner"]
 	path = tools/montreal-forced-aligner
 	url = https://github.com/MontrealCorpusTools/Montreal-Forced-Aligner
+	shallow = true
 [submodule "tools/kaldi"]
 	path = tools/kaldi
 	url = https://github.com/kaldi-asr/kaldi
 	ignore = untracked
+	shallow = true

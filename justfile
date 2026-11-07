@@ -99,7 +99,7 @@ build-mfa:
         git -C tools/kaldi update-index --no-skip-worktree src/configure
         git -C tools/kaldi checkout -- src/configure
     fi
-    git submodule update --init tools/kaldi tools/montreal-forced-aligner
+    git submodule update --init --depth 1 tools/kaldi tools/montreal-forced-aligner
     kmake() {
         if [ -x /bin/bash ]; then make "$@"; else make SHELL="$(command -v bash)" "$@"; fi
     }
