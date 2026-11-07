@@ -5,6 +5,7 @@
 
 """Stage `construct`: each plan row becomes stored audio and labels, a pure function of the row."""
 
+import argparse
 import asyncio
 import io
 import json
@@ -13,6 +14,8 @@ import os
 import shutil
 import tarfile
 import tempfile
+from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
+from multiprocessing import get_context
 from pathlib import Path
 from typing import NamedTuple
 
@@ -21,21 +24,37 @@ import polars as pl
 import soundfile as sf
 
 from openvad_train.dataset.audio import load_audio
-from openvad_train.dataset.codecs import DecodeError, decode_16k, delay_ms, roundtrip
-from openvad_train.dataset.config import DEMAND_CATEGORIES
+from openvad_train.dataset.codecs import DecodeError, decode_16k, delay_ms, encoder_of, preflight, roundtrip
+from openvad_train.dataset.config import DEMAND_CATEGORIES, FULL, SLICE, BuildConfig, dataset_root, work_dir
 from openvad_train.dataset.cutting import rebase
 from openvad_train.dataset.labels import SAMPLES_PER_FRAME, SAMPLES_PER_MS, apply_gap_rule, rasterise
 from openvad_train.dataset.mix import SAMPLE_RATE, dither, loop_slice, mix_at_snr, place, protect_peak
 from openvad_train.dataset.parquet_io import read_parquet, write_parquet
 from openvad_train.dataset.plan import PLAN_SCHEMA
-from openvad_train.fetch.common import file_hash
+from openvad_train.fetch.common import (
+    cache_dir,
+    data_dir,
+    file_hash,
+    read_manifest,
+    take_share_lock,
+    write_manifest,
+)
 
 
 log = logging.getLogger(__name__)
 
 
+_SPACE_MARGIN_BYTES = 50_000_000_000
 _CONDITIONS_BUILT = {"clean", *DEMAND_CATEGORIES}
 _CODECS_BUILT = {"none", "g722"}
+
+
+class OutOfSpace(Exception):  # noqa: N818 (the name is the plan's interface)
+    """The share has too little free space for the next shard; a re-run continues."""
+
+
+class PlanMismatch(Exception):  # noqa: N818 (the name is the plan's interface)
+    """The plan, its version or the ffmpeg differ from what the shards already built came from."""
 
 
 def _legs_not_built(row: dict) -> list[str]:
@@ -233,3 +252,99 @@ def write_shard(rows: list[dict], tar_path: Path, fragment_path: Path, raw: Path
             ]
         )
     return ShardResult(len(built), n_failed, sha256)
+
+
+def _is_finished(tar_path: Path, fragment_path: Path) -> bool:
+    return fragment_path.exists() and tar_path.exists() and tar_path.with_name(tar_path.name + ".sha256").exists()
+
+
+def _check_build_state(cfg: BuildConfig, plan_manifest: dict, plan_path: Path, ffmpeg: dict) -> None:
+    """Refuse a run that would mix shards of two plans or two ffmpegs, whose outputs are bytes of different builds."""
+    for key, value in (("plan_version", cfg.plan_version), ("global_seed", cfg.global_seed)):
+        if plan_manifest.get(key) != value:
+            raise PlanMismatch(
+                f"the plan has {key} {plan_manifest.get(key)!r}, the configuration {value!r}: rerun plan"
+            )
+    state = {
+        "stage": "construct",
+        "config": cfg.name,
+        "plan_version": cfg.plan_version,
+        "global_seed": cfg.global_seed,
+        "plan_sha256": file_hash(plan_path, "sha256"),
+        "ffmpeg": ffmpeg,
+    }
+    fragments = work_dir(cfg) / "fragments"
+    built_from = read_manifest(fragments)
+    if built_from is None:
+        fragments.mkdir(parents=True, exist_ok=True)
+        write_manifest(fragments, state)
+        return
+    changed = [key for key, value in state.items() if built_from.get(key) != value]
+    if changed:
+        raise PlanMismatch(
+            f"{', '.join(changed)} changed since {fragments} was started: delete its shards and manifest to rebuild"
+        )
+
+
+def _report_shards(done: set[Future], shards: dict[Future, str]) -> None:
+    """Log finished shards; `result()` re-raises what a worker raised, which aborts the run."""
+    for future in done:
+        result = future.result()
+        log.info("%s: %d built, %d failed, sha256 %s", shards.pop(future), result.n_ok, result.n_failed, result.sha256)
+
+
+def _build_shards(cfg: BuildConfig, plan: pl.DataFrame, workers: int) -> None:
+    """Submit unfinished shards in the plan's rank order. On a failure nothing new starts and the shards running
+    finish, because leaving the pool's context waits for them, so an early stop leaves a clean prefix.
+    """
+    raw, data, fragments = data_dir(), dataset_root(cfg) / "data", work_dir(cfg) / "fragments"
+    data.mkdir(parents=True, exist_ok=True)
+    running: dict[Future, str] = {}
+    # Spawn, because Polars' thread pool does not survive a fork.
+    with ProcessPoolExecutor(workers, mp_context=get_context("spawn")) as pool:
+        for (shard,), frame in plan.group_by("shard", maintain_order=True):
+            tar_path, fragment_path = data / f"{shard}.tar", fragments / f"{shard}.parquet"
+            if _is_finished(tar_path, fragment_path):
+                continue
+            if len(running) >= workers:
+                _report_shards(wait(running, return_when=FIRST_COMPLETED).done, running)
+            estimate = float(frame["duration"].sum()) / 3600 * cfg.flac_mb_per_hour * 1e6
+            free = shutil.disk_usage(data).free
+            if free < estimate + _SPACE_MARGIN_BYTES:
+                raise OutOfSpace(
+                    f"{data}: {free / 1e9:.1f} GB free, {shard} needs its {estimate / 1e9:.1f} GB plus 50 GB"
+                )
+            running[pool.submit(write_shard, frame.to_dicts(), tar_path, fragment_path, raw)] = shard
+        _report_shards(wait(running).done, running)
+
+
+def run_construct(cfg: BuildConfig, workers: int = 11) -> None:
+    """Build every unfinished shard of the plan's `augmented` rows; a re-run continues where one stopped.
+
+    Raises `SystemExit` when another run holds the lock, `OutOfSpace` and `PlanMismatch` as named, and whatever a
+    worker raised for a broken setup. A clip that cannot be built does not stop the run: see `write_shard`.
+    """
+    cache_dir().mkdir(parents=True, exist_ok=True)
+    lock = take_share_lock(f"construct-{cfg.name}")
+    try:
+        plan_dir = work_dir(cfg) / "plan"
+        manifest = read_manifest(plan_dir)
+        if manifest is None:
+            raise FileNotFoundError(f"{plan_dir} has no manifest: run the plan stage first")
+        # shortcut: the parent holds the whole plan, about 26 GB at full scale by Task 6's estimate; read it per shard
+        # if the workstation cannot hold that.
+        plan = asyncio.run(read_parquet(plan_dir / "plan.parquet")).filter(pl.col("treatment") == "augmented")
+        ffmpeg = preflight({encoder_of(c) for c in plan["codec"].unique() if c != "none"})
+        _check_build_state(cfg, manifest, plan_dir / "plan.parquet", ffmpeg)
+        _build_shards(cfg, plan, workers)
+    finally:
+        lock.unlink(missing_ok=True)
+
+
+def main(args: list[str]) -> None:
+    parser = argparse.ArgumentParser(prog="dataset construct", description=__doc__)
+    parser.add_argument("--config", choices=("slice", "full"), required=True)
+    parser.add_argument("--workers", type=int, default=11, help="worker processes, one per shard")
+    ns = parser.parse_args(args)
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    run_construct({"slice": SLICE, "full": FULL}[ns.config], ns.workers)

@@ -76,6 +76,11 @@ def preflight(required: set[str]) -> dict:
     }
 
 
+def encoder_of(codec: str) -> str:
+    """The ffmpeg encoder `preflight` must find for a codec of a plan row."""
+    return _CODECS[codec][0]
+
+
 def roundtrip(audio: np.ndarray, codec: str, bitrate: int | None) -> np.ndarray:
     """Encode and decode `audio` (float32, mono, at the codec's rate: 16 kHz, or 8 kHz for amr_nb).
 

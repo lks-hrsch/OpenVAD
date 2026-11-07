@@ -4,32 +4,39 @@
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 import asyncio
+import dataclasses
 import hashlib
 import io
 import json
 import os
 import pickle
+import shutil
 import subprocess
 import sys
 import tarfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
+import polars as pl
 import pytest
 import soundfile as sf
 
+from openvad_train.dataset import __main__ as cli
 from openvad_train.dataset import construct
 from openvad_train.dataset.audio import load_audio
 from openvad_train.dataset.codecs import DecodeError, MissingCodec
-from openvad_train.dataset.config import SLICE
-from openvad_train.dataset.construct import construct_sample, write_shard
+from openvad_train.dataset.config import SLICE, BuildConfig, dataset_root, work_dir
+from openvad_train.dataset.construct import OutOfSpace, PlanMismatch, construct_sample, run_construct, write_shard
 from openvad_train.dataset.mix import loop_slice
-from openvad_train.dataset.parquet_io import read_parquet
-from openvad_train.dataset.plan import draw_sample
+from openvad_train.dataset.parquet_io import read_parquet, write_parquet
+from openvad_train.dataset.plan import PLAN_SCHEMA, draw_sample
 from openvad_train.dataset.schema import Clip, Timing
-from openvad_train.fetch.common import data_dir
+from openvad_train.fetch.common import cache_dir, data_dir, take_share_lock, write_manifest
 
 
+GB = 1_000_000_000
 CHAIN_OFF = {"room": False, "handset": None, "agc": None, "clip_drive_db": None, "suppression": None, "transients": []}
 CLEAN = {"condition": "clean", "snr_db": None, "noise_source_ids": [], "noise_offsets": [], "dither_dbfs": -80.0}
 NO_CODEC = {"codec": "none", "bitrate": None, "band": "wide"}
@@ -573,3 +580,284 @@ def test_the_local_stage_is_removed(rows, raw, tmp_path, monkeypatch):
     monkeypatch.setattr(construct.tempfile, "tempdir", str(stage))
     write_shard(rows, tmp_path / "s.tar", tmp_path / "s.parquet", raw)
     assert list(stage.iterdir()) == []
+
+
+# run_construct
+
+
+@pytest.fixture(autouse=True)
+def free_space(monkeypatch) -> list[int]:
+    """Bytes free on the share, one per check, the last repeating; the test machine's real disk must not matter."""
+    free = [10_000 * GB]
+    monkeypatch.setattr(
+        shutil, "disk_usage", lambda _path: SimpleNamespace(free=free[0] if len(free) == 1 else free.pop(0))
+    )
+    return free
+
+
+def write_plan(cfg: BuildConfig, rows: list[dict]) -> None:
+    out = work_dir(cfg) / "plan"
+    out.mkdir(parents=True, exist_ok=True)
+    asyncio.run(write_parquet({out / "plan.parquet": pl.DataFrame(rows, schema=PLAN_SCHEMA).lazy()}))
+    write_manifest(out, {"stage": "plan", "plan_version": cfg.plan_version, "global_seed": cfg.global_seed})
+
+
+@pytest.fixture
+def planned_rows(rows) -> list[dict]:
+    as_is = make_row(name="as_is") | {"treatment": "as_is", "shard": None, "condition": "as_is"}
+    shards = ["train/00000", "train/00000", "validation/00000"]
+    return [row | {"shard": shard} for row, shard in zip(rows, shards, strict=True)] + [as_is]
+
+
+@pytest.fixture
+def cfg(planned_rows) -> BuildConfig:
+    built = dataclasses.replace(SLICE, name="test-build")
+    write_plan(built, planned_rows)
+    return built
+
+
+def shard_files(cfg: BuildConfig) -> list[Path]:
+    return sorted((dataset_root(cfg) / "data").rglob("*.tar*")) + sorted(
+        (work_dir(cfg) / "fragments").rglob("*.parquet")
+    )
+
+
+def shard_mtimes(cfg: BuildConfig) -> dict[Path, int]:
+    return {p: p.stat().st_mtime_ns for p in shard_files(cfg)}
+
+
+def test_run_builds_every_augmented_shard_and_load_audio_reads_them(cfg, raw):
+    run_construct(cfg, workers=1)
+    names = [p.relative_to(raw).as_posix() for p in shard_files(cfg)]
+    assert names == [
+        "datasets/processed/test-build/data/train/00000.tar",
+        "datasets/processed/test-build/data/train/00000.tar.sha256",
+        "datasets/processed/test-build/data/validation/00000.tar",
+        "datasets/processed/test-build/data/validation/00000.tar.sha256",
+        "datasets/processed/work/test-build/fragments/train/00000.parquet",
+        "datasets/processed/work/test-build/fragments/validation/00000.parquet",
+    ]
+    fragment = read_fragment(work_dir(cfg) / "fragments/train/00000.parquet")
+    assert [r["clip_id"] for r in fragment] == ["c0", "c1"]
+    for row in fragment:
+        assert len(load_audio(row)) == row["total_n"]
+        assert len(row["labels"]) == round(row["total_n"] / 160)
+
+
+def test_a_run_gives_the_bytes_of_construct_sample_after_the_plan_round_trip(cfg, rows, raw):
+    run_construct(cfg, workers=1)
+    row = read_fragment(work_dir(cfg) / "fragments/validation/00000.parquet")[0]
+    flac, labels = construct_sample(rows[2], raw)
+    with (raw / row["audio_filepath"]).open("rb") as f:
+        f.seek(row["byte_offset"])
+        assert f.read(row["byte_length"]) == flac
+    assert row["labels"] == labels.tolist()
+
+
+def test_rerun_skips_finished_shards(cfg):
+    run_construct(cfg, workers=1)
+    before = shard_mtimes(cfg)
+    run_construct(cfg, workers=1)
+    assert shard_mtimes(cfg) == before
+
+
+def test_rerun_rebuilds_a_shard_without_its_fragment_and_leaves_the_others(cfg):
+    run_construct(cfg, workers=1)
+    (work_dir(cfg) / "fragments/train/00000.parquet").unlink()
+    before = shard_mtimes(cfg)
+    run_construct(cfg, workers=1)
+    after = shard_mtimes(cfg)
+    train_tar = dataset_root(cfg) / "data/train/00000.tar"
+    validation_tar = dataset_root(cfg) / "data/validation/00000.tar"
+    assert after[train_tar] != before[train_tar]
+    assert after[validation_tar] == before[validation_tar]
+
+
+@pytest.mark.parametrize("gone", ["data/train/00000.tar", "data/train/00000.tar.sha256"])
+def test_a_shard_missing_its_tar_or_sidecar_is_not_finished(cfg, gone):
+    run_construct(cfg, workers=1)
+    (dataset_root(cfg) / gone).unlink()
+    run_construct(cfg, workers=1)
+    assert (dataset_root(cfg) / gone).exists()
+
+
+def test_stops_when_space_is_short(cfg, free_space):
+    free_space[0] = 49 * GB
+    with pytest.raises(OutOfSpace):
+        run_construct(cfg)
+    assert shard_files(cfg) == []
+
+
+def test_a_rerun_after_space_ran_short_continues(cfg, free_space):
+    free_space[0] = 49 * GB
+    with pytest.raises(OutOfSpace):
+        run_construct(cfg)
+    free_space[0] = 100 * GB
+    run_construct(cfg, workers=1)
+    assert len(shard_files(cfg)) == 6
+
+
+@pytest.fixture
+def in_process_pool(monkeypatch) -> list[str]:
+    """Threads instead of processes, so a test can replace `write_shard`; returns the shards in submission order."""
+    monkeypatch.setattr(construct, "ProcessPoolExecutor", lambda *_args, **_kwargs: ThreadPoolExecutor(1))
+    submitted: list[str] = []
+
+    def record(rows, tar_path, fragment_path, _raw):
+        submitted.append(rows[0]["shard"])
+        for path in (tar_path, tar_path.with_name(tar_path.name + ".sha256"), fragment_path):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"")
+        return construct.ShardResult(len(rows), 0, "")
+
+    monkeypatch.setattr(construct, "write_shard", record)
+    return submitted
+
+
+def many_shards(cfg, make, n: int = 5) -> None:
+    # Ranks fall as shard numbers rise here, so order by number would differ from order by rank.
+    rows = [make(name=f"m{i}", **CLEAN, **NO_CODEC) | {"rank": 1000 - i, "shard": f"train/{i:05d}"} for i in range(n)]
+    write_plan(cfg, sorted(rows, key=lambda r: r["rank"]))
+
+
+def test_shards_are_processed_in_plan_order_which_is_rank_order(cfg, in_process_pool):
+    many_shards(cfg, make_row)
+    run_construct(cfg, workers=1)
+    assert in_process_pool == [f"train/{i:05d}" for i in range(4, -1, -1)]
+
+
+def test_space_running_short_midway_leaves_a_clean_prefix(cfg, free_space, in_process_pool):
+    many_shards(cfg, make_row)
+    free_space[:] = [100 * GB, 100 * GB, 1 * GB]
+    with pytest.raises(OutOfSpace):
+        run_construct(cfg, workers=1)
+    assert in_process_pool == ["train/00004", "train/00003"]
+
+
+def test_the_estimate_counts_against_the_margin(cfg, free_space):
+    # 63 MB per hour for under a minute of audio per shard is far under 10 MB, so only the margin decides here.
+    free_space[0] = 50 * GB - 1
+    with pytest.raises(OutOfSpace, match="50 GB"):
+        run_construct(cfg, workers=1)
+    free_space[0] = 50 * GB + 10_000_000
+    run_construct(cfg, workers=1)
+    assert len(shard_files(cfg)) == 6
+
+
+def test_a_failing_shard_stops_new_work_and_is_reported(cfg, monkeypatch, in_process_pool):
+    many_shards(cfg, make_row)
+
+    def fails(rows, *_args):
+        in_process_pool.append(rows[0]["shard"])
+        raise MissingCodec("no ffmpeg")
+
+    monkeypatch.setattr(construct, "write_shard", fails)
+    with pytest.raises(MissingCodec):
+        run_construct(cfg, workers=1)
+    assert len(in_process_pool) <= 2
+
+
+def test_a_row_asking_for_an_unbuilt_leg_aborts_through_the_workers(cfg, planned_rows):
+    write_plan(cfg, [planned_rows[0] | {"room": True}, *planned_rows[1:]])
+    with pytest.raises(NotImplementedError, match="room"):
+        run_construct(cfg, workers=1)
+    assert not (work_dir(cfg) / "fragments/train/00000.parquet").exists()
+
+
+def test_preflight_runs_once_before_any_worker_with_the_encoders_of_the_plan(cfg, monkeypatch):
+    seen: list[set[str]] = []
+    real = construct.preflight
+
+    def recording(required):
+        seen.append(required)
+        return real(required)
+
+    monkeypatch.setattr(construct, "preflight", recording)
+    run_construct(cfg, workers=1)
+    assert seen == [{"g722"}]
+
+
+def test_a_missing_encoder_aborts_before_any_worker(cfg, monkeypatch):
+    def missing(_required):
+        raise MissingCodec("no g722")
+
+    def no_pool(*_args, **_kwargs):
+        pytest.fail("a worker pool started")
+
+    monkeypatch.setattr(construct, "preflight", missing)
+    monkeypatch.setattr(construct, "ProcessPoolExecutor", no_pool)
+    with pytest.raises(MissingCodec):
+        run_construct(cfg)
+
+
+def test_second_process_is_refused(cfg):
+    lock = take_share_lock_for(cfg)
+    with pytest.raises(SystemExit, match="held by host"):
+        run_construct(cfg)
+    assert lock.exists()
+    assert shard_files(cfg) == []
+
+
+def take_share_lock_for(cfg: BuildConfig) -> Path:
+    cache_dir().mkdir(parents=True, exist_ok=True)
+    return take_share_lock("construct-" + cfg.name)
+
+
+def test_the_lock_is_released_after_a_run_and_after_a_failure(cfg, free_space):
+    lock = cache_dir() / f"construct-{cfg.name}.fetching"
+    run_construct(cfg, workers=1)
+    assert not lock.exists()
+    (work_dir(cfg) / "fragments/train/00000.parquet").unlink()
+    free_space[0] = 0
+    with pytest.raises(OutOfSpace):
+        run_construct(cfg, workers=1)
+    assert not lock.exists()
+
+
+@pytest.fixture
+def cfg_built(cfg) -> BuildConfig:
+    run_construct(cfg, workers=1)
+    return cfg
+
+
+@pytest.fixture
+def changed_plan(cfg_built) -> BuildConfig:
+    return dataclasses.replace(cfg_built, plan_version="v2")
+
+
+def test_plan_version_mismatch_refuses(cfg_built, changed_plan):
+    before = shard_mtimes(cfg_built)
+    with pytest.raises(PlanMismatch):
+        run_construct(changed_plan)
+    assert shard_mtimes(cfg_built) == before
+
+
+def test_a_new_plan_under_the_same_version_refuses(cfg_built, planned_rows):
+    write_plan(cfg_built, planned_rows[:2])
+    with pytest.raises(PlanMismatch, match="plan_sha256"):
+        run_construct(cfg_built)
+
+
+def test_another_ffmpeg_refuses_mixing_shards(cfg_built, monkeypatch):
+    monkeypatch.setattr(construct, "preflight", lambda _required: {"version": "0.0", "configuration": []})
+    with pytest.raises(PlanMismatch, match="ffmpeg"):
+        run_construct(cfg_built)
+
+
+def test_a_run_without_a_plan_says_so(raw):
+    with pytest.raises(FileNotFoundError, match="plan"):
+        run_construct(dataclasses.replace(SLICE, name="no-plan"))
+
+
+def test_the_stage_is_registered_and_passes_its_arguments(monkeypatch):
+    seen = []
+    monkeypatch.setattr(construct, "run_construct", lambda c, workers: seen.append((c.name, workers)))
+    cli.main(["construct", "--config", "slice", "--workers", "3"])
+    assert seen == [(SLICE.name, 3)]
+
+
+def test_workers_default_to_eleven(monkeypatch):
+    seen = []
+    monkeypatch.setattr(construct, "run_construct", lambda c, workers: seen.append((c.name, workers)))
+    cli.main(["construct", "--config", "full"])
+    assert seen == [("openvad-v1", 11)]
