@@ -24,3 +24,4 @@ uk							ADR 0025 leaves open whether ukrainian_mfa 3.0.0 or ukrainian_cv labels
 hr							ADR 0025 leaves open which model labels Croatian (croatian_mfa 2.0.0a or serbocroatian_mfa 3.3.0)	open
 sr							ADR 0025 leaves open which model labels Serbian (serbocroatian_mfa 3.3.0 has Serbian G2P)	open
 bs							ADR 0025: Bosnian has no model of its own	open
+ca							no model in mfa-models; VoxCommunis has one (CV 16) with no lexicon file listed, and ADR 0025's hand check names Catalan	open

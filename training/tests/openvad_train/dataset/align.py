@@ -105,7 +105,7 @@ def test_every_row_says_how_far_it_is_verified_and_open_choices_stay_open():
     models = load_models()
     assert {m.status for m in models.values()} <= {"downloaded", "listed", "open"}
     assert {lang for lang, m in models.items() if m.status == "downloaded"} == {"de"}
-    for language in ("cs", "bg", "uk"):
+    for language in ("cs", "bg", "uk", "ca"):
         assert models[language].status == "open"
         assert not models[language].acoustic
         with pytest.raises(ValueError, match="no MFA model is chosen"):

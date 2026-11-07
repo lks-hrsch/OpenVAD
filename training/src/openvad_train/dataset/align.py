@@ -908,7 +908,11 @@ def _write_manifest(
 def main(args: list[str]) -> None:
     parser = argparse.ArgumentParser(prog="dataset align", description=__doc__)
     parser.add_argument("--config", choices=("slice", "full"), required=True)
-    parser.add_argument("--languages", help="comma-separated language codes; default: every language of the index")
+    parser.add_argument(
+        "--languages",
+        help="comma-separated language codes; default: every language of the index, which stops at a language whose "
+        "row in mfa_models.tsv is `open` until the owner decides, so name the others here",
+    )
     ns = parser.parse_args(args)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     run_align({"slice": SLICE, "full": FULL}[ns.config], ns.languages.split(",") if ns.languages else None)
