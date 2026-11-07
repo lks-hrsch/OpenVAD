@@ -16,6 +16,7 @@ import polars as pl
 
 from openvad_train.dataset.codecs import _delay_table
 from openvad_train.dataset.config import FULL, SLICE, BuildConfig, dataset_root, work_dir
+from openvad_train.dataset.construct import PlanMismatch
 from openvad_train.dataset.labels import apply_gap_rule, rasterise
 from openvad_train.dataset.parquet_io import read_parquet, write_parquet
 from openvad_train.dataset.plan import PLAN_SCHEMA
@@ -115,6 +116,32 @@ def run_publish(cfg: BuildConfig) -> None:
         lock.unlink(missing_ok=True)
 
 
+def _check_fragments_belong_to_the_plan(
+    cfg: BuildConfig, plan_manifest: dict, plan_path: Path, fragments: Path, finished: set[str], planned: set[str]
+) -> None:
+    """Raise `PlanMismatch` before anything is written if the fragments came from another plan: a re-plan leaves old
+    shards whose rows and seeds the plan no longer has, and publishing them would read as complete.
+    """
+    for key, value in (("plan_version", cfg.plan_version), ("global_seed", cfg.global_seed)):
+        if plan_manifest.get(key) != value:
+            raise PlanMismatch(f"the plan has {key} {plan_manifest.get(key)!r}, the configuration {value!r}")
+    if not finished:
+        return
+    built_from = read_manifest(fragments)
+    if built_from is None:
+        raise PlanMismatch(f"{fragments} holds shards and no manifest: rerun construct")
+    expected = {
+        **{k: plan_manifest[k] for k in ("plan_version", "global_seed")},
+        "plan_sha256": file_hash(plan_path, "sha256"),
+    }
+    if changed := [key for key, value in expected.items() if built_from.get(key) != value]:
+        raise PlanMismatch(
+            f"{', '.join(changed)} differ between the plan and the shards in {fragments}: rerun construct"
+        )
+    if outside := sorted(finished - planned):
+        raise PlanMismatch(f"fragments for shards the plan does not have: {', '.join(outside)}")
+
+
 def _publish(cfg: BuildConfig) -> None:
     root, work = dataset_root(cfg), work_dir(cfg)
     plan_manifest = read_manifest(work / "plan")
@@ -126,6 +153,7 @@ def _publish(cfg: BuildConfig) -> None:
     fragment_paths = sorted(fragments.rglob("*.parquet"))
     finished = {p.relative_to(fragments).with_suffix("").as_posix() for p in fragment_paths}
     planned = set(plan.filter(pl.col("treatment") == "augmented")["shard"].unique())
+    _check_fragments_belong_to_the_plan(cfg, plan_manifest, work / "plan/plan.parquet", fragments, finished, planned)
     missing = sorted(planned - finished)
     data = root / "data"
     orphans = sorted(p.relative_to(data).with_suffix("").as_posix() for p in data.rglob("*.tar"))

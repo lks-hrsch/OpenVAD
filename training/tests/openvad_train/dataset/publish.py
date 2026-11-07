@@ -4,6 +4,8 @@
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 import asyncio
+import dataclasses
+import shutil
 import tarfile
 from pathlib import Path
 
@@ -15,7 +17,7 @@ from build_support import free_space, make_build  # noqa: F401 (free_space is a 
 from openvad_train.dataset import parquet_io
 from openvad_train.dataset.audio import load_audio
 from openvad_train.dataset.config import BuildConfig, dataset_root, work_dir
-from openvad_train.dataset.construct import run_construct
+from openvad_train.dataset.construct import PlanMismatch, run_construct
 from openvad_train.dataset.labels import rasterise
 from openvad_train.dataset.parquet_io import read_parquet
 from openvad_train.dataset.plan import PLAN_SCHEMA
@@ -237,6 +239,45 @@ def test_readme_names_the_three_files_and_no_data_directory(built):
         assert f"path: {split}.parquet" in readme
     assert "config_name: default" in readme
     assert "data/" not in readme.split("---")[1]
+
+
+def test_fragments_of_an_older_plan_are_refused_before_anything_is_written(data):
+    cfg = make_build(data)
+    run_construct(cfg, workers=1)
+    run_publish(cfg)
+    root = dataset_root(cfg)
+    before = {p.name: p.read_bytes() for p in root.glob("*.*")}
+    plan_path = work_dir(cfg) / "plan/plan.parquet"
+    asyncio.run(parquet_io.write_parquet({plan_path: asyncio.run(read_parquet(plan_path)).head(4).lazy()}))
+    with pytest.raises(PlanMismatch, match="plan_sha256"):
+        run_publish(cfg)
+    assert {p.name: p.read_bytes() for p in root.glob("*.*")} == before
+
+
+def test_a_plan_of_another_version_is_refused(data):
+    cfg = make_build(data)
+    run_construct(cfg, workers=1)
+    with pytest.raises(PlanMismatch, match="plan_version"):
+        run_publish(dataclasses.replace(cfg, plan_version="v2"))
+    assert not (dataset_root(cfg) / "train.parquet").exists()
+
+
+def test_a_fragment_outside_the_plan_is_refused(data):
+    cfg = make_build(data)
+    run_construct(cfg, workers=1)
+    fragments = work_dir(cfg) / "fragments"
+    shutil.copy(fragments / "train/00001.parquet", fragments / "train/00007.parquet")
+    with pytest.raises(PlanMismatch, match="train/00007"):
+        run_publish(cfg)
+    assert not (dataset_root(cfg) / "train.parquet").exists()
+
+
+def test_shards_without_a_fragments_manifest_are_refused(data):
+    cfg = make_build(data)
+    run_construct(cfg, workers=1)
+    (work_dir(cfg) / "fragments/manifest.json").unlink()
+    with pytest.raises(PlanMismatch, match="no manifest"):
+        run_publish(cfg)
 
 
 def test_publish_refuses_without_a_plan(data):
