@@ -42,6 +42,15 @@ A re-run skips a dataset whose manifest verifies (file count and bytes match) an
 - LibriVAD `medium` takes every 10th utterance of `train-clean-100` with 54 mixtures each, so about 10 h of unique speech appear 54 times by design.
 - `just fetch rirs` (not written yet) is to fetch the room impulse responses of BUT ReverbDB and OpenSLR 28 ([ADR 0021](../docs/project/adr/0021-telephone-channel-simulation.md)).
 
+## ffmpeg for dataset construction
+
+The dataset builder runs ffmpeg as a tool for the stored codec legs and checks the encoders it needs at start-up (`preflight`).
+The Nix dev shell provides `ffmpeg-full`, which has them all.
+Elsewhere, install an ffmpeg with `libopencore_amrnb` (AMR-NB), `libvo_amrwbenc` (AMR-WB), `libopus` and the built-in `g722`, for example configured with `--enable-version3 --enable-libopencore-amrnb --enable-libvo-amrwbenc --enable-libopus`.
+`ffmpeg -encoders | grep -E "amr|opus|g722"` lists them.
+ffmpeg stays a separate process, so none of its GPL or version-3 code is linked into the release.
+`dataset/codec_delays.json` records the ffmpeg version its delays were measured with.
+
 ## Layout
 
 ```text

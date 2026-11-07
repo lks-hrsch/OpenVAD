@@ -171,7 +171,7 @@
                 rust
                 pkgs.maturin
                 pkgs.uv
-                pkgs.ffmpeg
+                pkgs.ffmpeg-full
                 pkgs.python312
                 pkgs.just
                 pkgs.typos
