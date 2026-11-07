@@ -181,6 +181,8 @@ def _publish(cfg: BuildConfig) -> None:
     }
     written[root / "index.parquet"] = rows.select(INDEX_COLUMNS).lazy()
     root.mkdir(parents=True, exist_ok=True)
+    # A kill between the Parquet files and the new manifest must not leave the old "complete" over new rows.
+    (root / "manifest.json").unlink(missing_ok=True)
     asyncio.run(write_parquet(written))
     (root / "README.md").write_text(_README)
 

@@ -13,7 +13,7 @@ import soundfile as sf
 
 from build_support import free_space, make_build  # noqa: F401 (free_space is a fixture)
 from openvad_train.dataset import __main__ as cli
-from openvad_train.dataset import parquet_io, verify
+from openvad_train.dataset import parquet_io, publish, verify
 from openvad_train.dataset.config import BuildConfig, dataset_root, work_dir
 from openvad_train.dataset.construct import run_construct
 from openvad_train.dataset.parquet_io import read_parquet, write_parquet
@@ -236,6 +236,27 @@ def test_a_set_small_killed_between_its_renames_is_found_and_repaired_by_a_rerun
         run_verify(built)
     set_small(root, hours=1.0)
     run_verify(built)
+
+
+def test_a_publish_killed_before_its_manifest_leaves_no_complete_set(built):
+    (work_dir(built) / "fragments/test/00000.parquet").unlink()
+
+    def killed(root, info):
+        raise KeyboardInterrupt
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(publish, "write_manifest", killed)
+        with pytest.raises(KeyboardInterrupt):
+            run_publish(built)
+    with pytest.raises(VerifyError, match="run publish"):
+        run_verify(built)
+
+
+def test_a_manifest_that_counts_other_samples_than_the_files_fails_verify(built):
+    edit(built, "test", lambda f: f.head(1))
+    edit(built, "index", lambda f: f.filter(pl.col("sample_id") != "librivad/l1"))
+    with pytest.raises(VerifyError, match=r"manifest.json says test has 2 samples, the file has 1"):
+        run_verify(built)
 
 
 def test_the_command_prints_the_report(built, monkeypatch, capsys):

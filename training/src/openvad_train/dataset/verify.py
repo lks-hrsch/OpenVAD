@@ -179,6 +179,11 @@ def run_verify(cfg: BuildConfig) -> VerifyReport:
         index = asyncio.run(read_parquet(root / "index.parquet"))
         rows = pl.concat([f.with_columns(split=pl.lit(s)) for s, f in frames.items()])
         problems: list[str] = []
+        for split, frame in frames.items():
+            if manifest["samples"][split] != frame.height:
+                problems.append(
+                    f"manifest.json says {split} has {manifest['samples'][split]} samples, the file has {frame.height}"
+                )
         for name, recorded in manifest["raw_sources"].items():
             if file_hash(raw_dir(name) / "manifest.json", "sha256") != recorded:
                 problems.append(f"{name}: the raw manifest changed since publish, so the set is stale")
