@@ -270,14 +270,20 @@ def _provenance(tools: Tools, models: Models) -> str:
 # ---------------------------------------------------------------------------------------------------- text
 
 
+def _is_edge(char: str) -> bool:
+    category = unicodedata.category(char)
+    return category[0] in "PS" or category == "Cf"
+
+
 def _strip_edges(word: str) -> str:
-    """`word` without leading and trailing punctuation and symbols (Unicode categories P and S). Marks (M) stay: Thai
-    vowels and tones, and the accents of text that is not precomposed, are part of the word.
+    """`word` without leading and trailing punctuation, symbols and format characters (Unicode categories P, S and
+    Cf: a byte order mark, a zero-width space, direction marks). Marks (M) stay: Thai vowels and tones, and the
+    accents of text that is not precomposed, are part of the word.
     """
     start, end = 0, len(word)
-    while start < end and unicodedata.category(word[start])[0] in "PS":
+    while start < end and _is_edge(word[start]):
         start += 1
-    while end > start and unicodedata.category(word[end - 1])[0] in "PS":
+    while end > start and _is_edge(word[end - 1]):
         end -= 1
     return word[start:end]
 
@@ -293,7 +299,7 @@ def prepare_transcript(text: str, language: str) -> str | None:
     words = []
     for token in unicodedata.normalize("NFC", text).split():
         for part in re.split(r"(\d+)", token) if language in ("ja", "zh") else [token]:
-            if word := _strip_edges(part):
+            if (word := _strip_edges(part)) and any(c.isalnum() for c in word):  # not a lone combining mark
                 words.append("<unk>" if any(c.isdigit() for c in word) else word)
     return " ".join(words) if any(w != "<unk>" for w in words) else None
 

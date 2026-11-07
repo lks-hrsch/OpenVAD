@@ -70,6 +70,14 @@ def test_text_that_is_not_precomposed_is_composed_and_keeps_its_accents():
     assert prepare_transcript("\u00ab r\u00e9sum\u00e9 \u00bb \u20ac5 \u2014 ok", "fr") == "r\u00e9sum\u00e9 <unk> ok"
 
 
+def test_format_characters_at_a_word_edge_go_and_a_lone_combining_mark_is_no_word():
+    assert prepare_transcript("\ufeffhallo welt\u200b", "de") == "hallo welt"  # byte order mark, zero-width space
+    assert prepare_transcript("\u200fhallo\u200e \u200b", "ar") == "hallo"  # direction marks, a lone zero-width space
+    assert prepare_transcript("hallo \u0301 welt", "de") == "hallo welt"
+    assert prepare_transcript("\u0301 \u200b", "de") is None
+    assert prepare_transcript("zero\u200bwidth", "de") == "zero\u200bwidth"  # inside a word it stays
+
+
 def test_chinese_and_japanese_digit_runs_become_unk_inside_a_token():
     assert prepare_transcript("我有12只狗", "zh") == "我有 <unk> 只狗"
     assert prepare_transcript("12", "ja") is None
