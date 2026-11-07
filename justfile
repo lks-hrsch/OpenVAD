@@ -111,8 +111,13 @@ build-mfa:
         mv "$3.part" "$3"
     }
 
-    # Each stamp is written last, so a half-finished step is redone and a finished one is skipped.
+    # Each stamp is written last and names the upstream versions it was built from, so a half-finished
+    # step is redone and a finished one is skipped. A step that runs also removes the stamps of the steps
+    # after it (OpenFst, Kaldi, pynini, kalpy-kaldi), so they are redone against it.
+    pynini=2.1.7
+    feedstock=9aed7bb122e77fc1d73a2c62070f5b003e5e956d
     if [ ! -f "$dist/.openfst-$fst" ]; then
+        rm -f "$dist"/.openfst-* "$dist"/.kaldi-* "$dist"/.pynini-* "$dist"/.kalpy-*
         tarball="$work/openfst-$fst.tar.gz"
         fetch "https://www.openfst.org/twiki/pub/FST/FstDownload/openfst-$fst.tar.gz" "$fst_sha256" "$tarball"
         tar -xzf "$tarball" -C "$work"
@@ -121,9 +126,9 @@ build-mfa:
         touch "$dist/.openfst-$fst"
     fi
 
-    if [ ! -f "$dist/.kaldi-$kaldi_commit" ]; then
-        rebuilt=1
-        rm -f "$dist"/.kaldi-*
+    kaldi_stamp="$dist/.kaldi-$kaldi_commit-openfst$fst"
+    if [ ! -f "$kaldi_stamp" ]; then
+        rm -f "$dist"/.kaldi-* "$dist"/.kalpy-*
         blas=()
         [ -z "${OPENBLAS_ROOT:-}" ] || blas=(--mathlib=OPENBLAS --openblas-root="$OPENBLAS_ROOT")
         (cd tools/kaldi/src && ./configure --shared --use-cuda=no --fst-root="$dist" --fst-version="$fst" ${blas[@]+"${blas[@]}"} \
@@ -146,16 +151,16 @@ build-mfa:
         for exe in tools/kaldi/src/*bin/*; do
             [ -f "$exe" ] && [ -x "$exe" ] && case "$exe" in *.*) ;; *) ln -sf "$PWD/$exe" "$dist/bin/" ;; esac
         done
-        touch "$dist/.kaldi-$kaldi_commit"
+        touch "$kaldi_stamp"
     fi
 
     # kalpy-kaldi casts pywrapfst objects through _pywrapfst.h, which only a pynini with the conda-forge
     # "Add API declarations" patch generates; the PyPI pynini lacks it. So pynini is built here from its
     # sdist plus that patch, against the OpenFst in dist, and installed into the env after the sync.
-    pynini=2.1.7
     pynini_dir="$work/pynini-$pynini"
-    if [ ! -f "$dist/.pynini-$pynini" ]; then
-        feedstock=9aed7bb122e77fc1d73a2c62070f5b003e5e956d
+    pynini_stamp="$dist/.pynini-$pynini-feedstock${feedstock:0:7}-openfst$fst"
+    if [ ! -f "$pynini_stamp" ]; then
+        rm -f "$dist"/.pynini-* "$dist"/.kalpy-*
         rm -rf "$pynini_dir" "$work"/wheels
         fetch https://files.pythonhosted.org/packages/c6/b6/09a0efe843df37d9c80a9a1c190c7bb28d8920cee401e2a61c46f1328ec1/pynini-$pynini.tar.gz \
             fc06cc02adcbd4b14eb94ae9f2a0949d110612d2d4ee3a7ac5dc97b45fff8e33 "$work/pynini.tar.gz"
@@ -166,17 +171,22 @@ build-mfa:
         CPPFLAGS="-I$dist/include" LDFLAGS="-L$dist/lib -Wl,-rpath,$dist/lib" \
             uv build --wheel --out-dir "$work/wheels" "$pynini_dir"
         cp "$pynini_dir/extensions/_pywrapfst.h" "$dist/include/_pywrapfst.h"
-        touch "$dist/.pynini-$pynini"
+        touch "$pynini_stamp"
     fi
 
-    # kalpy-kaldi is cached by uv as a wheel, so force it to be rebuilt against a new Kaldi.
+    # uv keeps an installed kalpy-kaldi and reuses its cached wheel even for --reinstall-package, so without the
+    # kalpy stamp (also missing after an interrupted run) it syncs with --no-cache and compiles the package again,
+    # against the Kaldi and OpenFst of this run. (uv cache clean would wait for every running uvx tool.)
+    kalpy_stamp="$dist/.kalpy-$kaldi_commit-openfst$fst-pynini$pynini"
+    [ -f "$kalpy_stamp" ] || rebuilt=1
     # Its CMake build needs pybind11's config dir, which only the pip package has, inside the package.
     pybind11_dir=$(uvx --from pybind11==3.1.0 pybind11-config --cmakedir)
     KALDI_ROOT="$dist" CMAKE_ARGS="-Dpybind11_DIR=$pybind11_dir" CMAKE_BUILD_PARALLEL_LEVEL="$jobs" \
         LDFLAGS="-Wl,-rpath,$dist/lib" \
-        uv sync --inexact --project tools/mfa ${rebuilt:+--reinstall-package kalpy-kaldi}
+        uv sync --inexact --project tools/mfa ${rebuilt:+--reinstall-package kalpy-kaldi --no-cache}
     venv=$(uv run --project tools/mfa --no-sync python -c 'import sys; print(sys.prefix)')
     uv pip install --python "$venv/bin/python" --no-deps --reinstall "$work"/wheels/pynini-*.whl
+    touch "$kalpy_stamp"
 
 # run mfa from tools/mfa with the Kaldi binaries on PATH (after build-mfa)
 mfa *args:
