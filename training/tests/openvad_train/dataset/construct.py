@@ -23,7 +23,6 @@ import polars as pl
 import pytest
 import soundfile as sf
 
-from openvad_train.dataset import __main__ as cli
 from openvad_train.dataset import codecs, construct
 from openvad_train.dataset.audio import load_audio
 from openvad_train.dataset.codecs import DecodeError, MissingCodec
@@ -1011,20 +1010,6 @@ def test_a_deleted_build_manifest_does_not_let_a_new_plan_keep_old_shards(cfg_bu
 def test_a_run_without_a_plan_says_so(raw):
     with pytest.raises(FileNotFoundError, match="plan"):
         run_construct(dataclasses.replace(SLICE, name="no-plan"))
-
-
-def test_the_stage_is_registered_and_passes_its_arguments(monkeypatch):
-    seen = []
-    monkeypatch.setattr(construct, "run_construct", lambda c, workers: seen.append((c.name, workers)))
-    cli.main(["construct", "--config", "slice", "--workers", "3"])
-    assert seen == [(SLICE.name, 3)]
-
-
-def test_workers_default_to_eleven(monkeypatch):
-    seen = []
-    monkeypatch.setattr(construct, "run_construct", lambda c, workers: seen.append((c.name, workers)))
-    cli.main(["construct", "--config", "full"])
-    assert seen == [("openvad-v1", 11)]
 
 
 def test_unreadable_sources_abort_the_run_and_a_rerun_repairs_it(cfg, planned_rows, raw):

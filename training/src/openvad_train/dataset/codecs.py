@@ -198,10 +198,10 @@ def decode_16k(path: str, offset_s: float, duration_s: float) -> np.ndarray:
     the last Ogg page are not exact (up to 832 source samples off), so a read starting within 5 s of the end seeks
     to 5 s before the end and slices. A file at a rate other than 16 kHz is read with 100 ms of context on each
     side, resampled by ffmpeg through a pipe (version recorded in the manifest, ADR 0009) and trimmed, so the
-    resampler's edges do not touch the result. The start is rounded to the nearest source sample, which is at most
-    62 us off for rates above 8 kHz. A long file soundfile cannot open (for example an Ogg with a Skeleton stream)
-    is decoded by ffmpeg from the start without seeking and sliced, which is exact but costs time in proportion to
-    `offset_s`.
+    resampler's edges do not touch the result. The start is rounded to the nearest source sample and the trim to
+    the nearest 16 kHz sample, which is at most half a source sample plus 31 us off, so 77 us at 11025 Hz. A long
+    file soundfile cannot open (for example an Ogg with a Skeleton stream) is decoded by ffmpeg from the start
+    without seeking and sliced, which is exact but costs time in proportion to `offset_s`.
     """
     if offset_s < 0 or duration_s < 0:
         raise ValueError(f"offset and duration must not be negative, got {offset_s} and {duration_s}")

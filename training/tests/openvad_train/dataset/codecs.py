@@ -483,7 +483,7 @@ def test_a_file_at_the_limit_stays_on_the_whole_file_route(tmp_path, monkeypatch
 
 
 @needs_ffmpeg
-def test_a_stream_without_a_known_duration_takes_the_seek_route(tmp_path, monkeypatch):
+def test_a_stream_without_a_known_duration_is_treated_as_long(tmp_path, monkeypatch):
     real = codecs._run
 
     def unknown_duration(cmd, data, error):
@@ -496,7 +496,11 @@ def test_a_stream_without_a_known_duration_takes_the_seek_route(tmp_path, monkey
     path = tmp_path / "n.m4a"
     subprocess.run(["ffmpeg", "-v", "error", "-i", str(src), "-c:a", "aac", str(path)], check=True)
     monkeypatch.setattr(codecs, "_run", unknown_duration)
-    assert codecs._probe(str(path))[2] == float("inf")
+    verified = []
+    monkeypatch.setattr(codecs, "_verify_intact", verified.append)
+    monkeypatch.setattr(codecs, "_decode_whole_file", lambda *_args: pytest.fail("took the whole-file route"))
+    assert len(decode_16k(str(path), 1.0, 1.0)) == 16000
+    assert verified == [str(path)]
 
 
 @needs_ffmpeg
@@ -508,7 +512,9 @@ def test_both_routes_agree_on_a_short_file(tmp_path, monkeypatch, rate):
     monkeypatch.setattr(codecs, "_LONG_FILE_S", 0.0)
     seek = decode_16k(str(path), 4.0, 3.0)
     assert len(whole) == len(seek) == 48000
-    np.testing.assert_allclose(whole, seek, atol=2e-3)
+    assert np.argmax(signal.correlate(whole, seek, mode="full", method="fft")) - (len(seek) - 1) == 0
+    # About 1e-6 measured on real Common Voice MP3s.
+    np.testing.assert_allclose(whole, seek, atol=5e-6)
 
 
 @needs_ffmpeg

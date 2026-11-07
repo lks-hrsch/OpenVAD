@@ -6,6 +6,8 @@
 import pytest
 
 from openvad_train.dataset import __main__ as cli
+from openvad_train.dataset import construct
+from openvad_train.dataset.config import SLICE
 
 
 def test_unimplemented_stage_is_an_error():
@@ -18,3 +20,17 @@ def test_stage_receives_its_arguments(monkeypatch):
     monkeypatch.setitem(cli.STAGES, "index", seen.append)
     cli.main(["index", "--source", "swc"])
     assert seen == [["--source", "swc"]]
+
+
+def test_the_stage_is_registered_and_passes_its_arguments(monkeypatch):
+    seen = []
+    monkeypatch.setattr(construct, "run_construct", lambda c, workers: seen.append((c.name, workers)))
+    cli.main(["construct", "--config", "slice", "--workers", "3"])
+    assert seen == [(SLICE.name, 3)]
+
+
+def test_workers_default_to_eleven(monkeypatch):
+    seen = []
+    monkeypatch.setattr(construct, "run_construct", lambda c, workers: seen.append((c.name, workers)))
+    cli.main(["construct", "--config", "full"])
+    assert seen == [("openvad-v1", 11)]
