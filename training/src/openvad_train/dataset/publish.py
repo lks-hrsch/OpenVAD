@@ -69,14 +69,16 @@ Build provenance is in `manifest.json`.
 """
 
 
-def _git_commit() -> str | None:
+def _git_state(repo: Path) -> tuple[str | None, bool | None]:
+    """`HEAD` of the repository around `repo` and whether the working tree differs from it (ignored files do not
+    count), so a manifest never names a commit that could not have written it. Both are None without git.
+    """
     try:
-        done = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=Path(__file__).parent, capture_output=True, text=True, check=True
-        )
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True)
+        status = subprocess.run(["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True, check=True)
     except (OSError, subprocess.CalledProcessError):
-        return None
-    return done.stdout.strip()
+        return None, None
+    return head.stdout.strip(), bool(status.stdout.strip())
 
 
 def _as_is_with_labels(rows: pl.DataFrame) -> pl.DataFrame:
@@ -187,6 +189,7 @@ def _publish(cfg: BuildConfig) -> None:
     (root / "README.md").write_text(_README)
 
     fragments_manifest = read_manifest(fragments) or {}
+    commit, dirty = _git_state(Path(__file__).parent)
     write_manifest(
         root,
         {
@@ -195,7 +198,8 @@ def _publish(cfg: BuildConfig) -> None:
             "state": "interim" if missing else "complete",
             "plan_version": cfg.plan_version,
             "global_seed": cfg.global_seed,
-            "commit": _git_commit(),
+            "commit": commit,
+            "commit_dirty": dirty,
             "ffmpeg": fragments_manifest.get("ffmpeg"),
             # Null until the OpenVAD resampler exists (Task 11).
             "resampler_sha256": None,

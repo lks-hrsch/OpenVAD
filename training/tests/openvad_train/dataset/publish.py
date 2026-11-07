@@ -6,6 +6,7 @@
 import asyncio
 import dataclasses
 import shutil
+import subprocess
 import tarfile
 from pathlib import Path
 
@@ -21,7 +22,7 @@ from openvad_train.dataset.construct import PlanMismatch, run_construct
 from openvad_train.dataset.labels import rasterise
 from openvad_train.dataset.parquet_io import read_parquet
 from openvad_train.dataset.plan import PLAN_SCHEMA
-from openvad_train.dataset.publish import PLAN_ONLY, run_publish, set_small
+from openvad_train.dataset.publish import PLAN_ONLY, _git_state, run_publish, set_small
 from openvad_train.fetch.common import file_hash, read_manifest
 
 
@@ -222,6 +223,39 @@ def test_manifest_records_provenance(built_with_as_is, data):
     assert set(m["raw_sources"]) == {"ami", "demand", "librivad", "swc"}
     for name, digest in m["raw_sources"].items():
         assert digest == file_hash(data / "datasets/raw" / name / "manifest.json", "sha256")
+
+
+def test_the_manifest_says_whether_the_working_tree_was_dirty(built):
+    m = read_manifest(dataset_root(built))
+    assert m is not None
+    assert isinstance(m["commit_dirty"], bool)
+    assert len(m["commit"]) == 40
+
+
+def test_git_state_names_head_and_sees_every_change_except_ignored_files(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
+    for args in (["init", "-q"], ["config", "core.excludesFile", "/dev/null"]):
+        subprocess.run([*git, *args], cwd=repo, check=True)
+    (repo / ".gitignore").write_text("ignored.txt\n")
+    (repo / "a.txt").write_text("a")
+    subprocess.run([*git, "add", "."], cwd=repo, check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "x"], cwd=repo, check=True)
+    head = subprocess.run(
+        [*git, "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    (repo / "ignored.txt").write_text("x")
+    assert _git_state(repo) == (head, False)
+    (repo / "a.txt").write_text("changed")
+    assert _git_state(repo) == (head, True)
+    subprocess.run([*git, "checkout", "-q", "a.txt"], cwd=repo, check=True)
+    (repo / "new.txt").write_text("untracked")
+    assert _git_state(repo) == (head, True)
+
+
+def test_git_state_without_a_repository_is_none(tmp_path):
+    assert _git_state(tmp_path) == (None, None)
 
 
 def test_a_missing_raw_manifest_fails_before_any_file_is_written(data):
