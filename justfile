@@ -55,7 +55,7 @@ guard-engine:
 
 # build the thesis PDF into docs/thesis/build
 thesis:
-    @test -f docs/tudcd-scr/source/tudcd.ins || { echo 'docs/tudcd-scr is empty: run `git submodule update --init`' >&2; exit 1; }
+    @test -f docs/tudcd-scr/source/tudcd.ins || { echo 'docs/tudcd-scr is empty: run `git submodule update --init docs/tudcd-scr`' >&2; exit 1; }
     cd docs/thesis && latexmk
 
 # rebuild a document on every save, e.g. `just watch thesis`

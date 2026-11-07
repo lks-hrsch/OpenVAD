@@ -25,5 +25,5 @@ Then, still inside `docs/`, run `just thesis`, or `just watch thesis` to rebuild
 The thesis only has to build in the Nix docs shell; machines without Nix, such as the TU Dresden HPC, need not build it.
 
 Install a TeX Live newer than 2023.3 (tudcd-scr needs it) with LuaLaTeX, biber and latexmk.
-Run `git submodule update --init` and then `cd docs/tudcd-scr && l3build install` to install the classes into your `TEXMFHOME`.
+Run `git submodule update --init docs/tudcd-scr` and then `cd docs/tudcd-scr && l3build install` to install the classes into your `TEXMFHOME`.
 Then run `just thesis` from the repository root.

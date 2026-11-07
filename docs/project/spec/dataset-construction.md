@@ -353,20 +353,20 @@ Fixed now (owner, 2026-11-06), which answers ADR 0009's open question.
 
 ### MFA in `tools/`
 
-The owner wants the latest release, built from source inside the uv workspace (owner, 2026-11-06).
+The owner wants the latest release, built from source from submodules (owner, 2026-11-06). The details, pins, build steps and licences are in `tools/README.md`.
 
 - `tools/montreal-forced-aligner`: git submodule pinned to the tag of the latest release, v3.4.3 (2026-10-08). Never `main`, which is heading to 4.0 and removes the tokenisers.
-- `tools/kaldi`: git submodule at a pinned commit, compiled as shared libraries by `just build-mfa`.
-- An optional `align` dependency group holds the editable MFA, `kalpy-kaldi` built against `KALDI_ROOT`, and `pynini`. `just setup` and `uv sync --all-packages` must keep working without Kaldi.
-- `initdb` and `pg_ctl` come from the system. They are a documented requirement.
+- `tools/kaldi`: git submodule at a pinned commit, compiled as shared libraries into `tools/kaldi/dist` (the `KALDI_ROOT`) by `just build-mfa`.
+- `tools/mfa` is a uv project of its own (fallback 1 below, taken because an editable path source on an unfetched submodule breaks `uv sync`). It holds the editable MFA, `kalpy-kaldi` built against `KALDI_ROOT`, and the packages MFA needs; `pynini` is built by the recipe with the conda-forge API patch that `kalpy-kaldi` needs. `just setup` and `uv sync --all-packages` work without the submodules, and `just mfa <args>` runs `mfa`.
+- `initdb` and `pg_ctl` come from the system, from a PostgreSQL server with pgvector. They are a documented requirement.
 - Target machine: the NixOS x86_64 workstation.
 
 Facts from PyPI (2026-11-06): MFA is `py3-none-any`; `pynini` has a cp312 manylinux wheel; `kalpy-kaldi` is source only; `baumwelch` is not on PyPI, and the PyPI `ngram` looks like an unrelated package.
-Both should be needed only for training models, not for aligning with pretrained ones. The pilot verifies this.
+Both should be needed only for training models, not for aligning with pretrained ones. The first build on macOS aligned with `german_mfa` without either (`tools/README.md`); the pilot confirms this on the workstation.
 
 Fallbacks, tried in order if a pilot gate fails:
 
-1. A separate uv project in `tools/mfa/`, if the sdist breaks the workspace `uv lock`.
+1. A separate uv project in `tools/mfa/`, if the sdist breaks the workspace `uv lock` or `uv sync`. Taken, because of the sync.
 2. conda-forge `kaldi` as `KALDI_ROOT` only, if compiling Kaldi fails. This needs a note to the owner, since it is a second tool.
 
 ### New dependencies
@@ -392,7 +392,7 @@ Each milestone ends in something runnable, and later ones build on it.
 | Gate | Pass | If it fails |
 | --- | --- | --- |
 | FLAC ratio on milestone 1 | measured | new size estimate goes to the checkpoint |
-| MFA builds in the workspace | `mfa align` runs on German with a pretrained model | fallbacks above |
+| MFA builds from the submodules | `mfa align` runs on German with a pretrained model | fallbacks above |
 | `*_cv` models on MFA 3.4.3 | pilot languages align | rule-based lexicon route, then the failure rule |
 | Japanese and Mandarin tokenisers | clips align | failure rule |
 | Quality bar | automatic bar and hand check reported | failure rule |

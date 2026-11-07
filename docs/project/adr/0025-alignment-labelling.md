@@ -15,12 +15,12 @@ The aligner facts behind it, including models per language, accuracy and licence
 - Word alignments come from the Montreal Forced Aligner (MFA) with pretrained acoustic models, dictionaries and grapheme-to-phoneme (G2P) models, one per language (owner, 2026-11-03); we do not train our own aligners.
 - Some of these models were trained partly on NC data or on GlobalPhone. They are labelling tools and are not shipped ([0024](0024-training-data-licence-policy.md)).
 - The labelling runs when the dataset generator needs it, in batches of clips taken in rank order per speaker, one MFA run per batch, so each speaker's clips stay together for fMLLR. Audio is read from a temporary local copy on the workstation ([0024](0024-training-data-licence-policy.md)).
-- MFA is the latest release, v3.4.3 (2026-10-08), built from source inside the uv workspace (owner, 2026-11-06):
+- MFA is the latest release, v3.4.3 (2026-10-08), built from source from submodules (owner, 2026-11-06):
   - `tools/montreal-forced-aligner` is a git submodule pinned to that tag, never `main`, which is heading to 4.0 and removes the tokenisers;
-  - `tools/kaldi` is a git submodule at a pinned commit, compiled as shared libraries by `just build-mfa`;
-  - an optional `align` dependency group holds the editable MFA, `kalpy-kaldi` built against `KALDI_ROOT`, and `pynini`, so `just setup` keeps working without Kaldi;
-  - `initdb` and `pg_ctl` come from the system and are a documented requirement.
-- If the pilot shows MFA does not build in the workspace, the fallbacks in order are a separate uv project in `tools/mfa/`, then conda-forge `kaldi` as `KALDI_ROOT` only, which needs a note to the owner.
+  - `tools/kaldi` is a git submodule at a pinned commit, compiled as shared libraries into `tools/kaldi/dist` by `just build-mfa`;
+  - the editable MFA, `kalpy-kaldi` built against `KALDI_ROOT`, and the packages MFA needs live in the separate uv project `tools/mfa`, not in the root workspace, so `just setup` and `uv sync` work without the submodules (the first fallback below, taken because an editable path source on a submodule that is not checked out breaks `uv sync`); `just mfa <args>` runs it;
+  - `initdb` and `pg_ctl` come from a PostgreSQL server with pgvector, a documented requirement; the other build requirements, the pinned versions and the licences are in `tools/README.md`.
+- If a later change breaks the build, the next fallback is conda-forge `kaldi` as `KALDI_ROOT` only, which needs a note to the owner.
 - Which model labels which language follows the recommendation in [`docs/notes/forced-alignment.md`](../../notes/forced-alignment.md#which-aligner-for-which-language).
 - Kazakh has `kazakh_cv` 2.0.0 (`acoustic/kazakh/cv/v2.0.0` in `MontrealCorpusTools/mfa-models`, checked 2026-11-04).
 - Japanese and Mandarin transcripts need word segmentation before alignment; they use the MFA 3.4.3 tokenisers. Digits map to `<unk>`.

@@ -1,6 +1,6 @@
 # A uv project of its own, outside the workspace in the repo root: an editable path source on a
 # submodule that is not checked out breaks `uv sync` for everyone, and kalpy-kaldi needs KALDI_ROOT.
-# Use `just build-mfa`, then `uv run --project tools/mfa mfa version`. See tools/README.md.
+# Use `just build-mfa`, then `just mfa version`. See tools/README.md.
 [project]
 name = "openvad-mfa"
 version = "0.0.0"

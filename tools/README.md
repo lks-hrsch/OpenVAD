@@ -1,7 +1,7 @@
 # Tools
 
 Third-party tools that run next to OpenVAD and never enter the release: the Montreal Forced Aligner (MFA) and Kaldi, which labels are built from ([ADR 0025](../docs/project/adr/0025-alignment-labelling.md), [dataset construction spec](../docs/project/spec/dataset-construction.md#mfa-in-tools)).
-Only people who align need any of this. `just setup` and `uv sync` never touch it.
+Only people who align need any of this: `just setup`, `uv sync` and the Nix shells never fetch the submodules, which only `just build-mfa` does.
 
 ## Layout
 
@@ -9,8 +9,8 @@ Only people who align need any of this. `just setup` and `uv sync` never touch i
 | :-- | :-- |
 | `montreal-forced-aligner` | git submodule, tag `v3.4.3` (2026-10-08) |
 | `kaldi` | git submodule, commit `f4007661023b98b8081fd875029f0dee62242fd1` |
-| `mfa` | uv project (`openvad-mfa`) with its own `uv.lock`: editable MFA, `kalpy-kaldi==0.10.5` and the runtime packages MFA needs but does not declare (`pgvector`, `psycopg2-binary`) |
-| `kaldi/build`, `kaldi/dist` | build output of `just build-mfa`, git-ignored |
+| `mfa` | uv project (`openvad-mfa`) with its own `uv.lock`: editable MFA, `kalpy-kaldi==0.10.5` and the runtime packages MFA needs but does not declare (`pgvector`, `psycopg2-binary`, `jinja2`) |
+| `kaldi/build`, `kaldi/dist` | build output of `just build-mfa`, untracked (`ignore = untracked` on the submodule keeps it out of `git status`) |
 
 `mfa` is a project of its own, not a dependency group of the root workspace.
 A group with an editable path source on `tools/montreal-forced-aligner` made `uv sync --all-packages` fail in a clone whose submodule was not fetched (`does not appear to be a Python project`), so every `just setup` and `uv run` would have needed the submodules.
@@ -23,7 +23,8 @@ Run it with `uv run --project tools/mfa ...`, or `just mfa <args>`, which also p
 - Kaldi: `f4007661023b98b8081fd875029f0dee62242fd1` (merge of PR #4974, 2025-07-22). kalpy has no Kaldi pin of its own: its CI (`.github/workflows/main.yml`) installs `environment.yml` from conda-forge, which asks for `kaldi=*=*cpu*`. The conda-forge `kaldi-feedstock` recipe (`recipe/meta.yaml`, read on 2026-11-07) builds version `5.5.1172` from exactly this commit, so it is the Kaldi that `kalpy-kaldi` 0.10.x is built and tested against. The commit exists in `kaldi-asr/kaldi` (GitHub API).
 - OpenFst `1.8.4`, the version Kaldi's `tools/Makefile` defaults to and `kalpy-kaldi` compiles against (`-DOPENFST_VER=18400`). The recipe downloads `openfst-1.8.4.tar.gz` from openfst.org and checks SHA-256 `a8ebbb6f3d92d07e671500587472518cfc87cb79b9a654a5a8abb2d0eb298016` (computed on 2026-11-07, the site publishes none).
 
-The submodules are full clones, not `shallow = true`: the flake sets `self.submodules`, and Nix refuses an initialised shallow submodule (`is a shallow Git repository, so 'revCount' is not available`), which would break `nix develop` and direnv.
+The submodules are shallow (`shallow = true`, fetched with `--depth 1` by the pinned SHA). That is safe for Nix because `flake.nix` no longer sets `self.submodules` (it did, and Nix then refused an initialised shallow submodule: `is a shallow Git repository, so 'revCount' is not available`). A shallow fetch of the pinned commit brings the tag `v3.4.3` with it, so `setuptools_scm` gives MFA the version 3.4.3.
+Kaldi's `src/configure` starts with `#!/bin/bash`, as do its makefiles' `SHELL`, and stock NixOS has no `/bin/bash`. Only on such a machine does the recipe pass `SHELL=<bash on PATH>` to every Kaldi `make` and rewrite that one shebang in the submodule, marked `git update-index --skip-worktree` and restored at the start of the next run, so moving the pin does not fail on it.
 
 ## Requirements
 
@@ -58,9 +59,16 @@ The directory is `dist`, not `install`, because Kaldi ships a file called `INSTA
 
 MFA checks that the Kaldi binaries (`compute-mfcc-feats`, `gmm-align-compiled` and others) and `fstcompile` are on `PATH` before most commands, and `mfa` also needs a PostgreSQL server; `just mfa` sets `PATH`, and MFA starts its own server on first use.
 
+## Using it
+
+- `uv sync --project tools/mfa` without `--inexact` uninstalls the pynini wheel, which is not in `tools/mfa/pyproject.toml`; `mfa` then fails at import. `just build-mfa` puts it back and always syncs with `--inexact`.
+- A clean `mfa align` exit does not mean every clip aligned. Clips that fail feature generation (silence, noise, a transcript far too long for the audio, a missing `.lab`) get no TextGrid and at most one log warning and a row with blank likelihoods in `alignment_analysis.csv`; a corrupt audio file aborts the whole run with exit 1 and no output. A batch must therefore validate its audio first and compare the clip IDs it sent with the TextGrids it got.
+- Words missing from the dictionary keep their spelling in the words tier and get `spn` in the phones tier, so counting words proves nothing about them; look for `spn`.
+- On macOS (Accelerate, `german_mfa`), aligning needed none of `baumwelch` and OpenGrm `ngram`, which the build does not provide; it did need `fstcompile` and the Kaldi executables on `PATH`.
+
 ## Licences
 
-Checked in each repository on 2026-11-07. All four run as tools, are not linked into OpenVAD and do not enter the release.
+Checked in each repository on 2026-11-07. All five run as tools, are not linked into OpenVAD and do not enter the release.
 
 | Tool | Licence | Checked in |
 | :-- | :-- | :-- |
@@ -70,4 +78,4 @@ Checked in each repository on 2026-11-07. All four run as tools, are not linked 
 | pynini 2.1.7 | Apache-2.0 | `LICENSE` and `PKG-INFO` of the sdist |
 | OpenFst 1.8.4 | Apache-2.0 | `COPYING` of the tarball |
 
-No GPL and no unlicensed component.
+No GPL and no unlicensed component. The environment in `tools/mfa/.venv` also holds two LGPL libraries, `psycopg2-binary` (LGPL with exceptions) and `soxr` (LGPL-2.1-or-later, a dependency of librosa); like the rest they run as tools and are not in the release.

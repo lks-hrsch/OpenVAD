@@ -236,7 +236,7 @@ VoxCommunis itself (`pacscilab/VoxCommunis` on Hugging Face, CC0, updated 2026-0
 - MFA 2017: the 1,000 h LibriSpeech corpus aligned in 80 h on 12 3.4 GHz processors.
 - Huang et al. 2024: MFA aligned the 20 h Buckeye corpus in 9.5 min with 8 CPU jobs.
 - McAuliffe's 2021 blog: MFA 2.0 aligned 16.5 h of Buckeye "under 15 minutes" on 12 cores.
-- MFA installs from conda-forge (Kaldi, OpenFst, Pynini); a `Montreal-Forced-Aligner` 3.4.3 and a `kalpy-kaldi` package exist on PyPI, but a pip-only install is not verified.
+- MFA installs from conda-forge (Kaldi, OpenFst, Pynini); a `Montreal-Forced-Aligner` 3.4.3 and a `kalpy-kaldi` package exist on PyPI, but a pip-only install does not work: `kalpy-kaldi` needs a Pynini built with conda-forge's API patch (`tools/README.md`).
 - `forced_align` has CPU and CUDA implementations; the MMS paper's Figure 4 shows the GPU version scaling to 2,000 s inputs where CPU alternatives slow down (no throughput number given).
 - `MMS_FA` CPU throughput is not documented (not verified).
 
@@ -257,7 +257,7 @@ VoxCommunis itself (`pacscilab/VoxCommunis` on Hugging Face, CC0, updated 2026-0
 | `ctc-forced-aligner` code | BSD-2-Clause in `LICENSE`, but `pyproject.toml` declares "CC-BY-NC 4.0" | GitHub |
 | `MahmoudAshraf/mms-300m-1130-forced-aligner` | CC BY-NC 4.0 | Hugging Face card |
 
-- No GNU General Public License component appears in either chain (MFA, Kaldi, torchaudio, uroman); Kaldi's and Pynini's licences were not checked here (not verified).
+- No GNU General Public License component appears in either chain (MFA, Kaldi, torchaudio, uroman). Checked on 2026-11-07 in each repository: MFA is MIT, Kaldi Apache-2.0, kalpy and `kalpy-kaldi` MIT, Pynini and OpenFst Apache-2.0 (see `tools/README.md`). The XPF licence was not checked (not verified).
 - Whether labels produced with CC BY-NC weights carry any obligation is a legal question the licence text does not settle; not verified.
 
 ## Maintenance status
@@ -328,7 +328,7 @@ No language with a model is held out, so Korean, Vietnamese, Kazakh and Hausa ar
 
 - `MMS_FA` weights are CC BY-NC 4.0; [0024](../project/adr/0024-training-data-licence-policy.md) accepts labelling tools under an NC licence (they are not shipped), but `MMS_FA` is not used.
 - The thesis must carry uroman's acknowledgement sentence if `MMS_FA` is used.
-- MFA is built from source in the uv workspace (owner, 2026-11-06): `tools/montreal-forced-aligner` pinned to v3.4.3 and `tools/kaldi` as git submodules, `just build-mfa` compiling Kaldi, and an optional `align` dependency group for the editable MFA, `kalpy-kaldi` and `pynini`; conda-forge `kaldi` as `KALDI_ROOT` is the second fallback ([0025](../project/adr/0025-alignment-labelling.md)). Record the exact versions.
+- MFA is built from source (owner, 2026-11-06): `tools/montreal-forced-aligner` pinned to v3.4.3 and `tools/kaldi` as git submodules, `just build-mfa` compiling Kaldi into `tools/kaldi/dist` and setting up the uv project `tools/mfa` (editable MFA, `kalpy-kaldi`, a patched `pynini`), run with `just mfa`; conda-forge `kaldi` as `KALDI_ROOT` is the remaining fallback ([0025](../project/adr/0025-alignment-labelling.md)). The exact versions and the reasons for the build steps are in `tools/README.md`.
 
 ## Not verified
 
@@ -341,8 +341,8 @@ No language with a model is held out, so Korean, Vietnamese, Kazakh and Hausa ar
 - Versions of the `*_mfa` Hugging Face models other than Polish, Swahili, German and English.
 - MFA handling of digits and abbreviations.
 - uroman's romanisation of Cantonese; whether Adyghe, Kabardian and Puno Quechua were in `MMS_FA` training data; which FLEURS splits it saw.
-- `MMS_FA` CPU throughput; a pip-only MFA install.
-- XPF, Kaldi and Pynini licences; the long-term hosting of the `MMS_FA` weights.
+- `MMS_FA` CPU throughput.
+- The XPF licence; the long-term hosting of the `MMS_FA` weights.
 - Whether labels made with CC BY-NC weights carry obligations.
 - The agreement numbers in Kraljevski et al. 2015.
 
