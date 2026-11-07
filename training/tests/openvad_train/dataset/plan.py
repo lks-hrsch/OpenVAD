@@ -10,6 +10,7 @@ from collections import Counter
 from types import SimpleNamespace
 from typing import Literal
 
+import numpy as np
 import polars as pl
 import pytest
 
@@ -340,6 +341,12 @@ def test_codec_shares_bitrates_and_bands():
     assert {r["bitrate"] for r in rows if r["codec"] == "amr_wb"} == wideband_modes
     assert {r["bitrate"] for r in rows if r["codec"] == "amr_nb"} == {4.75, 5.15, 5.9, 6.7, 7.4, 7.95, 10.2, 12.2}
     assert all(12 <= r["bitrate"] <= 32 for r in rows if r["codec"] == "opus")
+
+
+def test_an_amr_range_without_a_mode_is_an_error_not_a_uniform_draw():
+    cfg = dataclasses.replace(FULL, codec_bitrate_kbps={"amr_nb": (13.0, 14.0)})
+    with pytest.raises(ValueError, match="no mode"):
+        plan_module._draw_bitrate("amr_nb", cfg, np.random.default_rng(0))
 
 
 def test_slice_draws_only_its_codecs_and_conditions():

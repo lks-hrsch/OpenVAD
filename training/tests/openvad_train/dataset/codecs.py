@@ -16,6 +16,7 @@ from scipy import signal
 from openvad_rs import GROUP_DELAY_16K
 from openvad_train.dataset import codecs
 from openvad_train.dataset.codecs import (
+    AMR_MODES_BPS,
     DecodeError,
     MissingCodec,
     decode_16k,
@@ -689,3 +690,44 @@ def test_narrow_roundtrip_refuses_a_decode_that_lost_more_than_a_frame(monkeypat
     monkeypatch.setattr(codecs, "_run", truncating)
     with pytest.raises(RuntimeError, match="decode returned"):
         narrow_roundtrip(chirp(16000, 100, 3500), "amr_nb", 12200)
+
+
+@pytest.mark.parametrize(
+    ("codec", "bitrate"),
+    [("amr_nb", 12.2), ("amr_nb", 7000), ("amr_nb", None), ("amr_wb", 23.85), ("amr_wb", 13000), ("amr_wb", None)],
+)
+def test_roundtrip_refuses_a_bitrate_that_is_not_an_amr_mode(codec, bitrate):
+    rate = 8000 if codec == "amr_nb" else 16000
+    with pytest.raises(ValueError, match="bit/s"):
+        roundtrip(chirp(rate, 100, 3500, rate), codec, bitrate, rate)  # pyright: ignore[reportArgumentType]
+
+
+def test_narrow_roundtrip_inherits_the_mode_check():
+    with pytest.raises(ValueError, match="bit/s"):
+        narrow_roundtrip(chirp(16000), "amr_nb", 12.2)  # pyright: ignore[reportArgumentType]
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize("codec", ["amr_nb", "amr_wb"])
+def test_the_requested_mode_reaches_the_encoder(monkeypatch, codec):
+    encoder = encoder_of(codec)
+    require_encoders(encoder)
+    rate = 8000 if codec == "amr_nb" else 16000
+    # Magic "#!AMR\n" or "#!AMR-WB\n", then the first frame's header byte holds the mode index in bits 3 to 6.
+    header = 6 if codec == "amr_nb" else 9
+    real = codecs._run
+    encoded = []
+
+    def spying(cmd, data, error):
+        done = real(cmd, data, error)
+        if "-c:a" in cmd:
+            encoded.append(done.stdout)
+        return done
+
+    monkeypatch.setattr(codecs, "_run", spying)
+    outputs = []
+    for index, bitrate in enumerate(AMR_MODES_BPS[codec]):
+        outputs.append(roundtrip(chirp(rate, 100, 0.4 * rate, rate), codec, bitrate, rate))
+        assert encoded[-1][header - 1 : header] in (b"\n",)
+        assert (encoded[-1][header] >> 3) & 0xF == index
+    assert not np.array_equal(outputs[0], outputs[-1])

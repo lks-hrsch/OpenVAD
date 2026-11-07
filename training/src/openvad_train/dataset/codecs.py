@@ -41,6 +41,12 @@ _CODECS = {
     "amr_nb": ("libopencore_amrnb", "amr", 8000),
     "opus": ("libopus", "ogg", 16000),
 }
+# The modes of the AMR codecs in bit/s. ffmpeg silently encodes any other bitrate at some other mode, and None at
+# the highest, so `roundtrip` refuses them; plan.py draws from this table too.
+AMR_MODES_BPS = {
+    "amr_wb": (6600, 8850, 12650, 14250, 15850, 18250, 19850, 23050, 23850),
+    "amr_nb": (4750, 5150, 5900, 6700, 7400, 7950, 10200, 12200),
+}
 # Zeros appended before encoding so the encoder flushes whole frames; AMR and Opus frames are 20 ms.
 _FRAME_MS = 20
 
@@ -86,6 +92,9 @@ def encoder_of(codec: str) -> str:
 def roundtrip(audio: np.ndarray, codec: str, bitrate: int | None, rate: int = 16000) -> np.ndarray:
     """Encode and decode `audio` (float32, mono) sampled at `rate`, which must be the codec's own rate.
 
+    `bitrate` is in bit/s. For amr_nb and amr_wb it must be one of `AMR_MODES_BPS`, `None` included in the refusal,
+    else `ValueError`: ffmpeg would encode another mode without a word.
+
     That is 16 kHz for every codec but amr_nb, which needs `rate=8000`: the audio carries no rate, so a caller
     declares it, and a mismatch raises `ValueError` instead of encoding audio at the wrong speed. `narrow_roundtrip`
     is the 16 kHz entry for amr_nb.
@@ -99,6 +108,8 @@ def roundtrip(audio: np.ndarray, codec: str, bitrate: int | None, rate: int = 16
     encoder, container, codec_rate = _CODECS[codec]
     if rate != codec_rate:
         raise ValueError(f"{codec} runs at {codec_rate} Hz, got audio declared at {rate} Hz")
+    if codec in AMR_MODES_BPS and bitrate not in AMR_MODES_BPS[codec]:
+        raise ValueError(f"{codec} has no mode at {bitrate} bit/s, expected one of {AMR_MODES_BPS[codec]}")
     frame = rate * _FRAME_MS // 1000
     padded = np.concatenate([audio.astype(np.float32), np.zeros(frame, np.float32)])
     quality = [] if bitrate is None else ["-b:a", str(bitrate)]
@@ -145,7 +156,7 @@ def measure_delay(codec: str, bitrate: int | None) -> float:
 
 
 def narrow_roundtrip(audio: np.ndarray, codec: str, bitrate: int | None) -> np.ndarray:
-    """The AMR-NB leg: 16 kHz float32 in, 16 kHz float32 of the same length out.
+    """The AMR-NB leg: 16 kHz float32 in, 16 kHz float32 of the same length out. `bitrate` is in bit/s, an AMR-NB mode.
 
     Decimates with the OpenVAD resampler, clips to the int16 range the codec takes, round-trips at 8 kHz,
     interpolates, and trims the one sample that an odd length gains. A decode more than one codec frame short

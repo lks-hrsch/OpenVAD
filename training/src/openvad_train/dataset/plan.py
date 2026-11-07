@@ -17,6 +17,7 @@ from types import ModuleType
 import numpy as np
 import polars as pl
 
+from openvad_train.dataset.codecs import AMR_MODES_BPS
 from openvad_train.dataset.config import DEMAND_CATEGORIES, FULL, SLICE, BuildConfig, work_dir
 from openvad_train.dataset.cutting import Chunk, cut_long, rebase
 from openvad_train.dataset.index import SOURCES
@@ -37,11 +38,6 @@ _ROWS_PER_FRAME = 50_000
 
 AUGMENTED_SOURCES = {"common-voice", "mls", "fleurs", "swc"}
 _CUT_SOURCES = {"mls", "swc"}
-# The modes the codecs have, so a drawn bitrate is one ffmpeg can encode.
-_CODEC_MODES = {
-    "amr_wb": (6.6, 8.85, 12.65, 14.25, 15.85, 18.25, 19.85, 23.05, 23.85),
-    "amr_nb": (4.75, 5.15, 5.9, 6.7, 7.4, 7.95, 10.2, 12.2),
-}
 # Competing talker, babble and SSN need reserved clips and city needs WHAM!, which a later task adds to the draws.
 _CONDITIONS_WITH_A_DRAW = {"clean", *DEMAND_CATEGORIES}
 
@@ -119,8 +115,15 @@ def _draw_bitrate(codec: str, cfg: BuildConfig, rng: np.random.Generator) -> flo
     if codec not in cfg.codec_bitrate_kbps:
         return None
     low, high = cfg.codec_bitrate_kbps[codec]
-    modes = [m for m in _CODEC_MODES.get(codec, ()) if low <= m <= high]
-    return float(rng.choice(modes)) if modes else float(rng.uniform(low, high))
+    if codec in AMR_MODES_BPS:
+        # bit/s to kbit/s by one division, which gives the same double as the literal 4.75.
+        modes = [m / 1000 for m in AMR_MODES_BPS[codec] if low <= m / 1000 <= high]
+        if not modes:
+            raise ValueError(
+                f"{codec} has no mode between {low} and {high} kbit/s, modes: {AMR_MODES_BPS[codec]} bit/s"
+            )
+        return float(rng.choice(modes))
+    return float(rng.uniform(low, high))
 
 
 def _draw_handset(cfg: BuildConfig, rng: np.random.Generator) -> dict:
