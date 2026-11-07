@@ -3,7 +3,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-"""Stage `verify`: read the published set back the way training will, and fail on anything that would not load."""
+"""Stage `verify`: check the published files and read every pointer back, failing on any that does not resolve."""
 
 import argparse
 import asyncio
@@ -164,6 +164,9 @@ def run_verify(cfg: BuildConfig) -> VerifyReport:
     every as-is path exists and a sample of them decodes at 16 kHz; one index row per sample, agreeing with the split
     files; and no speaker in two splits, for the sources that have speaker IDs. The report gives speech ratios and
     condition shares per source and split.
+
+    An interim build may have no validation or test sample and still pass, with its `missing_shards` in the manifest;
+    `load_dataset` refuses a split without data, and this does not call it. A build with no train sample fails.
     """
     root, work = dataset_root(cfg), work_dir(cfg)
     manifest = read_manifest(root)
@@ -180,6 +183,8 @@ def run_verify(cfg: BuildConfig) -> VerifyReport:
         index = asyncio.run(read_parquet(root / "index.parquet"))
         rows = pl.concat([f.with_columns(split=pl.lit(s)) for s, f in frames.items()])
         problems: list[str] = []
+        if not frames["train"].height:
+            problems.append("train.parquet has no samples")
         for split, frame in frames.items():
             if manifest["samples"][split] != frame.height:
                 problems.append(

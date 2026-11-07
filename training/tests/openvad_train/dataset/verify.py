@@ -19,6 +19,7 @@ from openvad_train.dataset.construct import run_construct
 from openvad_train.dataset.parquet_io import read_parquet, write_parquet
 from openvad_train.dataset.publish import run_publish, set_small
 from openvad_train.dataset.verify import VerifyError, run_verify
+from openvad_train.fetch.common import read_manifest
 
 
 @pytest.fixture(autouse=True)
@@ -267,6 +268,22 @@ def test_a_manifest_that_counts_other_samples_than_the_files_fails_verify(built)
     edit(built, "index", lambda f: f.filter(pl.col("sample_id") != "librivad/l1"))
     with pytest.raises(VerifyError, match=r"manifest.json says test has 2 samples, the file has 1"):
         run_verify(built)
+
+
+def test_a_set_with_no_train_sample_fails_verify(built):
+    edit(built, "train", lambda f: f.head(0))
+    with pytest.raises(VerifyError, match=r"train.parquet has no samples"):
+        run_verify(built)
+
+
+def test_a_build_without_a_test_shard_passes_and_says_so_in_its_manifest(data):
+    cfg = make_build(data)
+    run_construct(cfg, workers=1)
+    (work_dir(cfg) / "fragments/test/00000.parquet").unlink()
+    run_publish(cfg)
+    report = run_verify(cfg)
+    assert (report.state, report.samples["test"]) == ("interim", 0)
+    assert read_manifest(dataset_root(cfg))["missing_shards"] == ["test/00000"]  # pyright: ignore[reportOptionalSubscript]
 
 
 def test_the_command_prints_the_report(built, monkeypatch, capsys):

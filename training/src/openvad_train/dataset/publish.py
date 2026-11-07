@@ -169,6 +169,9 @@ def _publish(cfg: BuildConfig) -> None:
     built = asyncio.run(_read_all(fragment_paths))
     as_is = _as_is_with_labels(plan.filter(pl.col("treatment") == "as_is"))
     rows = pl.concat([*built, as_is]) if built else as_is
+    if rows.is_empty():
+        # Writing would replace a good set with empty files, which `verify` would then have to catch.
+        raise ValueError(f"{fragments} has no fragment and the plan no as-is row: nothing to publish")
     if rows["sample_id"].n_unique() != rows.height:
         raise ValueError("a sample id is repeated across the fragments and the as-is rows")
     rows = rows.sort("rank", "sample_id")

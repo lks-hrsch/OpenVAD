@@ -275,6 +275,18 @@ def test_readme_names_the_three_files_and_no_data_directory(built):
     assert "data/" not in readme.split("---")[1]
 
 
+def test_publish_with_no_rows_refuses_and_leaves_a_good_set_alone(data):
+    cfg = make_build(data)
+    run_construct(cfg, workers=1)
+    run_publish(cfg)
+    root = dataset_root(cfg)
+    before = {p.name: p.read_bytes() for p in root.glob("*.*")}
+    shutil.rmtree(work_dir(cfg) / "fragments")
+    with pytest.raises(ValueError, match="nothing to publish"):
+        run_publish(cfg)
+    assert {p.name: p.read_bytes() for p in root.glob("*.*")} == before
+
+
 def test_fragments_of_an_older_plan_are_refused_before_anything_is_written(data):
     cfg = make_build(data)
     run_construct(cfg, workers=1)
