@@ -5,21 +5,30 @@
 
 """G.711 A-law and mu-law round trips as numpy lookup tables (ADR 0021).
 
-The quantiser is ffmpeg's `pcm_alaw` and `pcm_mulaw` bit for bit, so the training data carries the same
-quantisation noise as a real gateway built on it: the encoder indexes a table by `(sample + 32768) >> 2`, rounds the
-magnitude of a positive sample down and that of a negative sample up, and puts the decision thresholds at
-`(m[k] + m[k + 1] + 4) >> 3` between the decoded magnitudes `m`. It is therefore not a nearest-level search, which
-differs from it at about 500 of the 65536 int16 values.
+The encoder follows the G.711 rules, written from the standard's published description:
+
+- A-law works on the 13-bit value `v >> 3`, mu-law on the 14-bit value `v >> 2` (floor in both).
+- A negative value is coded as the magnitude of its one's complement, so `f(-v - 1) == -f(v)` at every int16 value.
+- A-law: eight segments of sixteen steps, the first two with the same step. Mu-law: magnitude clipped to 8158, bias
+  33, eight segments of sixteen steps.
+- The decoder returns the middle of the interval.
+
+ffmpeg's `pcm_alaw` and `pcm_mulaw` encoders are not G.711: they index their table by `(v + 32768) >> 2`, which
+shifts the negative bins 4 LSB toward zero, and they put segment edges at the midpoint of the decoded levels. They
+differ from this table at 964 of the 65536 int16 values on each law (for example A-law -13 to -16 gives -24 there
+and -8 here, and mu-law -1 to -4 gives -8 there and 0 here). Their decoders agree with this one.
 """
 
 import numpy as np
 
 
 _SCALE = 32768
+_A_SEGMENT_EDGES = 32 * 2 ** np.arange(7)  # 13-bit magnitudes where segments 1 to 7 start
+_MU_SEGMENT_EDGES = 64 * 2 ** np.arange(7)  # the same on the biased 14-bit magnitude
 
 
 def _magnitudes(law: str) -> np.ndarray:
-    """The 128 decoded magnitudes of a law, ascending (ITU-T G.711 expansion)."""
+    """The 128 decoded magnitudes of a law at 16 bits, ascending, indexed by `segment * 16 + step`."""
     i = np.arange(128)
     seg = i >> 4
     if law == "alaw":
@@ -27,12 +36,23 @@ def _magnitudes(law: str) -> np.ndarray:
     return ((((i & 15) << 3) + 0x84) << seg) - 0x84
 
 
+def _code_index(v: np.ndarray, law: str) -> np.ndarray:
+    """The `segment * 16 + step` of the magnitude code of each int16 value `v`."""
+    if law == "alaw":
+        s = v >> 3
+        m = np.where(s >= 0, s, ~s)
+        seg = np.searchsorted(_A_SEGMENT_EDGES, m, side="right")
+        return seg * 16 + np.where(seg == 0, m >> 1, (m >> seg) & 15)
+    s = v >> 2
+    biased = np.minimum(np.where(s >= 0, s, ~s), 8158) + 33
+    seg = np.searchsorted(_MU_SEGMENT_EDGES, biased, side="right")
+    return seg * 16 + ((biased >> (seg + 1)) & 15)
+
+
 def _roundtrip_table(law: str) -> np.ndarray:
     """The decoded int16 value of every int16 input, indexed by `input + 32768`."""
-    magnitude = _magnitudes(law)
-    threshold = (magnitude[:-1] + magnitude[1:] + 4) >> 3
     v = np.arange(-_SCALE, _SCALE)
-    level = magnitude[np.searchsorted(threshold, np.where(v >= 0, v >> 2, -(v >> 2)), side="right")]
+    level = _magnitudes(law)[_code_index(v, law)]
     return np.where(v >= 0, level, -level).astype(np.int16)
 
 
