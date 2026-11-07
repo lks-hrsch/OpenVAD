@@ -80,7 +80,7 @@ build-mfa:
     set -euo pipefail
     cxx="${CXX:-c++}"
     missing=0
-    for tool in git curl tar patch make cmake uv initdb pg_ctl "$cxx"; do
+    for tool in git curl shasum getconf tar patch make cmake uv initdb pg_ctl "$cxx"; do
         if ! command -v "$tool" >/dev/null; then
             echo "build-mfa: $tool not found on PATH" >&2
             missing=1
@@ -102,11 +102,19 @@ build-mfa:
     rebuilt=
     mkdir -p "$dist" "$work"
 
+    # fetch URL SHA256 DEST: download to a temporary name and move it into place once the checksum passes,
+    # so an interrupted or corrupt download is retried instead of reused.
+    fetch() {
+        [ ! -f "$3" ] || return 0
+        curl -fsSL -o "$3.part" "$1"
+        echo "$2  $3.part" | shasum -a 256 -c - || { rm -f "$3.part"; exit 1; }
+        mv "$3.part" "$3"
+    }
+
     # Each stamp is written last, so a half-finished step is redone and a finished one is skipped.
     if [ ! -f "$dist/.openfst-$fst" ]; then
         tarball="$work/openfst-$fst.tar.gz"
-        [ -f "$tarball" ] || curl -fsSL -o "$tarball" "https://www.openfst.org/twiki/pub/FST/FstDownload/openfst-$fst.tar.gz"
-        echo "$fst_sha256  $tarball" | shasum -a 256 -c -
+        fetch "https://www.openfst.org/twiki/pub/FST/FstDownload/openfst-$fst.tar.gz" "$fst_sha256" "$tarball"
         tar -xzf "$tarball" -C "$work"
         (cd "$work/openfst-$fst" && ./configure --prefix="$dist" --enable-far --enable-ngram-fsts \
             --enable-lookahead-fsts --enable-pdt --enable-mpdt --with-pic CXX="$cxx" LIBS=-ldl && make -j"$jobs" && make install)
@@ -149,10 +157,10 @@ build-mfa:
     if [ ! -f "$dist/.pynini-$pynini" ]; then
         feedstock=9aed7bb122e77fc1d73a2c62070f5b003e5e956d
         rm -rf "$pynini_dir" "$work"/wheels
-        curl -fsSL -o "$work/pynini.tar.gz" https://files.pythonhosted.org/packages/c6/b6/09a0efe843df37d9c80a9a1c190c7bb28d8920cee401e2a61c46f1328ec1/pynini-$pynini.tar.gz
-        echo "fc06cc02adcbd4b14eb94ae9f2a0949d110612d2d4ee3a7ac5dc97b45fff8e33  $work/pynini.tar.gz" | shasum -a 256 -c -
-        curl -fsSL -o "$work/pynini-api.patch" https://raw.githubusercontent.com/conda-forge/pynini-feedstock/$feedstock/recipe/patches/0002-Add-API-declarations.patch
-        echo "846df2906b5be1b84085fde562d2093e2149aeb9ddc8677f63169a74ee7a331e  $work/pynini-api.patch" | shasum -a 256 -c -
+        fetch https://files.pythonhosted.org/packages/c6/b6/09a0efe843df37d9c80a9a1c190c7bb28d8920cee401e2a61c46f1328ec1/pynini-$pynini.tar.gz \
+            fc06cc02adcbd4b14eb94ae9f2a0949d110612d2d4ee3a7ac5dc97b45fff8e33 "$work/pynini.tar.gz"
+        fetch https://raw.githubusercontent.com/conda-forge/pynini-feedstock/$feedstock/recipe/patches/0002-Add-API-declarations.patch \
+            846df2906b5be1b84085fde562d2093e2149aeb9ddc8677f63169a74ee7a331e "$work/pynini-api.patch"
         tar -xzf "$work/pynini.tar.gz" -C "$work"
         (cd "$pynini_dir" && patch -p0 < "$work/pynini-api.patch")
         CPPFLAGS="-I$dist/include" LDFLAGS="-L$dist/lib -Wl,-rpath,$dist/lib" \
