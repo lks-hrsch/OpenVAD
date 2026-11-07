@@ -86,6 +86,7 @@ class FakeMfa:
         self.calls: list[list[str]] = []  # the transcripts of each run, in order
         self.kill_at: int | None = None  # the index of the run that dies
         self.extra_textgrid = False
+        self.no_csv = False  # exit 0 without an analysis file
         self.retried: set[str] = set()
 
     def __call__(self, tools, models, corpus: Path, out: Path, mfa_root: Path) -> None:
@@ -120,6 +121,8 @@ class FakeMfa:
         if self.extra_textgrid:
             (out / "x").mkdir(parents=True, exist_ok=True)
             (out / "x" / "u9999999.TextGrid").write_text(textgrid([], 1.0), encoding="utf-8")
+        if self.no_csv:
+            return
         with (out / "alignment_analysis.csv").open("w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(HEADER)

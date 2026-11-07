@@ -12,6 +12,7 @@ import sqlite3
 import tempfile
 import zipfile
 from collections.abc import Collection
+from contextlib import closing
 from importlib import resources
 from pathlib import Path
 from types import SimpleNamespace
@@ -153,25 +154,49 @@ def test_run_align_stops_before_any_batch_if_the_tools_are_wrong(monkeypatch):
         run_align(SLICE, None)
 
 
-def test_retried_clips_come_from_the_debug_log_through_the_database(tmp_path):
+def _mfa_logs(tmp_path, **logs: str) -> None:
+    """A corpus database and alignment logs; ids 1-1 and 3-2 are files u0000000 and u0000001."""
     corpus = tmp_path / "corpus"
     (corpus / "alignment/log").mkdir(parents=True)
-    with sqlite3.connect(corpus / "corpus.db") as con:
+    with closing(sqlite3.connect(corpus / "corpus.db")) as con, con:
         con.execute("CREATE TABLE file (id INTEGER, name TEXT)")
         con.execute("CREATE TABLE utterance (id INTEGER, file_id INTEGER, speaker_id INTEGER)")
         con.executemany("INSERT INTO file VALUES (?, ?)", [(1, "u0000000"), (2, "u0000001")])
         con.executemany("INSERT INTO utterance VALUES (?, ?, ?)", [(1, 1, 1), (2, 2, 3)])
-    line = "2026-11-07 22:02:05,469 - kalpy.align - 6208811008 - 1 - DEBUG - Retried {}\n"
-    (corpus / "alignment/log/align.1.log").write_text(
-        line.format("1-1") + line.replace("Retried", "Processing").format("3-2")
+    for name, text in logs.items():
+        (corpus / "alignment/log" / name.replace("_", ".", 1).replace("_", ".")).write_text(text)
+
+
+START = "2026-11-07 22:02:05,400 - kalpy.align - 6208811008 - 1 - DEBUG - Aligning with /root/final.mdl\n"
+LINE = "2026-11-07 22:02:05,469 - kalpy.align - 6208811008 - 1 - DEBUG - {} {}\n"
+
+
+def test_retried_clips_come_from_the_debug_log_through_the_database(tmp_path):
+    _mfa_logs(tmp_path, align_1_log=START + LINE.format("Retried", "1-1") + LINE.format("Processing", "3-2"))
+    assert align._retried(tmp_path, "corpus") == {"u0000000"}
+
+
+def test_only_the_pass_whose_alignment_is_written_counts(tmp_path):
+    # Retried only under the speaker-independent model: the written fMLLR alignment did not need it.
+    _mfa_logs(
+        tmp_path,
+        align_1_log=START + LINE.format("Retried", "1-1"),
+        align_1_fmllr_log=START + LINE.format("Retried", "3-2"),
     )
-    (corpus / "alignment/log/align.1.fmllr.log").write_text(line.format("3-2"))
-    assert align._retried(tmp_path, "corpus") == {"u0000000", "u0000001"}
-    (corpus / "alignment/log/align.2.log").write_text(line.format("9-9"))
+    assert align._retried(tmp_path, "corpus") == {"u0000001"}
+
+
+def test_a_log_without_kalpys_start_message_is_an_error_not_an_empty_set(tmp_path):
+    _mfa_logs(tmp_path, align_1_fmllr_log=START, align_2_fmllr_log=LINE.format("Retired", "1-1"))
+    with pytest.raises(MfaFailedError, match=r"align.2.fmllr.log.*retries cannot be read"):
+        align._retried(tmp_path, "corpus")
+
+
+def test_an_unknown_utterance_or_missing_logs_are_errors(tmp_path):
+    _mfa_logs(tmp_path, align_1_log=START + LINE.format("Retried", "9-9"))
     with pytest.raises(MfaFailedError, match="does not know"):
         align._retried(tmp_path, "corpus")
-    for log in (corpus / "alignment/log").iterdir():
-        log.unlink()
+    (tmp_path / "corpus/alignment/log/align.1.log").unlink()
     with pytest.raises(MfaFailedError, match="cannot tell retried clips"):
         align._retried(tmp_path, "corpus")
 
@@ -544,6 +569,15 @@ def test_every_clip_ends_as_one_row_or_one_drop(stage):
     assert reasons(stage)["a/c4"] == "needs_wider_beam"
     assert reasons(stage)["a/c5"] == "low_loglik"
     assert json.loads(next(r for r in t["dropped"] if r["clip_id"] == "a/c4")["metrics"])["retried"] is True
+
+
+def test_exit_0_without_an_analysis_file_makes_every_clip_no_alignment_and_still_reconciles(stage):
+    clips = speakers_clips(stage, n=1)
+    stage.fake.no_csv = True
+    models = align.Models(Path("a.zip"), Path("d.dict"), None, {})
+    timings, drops = align._align_round(clips, "de", stage.tools, models, "p")
+    assert timings == []
+    assert sorted(drops) == sorted(align.Drop(c.clip_id, "no_alignment", None) for c in clips)
 
 
 def test_a_textgrid_for_a_file_it_was_not_given_fails_the_batch(stage):

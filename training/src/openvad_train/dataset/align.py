@@ -33,6 +33,7 @@ import unicodedata
 import zipfile
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
+from contextlib import closing
 from pathlib import Path
 from typing import NamedTuple, Protocol
 
@@ -557,20 +558,31 @@ def _metrics_of(row: dict, duration_ms: int, retried: bool) -> dict:
 
 
 def _retried(mfa_root: Path, corpus: str) -> set[str]:
-    """File stems that MFA aligned only with its retry beam. kalpy logs `Retried <speaker id>-<utterance id>` at
-    debug level (`-v`) in the per-job alignment logs of both passes; the database maps those ids to file names.
-    Anything missing from this layout is an error, because a clip not checked would pass the beam rule.
+    """File stems that MFA aligned only with its retry beam, in the pass whose alignment is written. kalpy logs
+    `Retried <speaker id>-<utterance id>` at debug level in the per-job alignment logs; the database maps those ids
+    to file names. The final pass is the speaker-adapted one (`align.<job>.fmllr.log`) when it ran, else the single
+    pass (`align.<job>.log`).
+
+    Anything unexpected is an error, because a clip not checked would pass the beam rule: no database or logs, or
+    a log without kalpy's start message (`Aligning with ...`), which would mean a reworded log and no `Retried` ever.
     """
-    db, logs = mfa_root / corpus / f"{corpus}.db", sorted((mfa_root / corpus / "alignment/log").glob("align.*.log"))
+    log_dir = mfa_root / corpus / "alignment/log"
+    db, logs = (
+        mfa_root / corpus / f"{corpus}.db",
+        sorted(log_dir.glob("align.*.fmllr.log")) or sorted(log_dir.glob("align.*.log")),
+    )
     if not (db.is_file() and logs):
         raise MfaFailedError(
             f"MFA left no database or alignment logs under {mfa_root / corpus}: cannot tell retried clips"
         )
-    with sqlite3.connect(db) as con:
+    texts = [log_file.read_text() for log_file in logs]
+    if missing := [f.name for f, t in zip(logs, texts, strict=True) if "- DEBUG - Aligning with " not in t]:
+        raise MfaFailedError(f"{missing} lack kalpy's 'Aligning with' message: its log changed, retries cannot be read")
+    with closing(sqlite3.connect(db)) as con:
         names = dict(
             con.execute("SELECT u.speaker_id || '-' || u.id, f.name FROM utterance u JOIN file f ON f.id = u.file_id")
         )
-    ids = {m for log_file in logs for m in re.findall(r"^.* - DEBUG - Retried (\S+)$", log_file.read_text(), re.M)}
+    ids = {m for text in texts for m in re.findall(r"^.* - DEBUG - Retried (\S+)$", text, re.M)}
     if unknown := ids - names.keys():
         raise MfaFailedError(f"MFA retried utterances {sorted(unknown)} that its database does not know")
     return {names[i] for i in ids}
@@ -622,7 +634,10 @@ def _align_round(
         timings: list[Timing] = []
         if sent:
             _run_mfa(tools, models, corpus, out, mfa_root)
-            analysis = _analysis(out / "alignment_analysis.csv")
+            csv_path = out / "alignment_analysis.csv"
+            if not csv_path.is_file():  # exit 0 and no analysis: nothing aligned, and every clip is reconciled below
+                log.warning("MFA wrote no alignment_analysis.csv: every clip of this run is no_alignment")
+            analysis = _analysis(csv_path) if csv_path.is_file() else {}
             textgrids = {p.stem: p for p in out.rglob("*.TextGrid")}
             if extra := (textgrids.keys() | analysis.keys()) - sent.keys():
                 raise MfaFailedError(f"MFA returned results for files it was not given: {sorted(extra)[:5]}")
