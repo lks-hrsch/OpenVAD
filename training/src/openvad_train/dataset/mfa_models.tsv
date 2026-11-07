@@ -1,0 +1,26 @@
+language	acoustic	acoustic_version	dictionary	dictionary_version	g2p	g2p_version	note	status
+en	english_mfa	3.1.0	english_mfa	3.1.0	english_us_mfa	3.0.0	US G2P for out-of-vocabulary words; other dialects have their own G2P	listed
+de	german_mfa	3.0.0	german_mfa	3.0.0	german_mfa	3.0.0	run through MFA 3.4.3 on synthetic speech (2026-11-07)	downloaded
+fr	french_mfa	3.0.0	french_mfa	3.0.0	french_mfa	3.0.0		listed
+es	spanish_mfa	3.3.0	spanish_spain_mfa	3.3.0	spanish_spain_mfa	3.3.0	dialect choice: no dictionary named spanish_mfa exists at 3.3.0; Spain or Latin America (spanish_latin_america_mfa) is for the owner	listed
+it	italian_cv	2.0.0	italian_cv	2.0.0			no G2P: out-of-vocabulary words become spn (owner, 2026-11-06); VoxCommunis model, MFA 3.4 compatibility not verified	listed
+nl	dutch_cv	2.0.0	dutch_cv	2.0.0			no G2P: out-of-vocabulary words become spn (owner, 2026-11-06); VoxCommunis model, MFA 3.4 compatibility not verified	listed
+pl	polish_mfa	2.0.0a	polish_mfa	2.0.0a	polish_mfa	2.0.0a		listed
+pt	portuguese_mfa	2.0.0a	portuguese_mfa	2.0.0a	portuguese_brazil_mfa	2.0.0a	dialect choice: the G2P is Brazilian; portuguese_portugal_mfa is the other; for the owner	listed
+ja	japanese_mfa	3.0.0	japanese_mfa	3.0.0	japanese_katakana_mfa	3.0.0	needs the MFA tokeniser; not run here	listed
+zh	mandarin_mfa	3.0.0	mandarin_china_mfa	3.0.0	mandarin_china_mfa	3.0.0	needs the MFA tokeniser; not run here; Taiwan variants exist (mandarin_taiwan_mfa)	listed
+ru	russian_mfa	3.1.0	russian_mfa	3.1.0	russian_mfa	3.1.0		listed
+sv	swedish_mfa	3.0.0	swedish_mfa	3.0.0	swedish_mfa	3.0.0		listed
+tr	turkish_mfa	3.0.0	turkish_mfa	3.0.0	turkish_mfa	3.0.0		listed
+ko	korean_mfa	3.0.0	korean_mfa	3.0.0	korean_mfa	3.0.0	needs the MFA tokeniser; not run here	listed
+vi	vietnamese_mfa	3.0.0	vietnamese_mfa	3.0.0	vietnamese_hanoi_mfa	3.0.0	dialect choice: the G2P is Hanoi; ho_chi_minh_city and hue exist; for the owner	listed
+th	thai_mfa	3.0.0	thai_mfa	3.0.0	thai_mfa	3.0.0	needs the MFA tokeniser; not run here	listed
+ha	hausa_mfa	3.0.0	hausa_mfa	3.0.0	hausa_mfa	2.0.0a	hausa_cv also exists	listed
+sw	swahili_mfa	2.0.0a	swahili_mfa	2.0.0a	swahili_mfa	2.0.0a		listed
+kk	kazakh_cv	2.0.0	kazakh_cv	2.0.0			only a VoxCommunis model; no G2P: out-of-vocabulary words become spn; MFA 3.4 compatibility not verified	listed
+cs							ADR 0025 leaves open whether czech_mfa 3.3.0 or czech_cv labels Czech	open
+bg							ADR 0025 leaves open whether bulgarian_mfa 3.0.0 or bulgarian_cv labels Bulgarian	open
+uk							ADR 0025 leaves open whether ukrainian_mfa 3.0.0 or ukrainian_cv labels Ukrainian	open
+hr							ADR 0025 leaves open which model labels Croatian (croatian_mfa 2.0.0a or serbocroatian_mfa 3.3.0)	open
+sr							ADR 0025 leaves open which model labels Serbian (serbocroatian_mfa 3.3.0 has Serbian G2P)	open
+bs							ADR 0025: Bosnian has no model of its own	open
