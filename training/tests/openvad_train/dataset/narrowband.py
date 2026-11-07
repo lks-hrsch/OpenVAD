@@ -109,11 +109,12 @@ def test_telephone_law_split_is_nine_to_one():
     assert np.array_equal(telephone(x, fixed_draw(0.91)), through(x, mulaw_roundtrip))
 
 
-def test_apply_narrowband_uses_its_second_draw_for_the_law():
+@pytest.mark.parametrize(("seed", "law"), [(1, mulaw_roundtrip), (4, alaw_roundtrip)])
+def test_apply_narrowband_uses_its_second_draw_for_the_law(seed, law):
+    # Seed 1 draws [0.51, 0.95] and seed 4 [0.94, 0.51]: the law differs from what the first draw alone would pick.
     x = noise(1600)
-    u = rng(3).random(2)
-    law = alaw_roundtrip if u[1] < 0.9 else mulaw_roundtrip
-    assert np.array_equal(apply_narrowband(x, "narrow_leg", rng(3)), through(x, law))
+    assert np.array_equal(apply_narrowband(x, "narrow_leg", rng(seed)), through(x, law))
+    assert not np.array_equal(through(x, alaw_roundtrip), through(x, mulaw_roundtrip))
 
 
 def test_length_is_preserved():
