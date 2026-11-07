@@ -286,6 +286,20 @@ Pins, URLs and checksums are in the fetchers (`training/src/openvad_train/fetch/
 - The RTTM segments are speaker turns (one per SRT subtitle), so pauses inside a turn count as speech, as in CallHome; they never overlap. The gaps between turns have a median of 0.56 s, 31% are under 0.25 s. The word times in the JSON files look evenly spread, not aligned, and are not used.
 - The README does not say whether the speakers consented to publication.
 
+## Constructed audio: size and speed
+
+Measured on the first real slice run (`openvad-slice`: 500 SWC German samples planned, 498 built, 2.09 h), on the macOS M3 Pro (6 performance and 6 efficiency cores) reading the share over SMB, ffmpeg 8.1.3, with the construct and codec code of commit `59515d6`.
+These numbers size shards and plan runs; they are not the headline real-time factor, which comes from the reference CPU.
+
+- Size: 135.1 MB of uncompressed tars for 2.086 h, which is 64.8 MB per hour (64.6 MB per hour of FLAC members).
+  Per shard: train 64.9, validation 65.0, test 63.4 MB per hour. Half the samples go through G.722 and 84% have DEMAND noise, which is why this is above a clean-speech FLAC figure.
+  `flac_mb_per_hour` in `BuildConfig` is set to 64.8.
+- Speed: 7 min 8 s wall for the three shards (so three of the 11 workers ran), 617 s user plus 636 s system time, 2.5 CPU seconds per sample: **0.40 samples per second per core**.
+  Seen per worker, the train shard built 398 samples in 428 s (0.93 samples per second per worker, each worker using about two cores with its ffmpeg and SMB reads).
+- Integrity decode: every source file over 60 s is decoded once per process by `_verify_intact` before it is read. The slice's 316 distinct source files hold 162 h of Ogg (5.6 GB), and decoding all of them took 382 s on a cold cache, 1.21 s per file or about 1,500 times real time.
+  That is about 30% of the construct CPU time at this scale. At full scale it is one decode per long file per worker, so a file that several workers read is decoded several times.
+- One SWC Ogg (`german/Nike_des_Paionios/audio.ogg`) fails the integrity decode with a CRC mismatch; its two sampled chunks were left out and logged, as designed.
+
 ## Scale references
 
 - Granary v2 labels 463,062 h of speech, about 165,300 h of it flagged high quality, mostly unlabelled VoxPopuli (380,711 h) and LibriLight (49,334 h), with Whisper-style pseudo-transcripts and no word timings.
