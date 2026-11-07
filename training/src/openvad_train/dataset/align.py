@@ -57,13 +57,16 @@ MODELS_TSV = Path(__file__).with_name("mfa_models.tsv")
 BATCH_HOURS = 5.0
 
 # ADR 0025, drop rules: a word over 1.5 s, a phone over 0.5 s, a first word in the first 20 ms, speech under 20%,
-# a speaking rate more than three median absolute deviations (unscaled) from the median, and the bottom 5% of
-# log-likelihoods. The last two are fitted on the first batch (`DropRules`).
+# a speaking rate more than three median absolute deviations from the median, and the bottom 5% of log-likelihoods.
+# The last two are fitted on the first batch (`DropRules`). The deviation is scaled by 1.4826 (consistent with the
+# standard deviation of a normal population, owner to confirm): unscaled, 3 of them are 2.02 sigma and drop 4.3% of
+# a clean population.
 MAX_WORD_MS = 1500
 MAX_PHONE_MS = 500
 MIN_ONSET_MS = 20
 MIN_COVERAGE = 0.2
 RATE_MADS = 3.0
+MAD_SCALE = 1.4826
 LOGLIK_QUANTILE = 0.05
 # Speech Commands is exempt from the speaking-rate and first-20-ms rules (owner, 2026-11-06).
 EXEMPT_FROM_RATE_AND_ONSET = frozenset({"speech-commands"})
@@ -364,7 +367,8 @@ class DropRules:
     source: str
     loglik_floor: float | None
     rate_median: float | None
-    rate_mad: float | None
+    rate_mad: float | None  # raw, not scaled
+    mad_scale: float = MAD_SCALE
 
     @classmethod
     def fit(cls, timings: Iterable[Timing], source: str = "") -> "DropRules":
@@ -395,7 +399,9 @@ class DropRules:
         if not exempt and timing.speech_ms and timing.speech_ms[0][0] < MIN_ONSET_MS:
             return "starts_too_early"
         rate = m.get("rate")
-        spread = RATE_MADS * (self.rate_mad or 0.0)  # a spread of 0 (one clip, or equal rates) switches the rule off
+        spread = (
+            RATE_MADS * self.mad_scale * (self.rate_mad or 0.0)
+        )  # a spread of 0 (one clip, or equal rates) switches the rule off
         if not exempt and rate is not None and spread and abs(rate - (self.rate_median or 0.0)) > spread:
             return "rate_outlier"
         if self.loglik_floor is not None and m.get("loglik") is not None and m["loglik"] < self.loglik_floor:

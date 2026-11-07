@@ -247,9 +247,19 @@ def test_a_clip_without_words_has_no_coverage():
 
 
 def test_rule_rate_more_than_three_mads_from_the_median_drops():
-    assert rules().apply(timing(words=[(100, 500)], rate=6.1)) == "rate_outlier"
-    assert rules().apply(timing(words=[(100, 500)], rate=-0.1)) == "rate_outlier"
-    assert rules().apply(timing(words=[(100, 500)], rate=5.9)) is None
+    # The deviation is scaled by 1.4826, so the limit is 3 * 1.4826 * 1.0 = 4.4478 from the median 3.0.
+    assert rules().apply(timing(words=[(100, 500)], rate=7.5)) == "rate_outlier"
+    assert rules().apply(timing(words=[(100, 500)], rate=-1.5)) == "rate_outlier"
+    assert rules().apply(timing(words=[(100, 500)], rate=7.4)) is None
+
+
+def test_a_clean_population_loses_well_under_one_percent_to_the_rate_rule():
+    rates = np.random.default_rng(0).normal(12.0, 2.0, 20_000)
+    batch = [timing([(100, 500)], rate=float(r)) for r in rates]
+    fitted = DropRules.fit(batch, "x")
+    dropped = sum(fitted.apply(t) == "rate_outlier" for t in batch)
+    assert dropped / len(batch) < 0.005  # 0.27% expected; the unscaled deviation gave 4.3%
+    assert fitted.mad_scale == 1.4826
 
 
 def test_rule_low_loglik_and_the_wider_beam_drop():
