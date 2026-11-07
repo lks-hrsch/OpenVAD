@@ -95,6 +95,11 @@ build-mfa:
         # Kaldi's configure links -lopenblas -lgfortran; find out now rather than after OpenFst is built.
         echo 'int main() {}' | "$cxx" -x c++ - -L"$OPENBLAS_ROOT/lib" -lopenblas -lgfortran -o /dev/null \
             || { echo "build-mfa: $cxx cannot link -lopenblas -lgfortran from $OPENBLAS_ROOT/lib" >&2; exit 1; }
+        # Kaldi passes int* to OpenBLAS, so it must be the LP64 build. An ILP64 one (nixpkgs openblas on x86_64)
+        # compiles and links and then overruns integer buffers.
+        printf '#include <cblas.h>\n#ifdef OPENBLAS_USE64BITINT\n#error ILP64\n#endif\n' \
+            | "$cxx" -x c++ - -I"$OPENBLAS_ROOT/include" -fsyntax-only 2>/dev/null \
+            || { echo "build-mfa: cblas.h from $OPENBLAS_ROOT/include is missing or OpenBLAS is ILP64 (OPENBLAS_USE64BITINT); Kaldi needs the LP64 interface" >&2; exit 1; }
     fi
 
     # Kaldi wants /bin/bash (the shebang of configure, SHELL in its makefiles), which e.g. NixOS lacks. Without it,

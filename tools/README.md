@@ -33,7 +33,7 @@ Kaldi's `src/configure` starts with `#!/bin/bash`, as do its makefiles' `SHELL`,
 - `initdb` and `pg_ctl` come from a PostgreSQL server and must be on `PATH` (Debian and Ubuntu keep them in `/usr/lib/postgresql/<version>/bin`). MFA keeps its corpus in PostgreSQL and runs `CREATE EXTENSION` for `vector` ([pgvector](https://github.com/pgvector/pgvector)), `pg_trgm` and `pg_stat_statements`, so the server needs pgvector and the contrib modules (`postgresql-16-pgvector` on Ubuntu 24.04). `sqlite3` is the command-line tool, which MFA runs.
 - `shasum` comes with Perl (Debian: `perl`). `getconf` comes with libc.
 - A Python 3.12 that has its headers (`python3-dev`), or let uv download its own with `UV_PYTHON_PREFERENCE=only-managed`; the pynini and kalpy-kaldi builds need `Python.h`.
-- Linux also needs `OPENBLAS_ROOT`, a prefix whose `lib/` holds `libopenblas.so` and `libgfortran.so` (Kaldi links `-lopenblas -lgfortran`), with `cblas.h` and `lapacke.h` under its `include/` or on the compiler's include path. `just build-mfa` test-links both libraries before it builds anything. On Debian and Ubuntu (`libopenblas-dev`, `liblapacke-dev`, `gfortran`):
+- Linux also needs `OPENBLAS_ROOT`, a prefix whose `lib/` holds an **LP64** `libopenblas.so` (32-bit integers; not an ILP64 build, which Kaldi's `int` arguments would overrun) and `libgfortran.so` (Kaldi links `-lopenblas -lgfortran`), with `cblas.h` and `lapacke.h` under its `include/` or on the compiler's include path. `just build-mfa` test-links both libraries before it builds anything. On Debian and Ubuntu (`libopenblas-dev`, `liblapacke-dev`, `gfortran`):
 
   ```sh
   mkdir -p ~/openblas-root/lib
@@ -42,6 +42,7 @@ Kaldi's `src/configure` starts with `#!/bin/bash`, as do its makefiles' `SHELL`,
   ```
 
   LAPACK 3.9.1 and later headers declare routines with character arguments with hidden string lengths, which Kaldi's `matrix/cblas-wrappers.h` does not pass; on Linux the recipe puts a `lapacke.h` in front of the real one that adds them. macOS uses the Accelerate framework.
+- `just build-mfa` compiles a one-line check against `cblas.h` and stops if `OPENBLAS_USE64BITINT` is defined, so an ILP64 OpenBLAS cannot get as far as Kaldi. nixpkgs' `openblas` is ILP64 on x86_64, which is why the align shell uses `openblasCompat` (`-DINTERFACE64=FALSE`, no `OPENBLAS_USE64BITINT` in its `openblas_config.h`).
 - Memory: compiling OpenFst needs about 2 GB per job. With 8 GB of RAM, set `JOBS=3` (default: all cores), or the compiler is killed.
 - `nix develop .#align` provides all of it (cmake, curl, sqlite, PostgreSQL with pgvector, `OPENBLAS_ROOT` on Linux). Nothing in the recipe depends on Nix.
 
@@ -71,6 +72,15 @@ The directory is `dist`, not `install`, because Kaldi ships a file called `INSTA
 MFA checks that the Kaldi binaries (`compute-mfcc-feats`, `gmm-align-compiled` and others) and `fstcompile` are on `PATH` before most commands, and `mfa` also needs a PostgreSQL server; `just mfa` sets `PATH`, and MFA starts its own server on first use.
 
 ## Using it
+
+- Once, on a new Linux machine such as the workstation, before trusting labels from it, run Kaldi's own matrix test, which exercises the BLAS and LAPACK calls (add `SHELL="$(command -v bash)"` to the `make` if there is no `/bin/bash`):
+
+  ```sh
+  make -C tools/kaldi/src/matrix matrix-lib-test EXTRA_CXXFLAGS="-I$PWD/tools/kaldi/build/lapack-shim"
+  tools/kaldi/src/matrix/matrix-lib-test    # must end with "Tests succeeded." and exit 0
+  ```
+
+  On macOS drop the `EXTRA_CXXFLAGS`. A wrong integer width or a bad LAPACK call shows up there as a failed check or a crash.
 
 - `uv sync --project tools/mfa` without `--inexact` uninstalls the pynini wheel, which is not in `tools/mfa/pyproject.toml`; `mfa` then fails at import. `just build-mfa` puts it back and always syncs with `--inexact`.
 - A clean `mfa align` exit does not mean every clip aligned. Clips that fail feature generation (silence, noise, a transcript far too long for the audio, a missing `.lab`) get no TextGrid and at most one log warning and a row with blank likelihoods in `alignment_analysis.csv`; a corrupt audio file aborts the whole run with exit 1 and no output. A batch must therefore validate its audio first and compare the clip IDs it sent with the TextGrids it got.

@@ -205,8 +205,9 @@
               OPENBLAS_ROOT = pkgs.symlinkJoin {
                 name = "openblas-root";
                 paths = [
-                  pkgs.openblas
-                  pkgs.openblas.dev
+                  # Not pkgs.openblas: on x86_64 that is ILP64 (64-bit integers) and Kaldi passes 32-bit ones.
+                  pkgs.openblasCompat
+                  pkgs.openblasCompat.dev
                   # Kaldi links -lgfortran with OpenBLAS.
                   pkgs.gfortran.cc.lib
                 ];
