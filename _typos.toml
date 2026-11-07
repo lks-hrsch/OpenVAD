@@ -10,3 +10,5 @@ nd = "nd"
 ba = "ba"
 # NumPy's `np.arange`.
 arange = "arange"
+# NumPy's `ndarray.flags.writeable`.
+writeable = "writeable"
