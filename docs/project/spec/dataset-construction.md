@@ -333,6 +333,8 @@ Scoring conditions over validation and test (owner, 2026-11-06):
 | 8 kHz | decimate, interpolate; no G.711 | ADR 0020: bandwidth is the only variable |
 | Telephone | decimate, G.711, interpolate | labelled third condition: the target domain |
 
+The 8 kHz condition lags the 16 kHz one by the 4.125 ms of the resampler round trip, so bandwidth is the only variable up to that delay, which is under a frame and left uncompensated.
+
 `narrow_leg` and `narrow_native` samples stay in every condition and are reported through `band`.
 `narrowband.py` therefore exposes a resample-only path as well as the G.711 path.
 The scorer itself is deferred (ADR 0020).
