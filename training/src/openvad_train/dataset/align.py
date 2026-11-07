@@ -350,6 +350,8 @@ def read_alignment(textgrid: Path, metrics: dict, provenance: str = "") -> Timin
         "oov_share": oov / len(words) if words else 0.0,
         "max_word_ms": max((e - s for s, e in words), default=0),
         "max_phone_ms": max((e - s for s, e, _ in phones), default=0),
+        # `spn` swallows pauses, so the rule on phone length trips on every long OOV word; this shows how often.
+        "max_phone_ms_without_spn": max((e - s for s, e, t in phones if t != _OOV_PHONE), default=0),
         "first_word_ms": words[0][0] if words else None,
         "rate": len(phones) / speech_s if speech_s > 0 else None,  # phones per second of speech
     }

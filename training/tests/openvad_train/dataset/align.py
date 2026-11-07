@@ -225,6 +225,7 @@ def test_real_mfa_output_gives_word_intervals_in_ms_and_the_oov_share():
     m = t.metrics or {}
     assert (m["n_words"], m["oov_words"], m["oov_share"]) == (4, 1, 0.25)
     assert (m["n_phones"], m["max_word_ms"], m["max_phone_ms"], m["first_word_ms"]) == (14, 1320, 1320, 30)
+    assert m["max_phone_ms_without_spn"] == 120  # the `spn` of the unknown word is the 1320 ms phone
     assert m["rate"] == pytest.approx(14 / 1.93)
     assert m["loglik"] == pytest.approx(-59.8957625679)
 
