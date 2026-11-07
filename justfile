@@ -87,9 +87,14 @@ build-mfa:
         fi
     done
     [ "$missing" = 0 ] || { echo "build-mfa: install what is missing, see tools/README.md" >&2; exit 1; }
-    if [ "$(uname)" = Linux ] && [ -z "${OPENBLAS_ROOT:-}" ]; then
-        echo "build-mfa: set OPENBLAS_ROOT to a prefix with include/cblas.h, include/lapacke.h and lib/libopenblas" >&2
-        exit 1
+    if [ "$(uname)" = Linux ]; then
+        if [ -z "${OPENBLAS_ROOT:-}" ]; then
+            echo "build-mfa: set OPENBLAS_ROOT to a prefix with include/cblas.h, include/lapacke.h, lib/libopenblas and libgfortran" >&2
+            exit 1
+        fi
+        # Kaldi's configure links -lopenblas -lgfortran; find out now rather than after OpenFst is built.
+        echo 'int main() {}' | "$cxx" -x c++ - -L"$OPENBLAS_ROOT/lib" -lopenblas -lgfortran -o /dev/null \
+            || { echo "build-mfa: $cxx cannot link -lopenblas -lgfortran from $OPENBLAS_ROOT/lib" >&2; exit 1; }
     fi
 
     # Kaldi wants /bin/bash (the shebang of configure, SHELL in its makefiles), which e.g. NixOS lacks. Without it,

@@ -206,6 +206,8 @@
                 paths = [
                   pkgs.openblas
                   pkgs.openblas.dev
+                  # Kaldi links -lgfortran with OpenBLAS.
+                  pkgs.gfortran.cc.lib
                 ];
               };
             }

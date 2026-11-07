@@ -30,7 +30,7 @@ The submodules are full clones, not `shallow = true`: the flake sets `self.submo
 `just build-mfa` checks these first and names each one that is missing: `git`, `curl`, `tar`, `patch`, `make`, `cmake`, `uv`, a C++ compiler (`$CXX`, else `c++`), `initdb` and `pg_ctl`.
 
 - `initdb` and `pg_ctl` come from a PostgreSQL server. MFA keeps its corpus in PostgreSQL and runs `CREATE EXTENSION` for `vector` ([pgvector](https://github.com/pgvector/pgvector)), `pg_trgm` and `pg_stat_statements`, so the server needs pgvector and the contrib modules.
-- Linux also needs `OPENBLAS_ROOT`, a prefix with `include/cblas.h`, `include/lapacke.h` and `lib/libopenblas`. macOS uses the Accelerate framework.
+- Linux also needs `OPENBLAS_ROOT`, a prefix with `include/cblas.h`, `include/lapacke.h`, `lib/libopenblas` and `lib/libgfortran` (Kaldi links `-lopenblas -lgfortran`; Debian and Ubuntu: `libopenblas-dev` and `libgfortran5` with a `libgfortran.so` link, or `gfortran`). `just build-mfa` test-links both before it builds anything. macOS uses the Accelerate framework.
 - `nix develop .#align` provides all of it (cmake, curl, PostgreSQL with pgvector, `OPENBLAS_ROOT` on Linux). Nothing in the recipe depends on Nix.
 
 ## Build
