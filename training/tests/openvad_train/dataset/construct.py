@@ -24,11 +24,12 @@ import pytest
 import soundfile as sf
 
 from openvad_train.dataset import __main__ as cli
-from openvad_train.dataset import construct
+from openvad_train.dataset import codecs, construct
 from openvad_train.dataset.audio import load_audio
 from openvad_train.dataset.codecs import DecodeError, MissingCodec
 from openvad_train.dataset.config import SLICE, BuildConfig, dataset_root, work_dir
 from openvad_train.dataset.construct import OutOfSpace, PlanMismatch, construct_sample, run_construct, write_shard
+from openvad_train.dataset.cutting import Chunk
 from openvad_train.dataset.mix import loop_slice
 from openvad_train.dataset.parquet_io import read_parquet, write_parquet
 from openvad_train.dataset.plan import PLAN_SCHEMA, draw_sample
@@ -91,6 +92,13 @@ def make_row(
     clip = Clip(name, "common-voice", "de", "s", "train", speech_file(x, name), 0.0, seconds, "CC0", None)
     timing = Timing(name, "word", [tuple(s) for s in speech], [tuple(m) for m in mask], None, "test")
     return draw_sample(clip, timing, SLICE) | CHAIN_OFF | NO_CODEC | CLEAN | overrides
+
+
+@pytest.fixture(params=["whole_file", "seek"])
+def route(request, monkeypatch) -> None:
+    """Both routes through `decode_16k`: a limit of 0 sends every file down the seek route, as real SWC articles go."""
+    if request.param == "seek":
+        monkeypatch.setattr(codecs, "_LONG_FILE_S", 0.0)
 
 
 def stored(flac: bytes) -> np.ndarray:
@@ -163,6 +171,28 @@ def test_labels_shift_by_padding_offset_then_codec_delay(raw, codec, first_frame
     assert y[299] == 0
     assert y[301:399].tolist() == [1] * 98
     assert y[401:].tolist() == [0] * (len(y) - 401)
+
+
+@pytest.mark.parametrize(("rate", "tolerance_n"), [(16000, 0), (44100, 1)])
+def test_a_chunk_takes_its_audio_from_its_offset_in_the_file(raw, route, rate, tolerance_n):
+    # Nearly every real row is a chunk of a long file, so `source_offset_n` is what maps its labels to its audio.
+    marker_ms = 12_345
+    x = np.zeros(20 * rate, np.float32)
+    x[round(marker_ms / 1000 * rate)] = 0.8
+    path = data_dir() / "datasets/raw/swc/article.wav"
+    path.parent.mkdir(parents=True)
+    sf.write(path, x, rate, subtype="FLOAT")
+    clip = Clip("article", "swc", "de", "s", "train", path.relative_to(data_dir()).as_posix(), 0.0, 20.0, "CC0", None)
+    timing = Timing("article", "word", [(12_300, 12_400)], [], None, "test")
+    drawn = draw_sample(clip, timing, SLICE, chunk=Chunk(10_000, 14_000))
+    row = drawn | CHAIN_OFF | NO_CODEC | CLEAN | {"speech_offset_n": 2000 * 16}
+    assert row["source_offset_n"] == 10_000 * 16
+    assert row["speech_ms"] == [(2300, 2400)]
+
+    flac, labels = construct_sample(row, raw)
+    # 2000 ms of padding, then the marker 2345 ms into the chunk.
+    assert abs(np.argmax(np.abs(stored(flac))) - (2000 + 2345) * 16) <= tolerance_n
+    assert np.flatnonzero(labels == 1).tolist() == list(range(430, 440))
 
 
 def test_masks_shift_with_speech_and_win_over_it(raw):
