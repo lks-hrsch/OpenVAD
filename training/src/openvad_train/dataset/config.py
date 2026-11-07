@@ -84,6 +84,7 @@ class BuildConfig:
     )
     p_narrow: float = 0.35  # training parameter: share of wide samples narrowed at train time
     flac_mb_per_hour: float = 63.0  # estimate for shard sizes until the slice measures it
+    max_samples: int | None = None  # keep the lowest ranks once drawn; for the slice, whose draw is far larger
 
 
 FULL = BuildConfig(
@@ -112,6 +113,7 @@ SLICE = BuildConfig(
     condition_shares=_slice_shares(),
     codec_shares={"none": 0.5, "g722": 0.5},
     codec_bitrate_kbps={"g722": (64.0, 64.0)},
+    max_samples=500,
     # The room, handset, AGC, clip, suppression and transient legs arrive with Tasks 18 and 19.
     room_p=0.0,
     handset_p=0.0,

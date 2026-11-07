@@ -548,6 +548,24 @@ def test_limit_keeps_the_lowest_ranks_by_hours(data):
     assert plan_of(data)["sample_id"].to_list() == everything["sample_id"].to_list()[:2]
 
 
+def test_max_samples_keeps_the_lowest_ranks_and_redraws_nothing(data):
+    run_index(CONFIG)
+    run_plan(CONFIG)
+    everything = plan_of(data)
+    run_plan(dataclasses.replace(CONFIG, max_samples=2))
+    capped = plan_of(data)
+    assert capped.height == 2
+    # Shards are assigned after the cap, so compare the drawn columns only.
+    assert capped.drop("shard").equals(everything.head(2).drop("shard"))
+    manifest = json.loads((data / "datasets/processed/work/openvad-slice/plan/manifest.json").read_text())
+    assert (manifest["samples"], manifest["max_samples"]) == (2, 2)
+
+
+def test_the_slice_caps_its_samples():
+    assert SLICE.max_samples == 500
+    assert FULL.max_samples is None
+
+
 @pytest.mark.parametrize("limit", ["abc", "-1", "0", "-2h", "h", "nanh", "infh"])
 def test_a_bad_limit_is_refused_before_any_work(data, limit):
     with pytest.raises(ValueError, match="limit"):

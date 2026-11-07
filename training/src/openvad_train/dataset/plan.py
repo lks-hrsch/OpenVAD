@@ -423,7 +423,7 @@ def _print_summary(df: pl.DataFrame, bytes_per_hour: float) -> list[dict]:
 
 def run_plan(cfg: BuildConfig, limit: str | None = None) -> None:
     """Write `work/<name>/plan/plan.parquet` in rank order and the stage's `manifest.json`, from the index stage's
-    tables. `limit`, a sample count or hours such as `1000h`, keeps the lowest ranks.
+    tables. `limit`, a sample count or hours such as `1000h`, keeps the lowest ranks, and so does `cfg.max_samples`.
     """
     samples, hours = _parse_limit(limit)
     missing = sorted(c for c, share in cfg.condition_shares.items() if share > 0 and c not in _CONDITIONS_WITH_A_DRAW)
@@ -443,6 +443,8 @@ def run_plan(cfg: BuildConfig, limit: str | None = None) -> None:
 
     # Sorted before the limit too: `assign_shards` only sees what the limit keeps.
     df = _lowest_ranks(pl.concat(frames).sort("rank"), samples, hours)
+    if cfg.max_samples is not None:
+        df = df.head(cfg.max_samples)  # the lowest ranks after the draw, so a kept row is the one drawn without a cap
     if df.is_empty() and limit is not None:
         raise ValueError(f"limit {limit!r} selects no sample")
     if df["sample_id"].n_unique() != df.height:
@@ -462,6 +464,7 @@ def run_plan(cfg: BuildConfig, limit: str | None = None) -> None:
             "plan_version": cfg.plan_version,
             "global_seed": cfg.global_seed,
             "limit": limit,
+            "max_samples": cfg.max_samples,
             "samples": df.height,
             "per_source": per_source,
             "summary": _print_summary(df, bytes_per_hour),
