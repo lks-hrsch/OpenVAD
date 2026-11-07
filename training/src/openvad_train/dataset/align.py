@@ -590,6 +590,9 @@ def _metrics_of(row: dict, duration_ms: int, retried: bool) -> dict:
     }
 
 
+_KALPY_START = re.compile(r" - DEBUG - Aligning with (?!model: )")
+
+
 def _retried(mfa_root: Path, corpus: str) -> set[str]:
     """File stems that MFA aligned only with its retry beam, in the pass whose alignment is written. kalpy logs
     `Retried <speaker id>-<utterance id>` at debug level in the per-job alignment logs; the database maps those ids
@@ -597,7 +600,8 @@ def _retried(mfa_root: Path, corpus: str) -> set[str]:
     pass (`align.<job>.log`).
 
     Anything unexpected is an error, because a clip not checked would pass the beam rule: no database or logs, or
-    a log without kalpy's start message (`Aligning with ...`), which would mean a reworded log and no `Retried` ever.
+    a log without kalpy's start message (`Aligning with <path>`; MFA's own `Aligning with model: <path>` in the same
+    file does not count), which would mean a reworded log and no `Retried` ever.
     """
     log_dir = mfa_root / corpus / "alignment/log"
     db, logs = (
@@ -609,7 +613,7 @@ def _retried(mfa_root: Path, corpus: str) -> set[str]:
             f"MFA left no database or alignment logs under {mfa_root / corpus}: cannot tell retried clips"
         )
     texts = [log_file.read_text() for log_file in logs]
-    if missing := [f.name for f, t in zip(logs, texts, strict=True) if "- DEBUG - Aligning with " not in t]:
+    if missing := [f.name for f, t in zip(logs, texts, strict=True) if not _KALPY_START.search(t)]:
         raise MfaFailedError(f"{missing} lack kalpy's 'Aligning with' message: its log changed, retries cannot be read")
     with closing(sqlite3.connect(db)) as con:
         names = dict(

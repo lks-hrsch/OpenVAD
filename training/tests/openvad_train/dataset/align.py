@@ -193,6 +193,16 @@ def test_a_log_without_kalpys_start_message_is_an_error_not_an_empty_set(tmp_pat
         align._retried(tmp_path, "corpus")
 
 
+def test_mfas_own_aligning_with_model_line_does_not_satisfy_the_canary(tmp_path):
+    mfa_line = "2026-11-07 22:02:05,300 - kalpy.align - 6208811008 - 1 - DEBUG - Aligning with model: /root/final.mdl\n"
+    _mfa_logs(tmp_path, align_1_fmllr_log=mfa_line + LINE.format("Retried", "1-1"))
+    with pytest.raises(MfaFailedError, match=r"align.1.fmllr.log.*retries cannot be read"):
+        align._retried(tmp_path, "corpus")
+    log_file = tmp_path / "corpus/alignment/log/align.1.fmllr.log"
+    log_file.write_text(mfa_line + START + LINE.format("Retried", "1-1"))
+    assert align._retried(tmp_path, "corpus") == {"u0000000"}
+
+
 def test_an_unknown_utterance_or_missing_logs_are_errors(tmp_path):
     _mfa_logs(tmp_path, align_1_log=START + LINE.format("Retried", "9-9"))
     with pytest.raises(MfaFailedError, match="does not know"):
