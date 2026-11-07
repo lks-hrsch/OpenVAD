@@ -8,8 +8,8 @@
 Delay. The resampler is linear-phase, so every function that filters returns audio that lags its input by
 `label_shift_samples()` samples (66 at 16 kHz, 4.125 ms, 0.4125 frames), and nothing here compensates. The shift
 rounds to 0 frames on the 10 ms grid, so the labels stay as they are. A `narrow_leg` sample is delayed twice: its
-stored AMR-NB leg carries 5.0 ms for the codec plus 4.125 ms for the resampler, which Task 19 rounds to 9 ms in the
-labels and leaves 0.125 ms; this transform adds another 4.125 ms. The residual lag is 4.25 ms, 0.425 frames,
+stored AMR-NB leg carries 5.0 ms for the codec plus 4.125 ms for the resampler, which the labels round to 9 ms and
+leave 0.125 ms; this transform adds another 4.125 ms. The residual lag is 4.25 ms, 0.425 frames,
 under one frame.
 
 The resampler functions are whole-signal calls; pass the whole sample, never blocks.
@@ -76,8 +76,8 @@ def apply_narrowband(audio: np.ndarray, band: str, rng: np.random.Generator, p_n
     always, `narrow_native` never. An unknown `band` raises `ValueError`.
 
     Every call takes exactly two draws from `rng`, whatever the band, so a sample's later draws do not depend on
-    this decision. Audio left alone is returned as the same object; processed audio is a new float32 array that
-    lags the input as `telephone` does.
+    this decision. Audio left alone is returned as the same object, so a caller must not write to the result in place:
+    that would change the input too. Processed audio is a new float32 array that lags the input as `telephone` does.
     """
     if band not in _BANDS:
         raise ValueError(f"unknown band {band!r}, expected one of {_BANDS}")
