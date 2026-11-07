@@ -92,24 +92,24 @@ const INPUT: [f32; 80] = [
 ];
 
 const DECIMATED: [u32; 40] = [
-    0xb847b022, 0x39802e22, 0xba10450a, 0x3a787089, 0xbad3cc85, 0x3b20428e, 0xbb7878aa, 0x3bb152c2,
-    0xbbfe2e59, 0x3c30cbf3, 0xbc6eb714, 0x3ca0347f, 0xbcd61d4d, 0x3d0e6ee2, 0xbd412601, 0x3d875c9a,
-    0xbdcea75b, 0x3e55a9a9, 0xbef749e0, 0xbf22165b, 0x3f4d1dbc, 0x3e20514c, 0x3f2bc631, 0xbe22ad62,
-    0xbe1e095a, 0xbd8587ac, 0x3e9284d2, 0xbf281b34, 0xbed94065, 0x3e7863de, 0x3e7f3609, 0x3f50e5be,
-    0x3ec4eee4, 0xbe762927, 0x3ac421e6, 0xbe2337b9, 0x3f14622f, 0x3e5634ed, 0xbe43b527, 0xbdab04bc,
+    0x3892fcb3, 0xb9b9f626, 0x3a4c25a9, 0xbaab5dfa, 0x3b10287b, 0xbb567244, 0x3ba5410f, 0xbbe936f2,
+    0x3c267032, 0xbc66a48d, 0x3c9b4615, 0xbcd0fb37, 0x3d0cf40b, 0xbd3f24ab, 0x3d86ecdf, 0xbdce9c13,
+    0x3e55b740, 0xbef76d81, 0xbf21e5d7, 0x3f4ce411, 0x3e217035, 0x3f2b6ec9, 0xbe216e61, 0xbe1fd1a5,
+    0xbd823c70, 0x3e91b137, 0xbf27a7ca, 0xbeda0801, 0x3e79a965, 0x3e7de5f3, 0x3f511033, 0x3ec49154,
+    0xbe75fa6b, 0x3ad1b312, 0xbe239cb3, 0x3f1485bc, 0x3e55360c, 0xbe427558, 0xbdad4511, 0x3e1b84c5,
 ];
 
 const INTERPOLATED_FIRST_40: [u32; 80] = [
-    0xb8c7b022, 0x00000000, 0x39acf579, 0x00000000, 0xb992d078, 0x00000000, 0x3a57ff3d, 0x00000000,
-    0xbac43c78, 0x00000000, 0x3b0ac409, 0x00000000, 0xbb59e559, 0x00000000, 0x3b99901b, 0x00000000,
-    0xbbd96a50, 0x00000000, 0x3c102e3d, 0x00000000, 0xbc4416b2, 0x00000000, 0x3c844a9c, 0x00000000,
-    0xbcb1fbc7, 0x00000000, 0x3cf2cf00, 0x00000000, 0xbd28d319, 0x00000000, 0x3d7689ee, 0x00000000,
-    0xbdc921b0, 0x00000000, 0x3e7b49d1, 0x3e8c3faf, 0xbd6bddd3, 0xbeebbd08, 0xbf34b798, 0xbf6b0585,
-    0xbf901229, 0xbf7789b1, 0xbe734726, 0x3f2064f5, 0x3f8182e9, 0x3f5354b3, 0x3ee17ad4, 0x3e5a63dc,
-    0x3e8b682d, 0x3eeb0125, 0x3ed0ece7, 0x3db2b01e, 0x3dfb1b8c, 0x3f5ec1d0, 0x3fb47b19, 0x3f21b78f,
-    0xbf4787b1, 0xbf7e990f, 0x3e08a43d, 0x3f36fdb1, 0xbe1576e6, 0xbf6ecddf, 0xbebc6280, 0x3eeb2acc,
-    0x3df7d694, 0xbf261077, 0xbea815f9, 0x3f39f296, 0x3f6fb197, 0x3da9d33e, 0xbf130574, 0xbecd1853,
-    0xbd4d9412, 0xbe1e562a, 0xbf1356ea, 0xbf718016, 0xbf866f45, 0xbf405df1, 0xbe0cb553, 0x3eaeb82b,
+    0x3912fcb3, 0x00000000, 0xb9f9245b, 0x00000000, 0x39c05389, 0x00000000, 0xba95ce21, 0x00000000,
+    0x3b06ae5e, 0x00000000, 0xbb396c05, 0x00000000, 0x3b910b21, 0x00000000, 0xbbc9d322, 0x00000000,
+    0x3c0e26b7, 0x00000000, 0xbc3ae23f, 0x00000000, 0x3c7ec287, 0x00000000, 0xbcad0121, 0x00000000,
+    0x3cebe108, 0x00000000, 0xbd253027, 0x00000000, 0x3d71a309, 0x00000000, 0xbdc6160e, 0x00000000,
+    0x3e79ad02, 0x3e8c3faf, 0xbd64dc3a, 0xbeebbd08, 0xbf3531f4, 0xbf6b0585, 0xbf8fcb80, 0xbf7789b1,
+    0xbe75c10a, 0x3f2064f5, 0x3f81c6d9, 0x3f5354b3, 0x3ee04585, 0x3e5a63dc, 0x3e8c931d, 0x3eeb0125,
+    0x3ecfbe7a, 0x3db2b01e, 0x3dffafc8, 0x3f5ec1d0, 0x3fb43f7e, 0x3f21b78f, 0xbf4711e8, 0xbf7e990f,
+    0x3e07b1cc, 0x3f36fdb1, 0xbe14b5c2, 0xbf6ecddf, 0xbebc6d0f, 0x3eeb2acc, 0x3df6aad3, 0xbf261077,
+    0xbea7923c, 0x3f39f296, 0x3f6f4d8a, 0x3da9d33e, 0xbf128f16, 0xbecd1853, 0xbd56b456, 0xbe1e562a,
+    0xbf12b8e5, 0xbf718016, 0xbf86b733, 0xbf405df1, 0xbe09ce07, 0x3eaeb82b, 0x3eca86f9, 0x3e96b8d9,
 ];
 
 fn bits(x: &[f32]) -> Vec<u32> {
@@ -157,7 +157,7 @@ fn peak(x: &[f32]) -> usize {
 #[test]
 fn group_delay_is_the_centre_tap() {
     assert_eq!(HALF_BAND.len(), 2 * GROUP_DELAY_16K + 1);
-    assert_eq!(GROUP_DELAY_16K, 35);
+    assert_eq!(GROUP_DELAY_16K, 33);
 }
 
 #[test]
@@ -213,13 +213,36 @@ fn matches_an_f64_reference() {
 }
 
 #[test]
-fn dc_gain_is_one() {
+fn dc_gain_is_within_0_0025_db_of_one() {
+    // Half-band symmetry puts DC at a ripple extremum; measured +0.0019 dB.
+    let db = |v: f64| (20.0 * v.log10()).abs();
     let ones = [1.0_f32; 200];
-    for v in &decimate_2x(&ones)[GROUP_DELAY_16K..] {
-        assert!((v - 1.0).abs() < 1e-6, "{v}");
+    for &v in &decimate_2x(&ones)[GROUP_DELAY_16K..] {
+        assert!(db(f64::from(v)) < 0.0025, "{v}");
     }
-    for v in &interpolate_2x(&ones)[2 * GROUP_DELAY_16K..] {
-        assert!((v - 1.0).abs() < 1e-6, "{v}");
+    // The 8 kHz image of DC (about -67 dB) alternates the output, so take the mean of each pair.
+    for pair in interpolate_2x(&ones)[2 * GROUP_DELAY_16K..]
+        .as_chunks::<2>()
+        .0
+    {
+        let mean = f64::from(pair[0] + pair[1]) / 2.0;
+        assert!(db(mean) < 0.0025, "{pair:?}");
+    }
+}
+
+#[test]
+fn centre_tap_and_zeros_make_interpolation_copy_delayed_input() {
+    assert_eq!(HALF_BAND[GROUP_DELAY_16K], 0.5);
+    for (k, &tap) in HALF_BAND.iter().enumerate() {
+        if k != GROUP_DELAY_16K && k.abs_diff(GROUP_DELAY_16K) % 2 == 0 {
+            assert_eq!(tap, 0.0, "tap {k}");
+        }
+    }
+    let y = interpolate_2x(&INPUT[..40]);
+    for (m, &x) in INPUT[..40].iter().enumerate() {
+        if let Some(&v) = y.get(2 * m + GROUP_DELAY_16K) {
+            assert_eq!(v.to_bits(), x.to_bits(), "input {m}");
+        }
     }
 }
 
