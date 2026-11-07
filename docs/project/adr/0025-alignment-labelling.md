@@ -24,7 +24,7 @@ The aligner facts behind it, including models per language, accuracy and licence
 - Which model labels which language follows the recommendation in [`docs/notes/forced-alignment.md`](../../notes/forced-alignment.md#which-aligner-for-which-language).
 - Kazakh has `kazakh_cv` 2.0.0 (`acoustic/kazakh/cv/v2.0.0` in `MontrealCorpusTools/mfa-models`, checked 2026-11-04).
 - Japanese and Mandarin transcripts need word segmentation before alignment; they use the MFA 3.4.3 tokenisers. Digits map to `<unk>`.
-- One committed table, `dataset/mfa_models.tsv`, holds language, acoustic model, dictionary and G2P model, following the note.
+- One committed table, `dataset/mfa_models.tsv`, holds language, acoustic model, dictionary and G2P model, each with the release version to download, plus a note and a `status` (`downloaded`, `listed`, `open`), following the note.
 - A language with an acoustic model but no lexicon gets a rule-based lexicon (Epitran or XPF) (owner, 2026-11-06). If it fails the quality bar, the failure rule below applies.
 - The model cards list corpora, not splits, so the aligners may have seen Common Voice and MLS dev and test audio. They only produce labels; the labels on those pools may be a little more accurate than on train.
 
@@ -36,13 +36,13 @@ Per language and source, a clip is dropped if:
 - its alignment fails or needs a wider beam;
 - its per-utterance log-likelihood is in the bottom 5%;
 - a word lasts over 1.5 s or a phone over 0.5 s;
-- its speaking rate is more than three median absolute deviations from the median;
+- its speaking rate is more than three median absolute deviations from the median, the deviation scaled by 1.4826 so that three of them are 3 sigma of a normal population (an unscaled one drops 4.3% of a clean population; the owner is to confirm);
 - its first word starts in the first 20 ms;
 - speech covers less than 20% of it.
 
 Speech Commands is exempt from the speaking-rate and first-20-ms rules (owner, 2026-11-06).
-Drop thresholds are frozen per language and source from the first batch, so later batches cannot change earlier decisions.
-Out-of-vocabulary words use `--use_g2p` where a G2P model exists; Italian and Dutch have none, so their out-of-vocabulary words become `spn` (owner, 2026-11-06).
+Drop thresholds are frozen per language and source, so later batches cannot change earlier decisions. They are fitted on a calibration batch, not on the first batch, because rank order puts the most prolific speaker first: clips in rank order, at most 10 per speaker, up to 1000 clips, whose alignments are discarded. A language with fewer than 50 aligned calibration clips is not aligned.
+Out-of-vocabulary words use a G2P model where one exists (`--g2p_model_path` of `mfa align`; MFA 3.4.3 has `--use_g2p` only on `align_hf`, `align_one` and `adapt`); Italian and Dutch have none, so their out-of-vocabulary words become `spn` (owner, 2026-11-06).
 
 ### Quality bar and hand check
 

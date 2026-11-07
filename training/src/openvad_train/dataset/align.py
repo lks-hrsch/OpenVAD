@@ -549,6 +549,9 @@ def walk_cap(
     `hours` of surviving audio. A clip MFA could not align is simply missing from what `align_batch` returns.
     The first clip that would not fit ends the walk unexamined, so a clip the rules would have dropped is not
     skipped to reach a smaller one behind it.
+
+    The cap is per speaker, source and language here, an upper bound that saves MFA time; the cap that counts is
+    `apply_cap_rank` keyed (source, speaker), applied in `plan` to the surviving timings.
     """
     return _walk([_Walk(speaker_clips, hours)], align_batch, lambda ts: [rules.apply(t) for t in ts], dropped)
 

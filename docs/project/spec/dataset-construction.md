@@ -185,12 +185,12 @@ Non-MFA sources:
 MFA sources are Common Voice, MLS, FLEURS, VoxPopuli (`invalid` rows dropped) and Speech Commands.
 
 - **Batches:** clips are taken in rank order per speaker, one MFA run per batch, keeping each speaker's clips together for fMLLR.
-- **Thresholds:** per language and source, drop thresholds are frozen from the first batch, so later batches cannot change earlier decisions.
-- **Cap:** the 30 h cap walks rank order over surviving clips of each speaker; once a speaker reaches 30 h, that speaker's remaining clips are never aligned. This saves MFA time and keeps the cap correct after drops.
-- **Drop rules:** ADR 0025 as written (owner, 2026-11-06), with Speech Commands exempt from the speaking-rate and first-20-ms rules.
-- **Out-of-vocabulary words:** `--use_g2p` where a G2P model exists; otherwise `spn` for Italian and Dutch (owner, 2026-11-06).
+- **Thresholds:** per language and source, the drop thresholds that depend on data are fitted once on a calibration batch and then frozen, so later batches cannot change earlier decisions. The first batch is not used, because rank order puts the most prolific speaker first and one voice would set the thresholds. The calibration batch takes clips in rank order, at most 10 per speaker, up to 1000 clips (a clip without a speaker counts as a speaker); its alignments are discarded and its clips go through the normal batches. With fewer than 50 aligned clips the language is not aligned and the manifest records `too_few_to_calibrate`. Its composition, rank cut and the fitted rules are in `rules.json` and the manifest.
+- **Cap:** the 30 h cap walks rank order over surviving clips of each speaker; once a speaker reaches 30 h, that speaker's remaining clips are never aligned. This saves MFA time and keeps the cap correct after drops. `align` walks per source, language and speaker, which is an upper bound; the cap that counts is `apply_cap_rank` keyed (source, speaker) over the surviving MFA timings in rank order, applied in `plan`.
+- **Drop rules:** ADR 0025 as written (owner, 2026-11-06), with Speech Commands exempt from the speaking-rate and first-20-ms rules. The speaking-rate rule scales the median absolute deviation by 1.4826 (the usual estimate of sigma; unscaled, three deviations are 2.02 sigma and drop 4.3% of a clean population), stored in `rules.json`; the owner is to confirm this reading.
+- **Out-of-vocabulary words:** a G2P model where one exists, passed to `mfa align` as `--g2p_model_path` (`--use_g2p` exists only on `align_hf`, `align_one` and `adapt` in MFA 3.4.3); otherwise `spn` for Italian and Dutch (owner, 2026-11-06).
 - **Text:** digits map to `<unk>`; Japanese and Mandarin use the MFA 3.4.3 tokenisers.
-- **Models:** one committed table, `dataset/mfa_models.tsv`: language, acoustic model, dictionary, G2P, following `docs/notes/forced-alignment.md`.
+- **Models:** one committed table, `dataset/mfa_models.tsv`: language, acoustic model, dictionary, G2P, each with the release version to download, a note and a `status` (`downloaded`, `listed` or `open`), following `docs/notes/forced-alignment.md`. The provenance of every row records the version read from the downloaded model.
 - **No path:** a language with an acoustic model but no lexicon gets a rule-based lexicon (Epitran or XPF). If it fails the quality bar, the language follows the failure rule below (owner, 2026-11-06).
 - Audio is read from a temporary local copy, per batch, on the workstation (ADR 0024).
 
