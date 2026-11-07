@@ -28,11 +28,22 @@ Kaldi's `src/configure` starts with `#!/bin/bash`, as do its makefiles' `SHELL`,
 
 ## Requirements
 
-`just build-mfa` checks these first and names each one that is missing: `git`, `curl`, `tar`, `patch`, `make`, `cmake`, `uv`, a C++ compiler (`$CXX`, else `c++`), `initdb` and `pg_ctl`.
+`just build-mfa` checks these first and names each one that is missing: `git`, `curl`, `shasum`, `getconf`, `tar`, `patch`, `make`, `cmake`, `sqlite3`, `uv`, a C++ compiler (`$CXX`, else `c++`), `initdb` and `pg_ctl`.
 
-- `initdb` and `pg_ctl` come from a PostgreSQL server. MFA keeps its corpus in PostgreSQL and runs `CREATE EXTENSION` for `vector` ([pgvector](https://github.com/pgvector/pgvector)), `pg_trgm` and `pg_stat_statements`, so the server needs pgvector and the contrib modules.
-- Linux also needs `OPENBLAS_ROOT`, a prefix with `include/cblas.h`, `include/lapacke.h`, `lib/libopenblas` and `lib/libgfortran` (Kaldi links `-lopenblas -lgfortran`; Debian and Ubuntu: `libopenblas-dev` and `libgfortran5` with a `libgfortran.so` link, or `gfortran`). `just build-mfa` test-links both before it builds anything. macOS uses the Accelerate framework.
-- `nix develop .#align` provides all of it (cmake, curl, PostgreSQL with pgvector, `OPENBLAS_ROOT` on Linux). Nothing in the recipe depends on Nix.
+- `initdb` and `pg_ctl` come from a PostgreSQL server and must be on `PATH` (Debian and Ubuntu keep them in `/usr/lib/postgresql/<version>/bin`). MFA keeps its corpus in PostgreSQL and runs `CREATE EXTENSION` for `vector` ([pgvector](https://github.com/pgvector/pgvector)), `pg_trgm` and `pg_stat_statements`, so the server needs pgvector and the contrib modules (`postgresql-16-pgvector` on Ubuntu 24.04). `sqlite3` is the command-line tool, which MFA runs.
+- `shasum` comes with Perl (Debian: `perl`). `getconf` comes with libc.
+- A Python 3.12 that has its headers (`python3-dev`), or let uv download its own with `UV_PYTHON_PREFERENCE=only-managed`; the pynini and kalpy-kaldi builds need `Python.h`.
+- Linux also needs `OPENBLAS_ROOT`, a prefix whose `lib/` holds `libopenblas.so` and `libgfortran.so` (Kaldi links `-lopenblas -lgfortran`), with `cblas.h` and `lapacke.h` under its `include/` or on the compiler's include path. `just build-mfa` test-links both libraries before it builds anything. On Debian and Ubuntu (`libopenblas-dev`, `liblapacke-dev`, `gfortran`):
+
+  ```sh
+  mkdir -p ~/openblas-root/lib
+  ln -sf /usr/lib/$(gcc -dumpmachine)/libopenblas.so $(gcc -print-file-name=libgfortran.so) ~/openblas-root/lib/
+  export OPENBLAS_ROOT=~/openblas-root
+  ```
+
+  LAPACK 3.9.1 and later headers declare routines with character arguments with hidden string lengths, which Kaldi's `matrix/cblas-wrappers.h` does not pass; on Linux the recipe puts a `lapacke.h` in front of the real one that adds them. macOS uses the Accelerate framework.
+- Memory: compiling OpenFst needs about 2 GB per job. With 8 GB of RAM, set `JOBS=3` (default: all cores), or the compiler is killed.
+- `nix develop .#align` provides all of it (cmake, curl, sqlite, PostgreSQL with pgvector, `OPENBLAS_ROOT` on Linux). Nothing in the recipe depends on Nix.
 
 ## Build
 

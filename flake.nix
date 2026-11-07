@@ -197,6 +197,7 @@
               packages = [
                 pkgs.cmake
                 pkgs.curl
+                pkgs.sqlite
                 (pkgs.postgresql.withPackages (ps: [ ps.pgvector ]))
               ];
             }

@@ -80,7 +80,7 @@ build-mfa:
     set -euo pipefail
     cxx="${CXX:-c++}"
     missing=0
-    for tool in git curl shasum getconf tar patch make cmake uv initdb pg_ctl "$cxx"; do
+    for tool in git curl shasum getconf tar patch make cmake sqlite3 uv initdb pg_ctl "$cxx"; do
         if ! command -v "$tool" >/dev/null; then
             echo "build-mfa: $tool not found on PATH" >&2
             missing=1
