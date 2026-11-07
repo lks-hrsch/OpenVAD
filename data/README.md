@@ -50,6 +50,7 @@ Elsewhere, install an ffmpeg with `libopencore_amrnb` (AMR-NB), `libvo_amrwbenc`
 `ffmpeg -encoders | grep -E "amr|opus|g722"` lists them.
 ffmpeg stays a separate process, so none of its GPL or version-3 code is linked into the release.
 `dataset/codec_delays.json` records the ffmpeg version its delays were measured with.
+The builder records the ffmpeg version and build flags per run, so a build made under a different ffmpeg build is refused until its shards and manifest are deleted, even where the audio would be identical.
 
 ## Layout
 

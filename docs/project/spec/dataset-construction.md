@@ -50,7 +50,7 @@ Most speech has transcripts without timings, so forced alignment is part of this
 - The estimated full set is about 2.97 TB of constructed audio with an unmeasured FLAC ratio, so the first full build may stop early until storage is added.
 - Millions of small files on SMB take days (`data/README.md`), so loose files per sample are not an option.
 - Common Voice is still being fetched; plans are frozen only after it ends. Development uses the 20 extracted locales.
-- ffmpeg on this machine lacks `libopencore-amrnb` and `libvo-amrwbenc`; the builder needs a build with them, and construction fails early without it.
+- A plain ffmpeg lacks `libopencore_amrnb` and `libvo_amrwbenc`; the builder needs a build with them (the Nix shell's `ffmpeg-full` has both, [data/README.md](../../../data/README.md#ffmpeg-for-dataset-construction)), and construction fails early without it.
 
 ## Approaches
 

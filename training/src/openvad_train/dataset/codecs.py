@@ -171,7 +171,8 @@ def narrow_roundtrip(audio: np.ndarray, codec: str, bitrate: int | None) -> np.n
     if codec != "amr_nb":
         raise ValueError(f"narrow_roundtrip only runs amr_nb, got {codec!r}")
     narrow = decimate_2x(audio)
-    # The codec takes int16; clip here, not in ffmpeg's float conversion. The filter overshoots by up to 14%.
+    # The filter can leave [-1, 1] (bounded by the sum of |taps|, about 1.75; uniform full-scale noise reaches 1.20),
+    # so the clip keeps the int16 conversion defined.
     np.clip(narrow, -1.0, 32767 / 32768, out=narrow)
     return interpolate_2x(roundtrip(narrow, codec, bitrate, 8000))[: len(audio)]
 
@@ -214,7 +215,7 @@ def _verify_intact(path: str) -> None:
 
 
 def _refuse_8k(path: str) -> ValueError:
-    return ValueError(f"{path} is 8 kHz, which needs the OpenVAD resampler (ADR 0009); it does not exist yet")
+    return ValueError(f"{path} is 8 kHz; decode_16k does not read it, the OpenVAD resampler (ADR 0009) is not wired in")
 
 
 def decode_16k(path: str, offset_s: float, duration_s: float) -> np.ndarray:
