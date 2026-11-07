@@ -57,7 +57,8 @@
       "inputs": {
         "git-hooks": "git-hooks",
         "nixpkgs": "nixpkgs",
-        "rust-overlay": "rust-overlay"
+        "rust-overlay": "rust-overlay",
+        "tudcd-scr": "tudcd-scr"
       }
     },
     "rust-overlay": {
@@ -77,6 +78,23 @@
       "original": {
         "owner": "oxalica",
         "repo": "rust-overlay",
+        "type": "github"
+      }
+    },
+    "tudcd-scr": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1779045881,
+        "narHash": "sha256-EJgXZnyUQzL2f06r0Wm5GtDmoV/iZwzOe04chU0fVp0=",
+        "owner": "tud-cd",
+        "repo": "tudcd-scr",
+        "rev": "c436bf5dfd1b178316baa2e712b7cbad857dc086",
+        "type": "github"
+      },
+      "original": {
+        "owner": "tud-cd",
+        "repo": "tudcd-scr",
+        "rev": "c436bf5dfd1b178316baa2e712b7cbad857dc086",
         "type": "github"
       }
     }

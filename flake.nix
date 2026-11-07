@@ -11,8 +11,13 @@
       url = "github:cachix/git-hooks.nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    # The docs shell builds tudcd-scr from the submodule.
-    self.submodules = true;
+    # The docs shell builds tudcd-scr from this input, not from the docs/tudcd-scr submodule: self.submodules
+    # would make every Nix user fetch the tools/ submodules too. The rev here and the gitlink of
+    # docs/tudcd-scr must name the same commit; change both together (see docs/README.md).
+    tudcd-scr = {
+      url = "github:tud-cd/tudcd-scr/c436bf5dfd1b178316baa2e712b7cbad857dc086";
+      flake = false;
+    };
   };
 
   outputs =
@@ -21,6 +26,7 @@
       nixpkgs,
       rust-overlay,
       git-hooks,
+      tudcd-scr,
     }:
     let
       systems = [
@@ -94,7 +100,7 @@
         pkgs.stdenvNoCC.mkDerivation {
           pname = "tudcd-scr";
           version = "0.7.1";
-          src = ./docs/tudcd-scr;
+          src = tudcd-scr;
           nativeBuildInputs = [ (pkgs.texliveBasic.withPackages (ps: [ ps.l3build ])) ];
           buildPhase = "HOME=$TMPDIR l3build unpack";
           installPhase = ''

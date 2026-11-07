@@ -10,7 +10,7 @@ The Master's thesis lives here, written in LuaLaTeX on the TU Dresden class bund
 - `notes/`: build and hardware, dataset, forced-alignment and speech-quality notes (Markdown).
 - `project/`: ADRs, specs and design documents.
 - `superpowers/`: the historical datasets design and plan of 2026-10-31, superseded by ADRs 0023 and 0024 and the current fetchers.
-- `tudcd-scr/`: the class bundle, a git submodule pinned to `c436bf5`.
+- `tudcd-scr/`: the class bundle, a git submodule pinned to `c436bf5`. The docs shell takes the same classes from the `tudcd-scr` input of `flake.nix`, which must name the same commit: when you move the submodule, change the rev in `flake.nix` and run `nix flake lock` too.
 
 Never edit files under `generated/` by hand.
 Change the script that writes them and run `just docs-generated` instead.
