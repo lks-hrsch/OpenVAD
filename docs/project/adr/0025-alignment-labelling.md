@@ -41,7 +41,7 @@ Per language and source, a clip is dropped if:
 - speech covers less than 20% of it.
 
 Speech Commands is exempt from the speaking-rate and first-20-ms rules (owner, 2026-11-06).
-Drop thresholds are frozen per language and source, so later batches cannot change earlier decisions. They are fitted on a calibration batch, not on the first batch, because rank order puts the most prolific speaker first: clips in rank order, at most 10 per speaker, up to 1000 clips, whose alignments are discarded. A language with fewer than 50 aligned calibration clips is not aligned.
+Drop thresholds are frozen per language and source, so later batches cannot change earlier decisions. They are fitted on a calibration batch, not on the first batch, because rank order puts the most prolific speaker first: clips in rank order, at most 10 per speaker, up to 1000 clips, whose alignments are discarded. Only calibration clips that pass the fixed rules (wider beam, word and phone length, coverage, first 20 ms) are fitted on and counted. A language with fewer than 50 of them is not aligned.
 Out-of-vocabulary words use a G2P model where one exists (`--g2p_model_path` of `mfa align`; MFA 3.4.3 has `--use_g2p` only on `align_hf`, `align_one` and `adapt`); Italian and Dutch have none, so their out-of-vocabulary words become `spn` (owner, 2026-11-06).
 
 ### Quality bar and hand check
