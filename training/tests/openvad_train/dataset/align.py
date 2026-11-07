@@ -829,6 +829,20 @@ def test_a_kill_in_the_middle_of_a_batch_leaves_no_partial_table_and_resumes_the
     assert tables(stage) == expected
 
 
+def test_dropped_parquet_holds_only_the_drops_of_finished_batches(stage):
+    base = work_dir(stage.cfg)
+    for batch, finished in (("00000", True), ("00001", False)):
+        out = base / "words/fake/de"
+        (out / "dropped").mkdir(parents=True, exist_ok=True)
+        drops = align._drop_table("fake", "de", batch, [align.Drop(f"c{batch}", "no_alignment", None)])
+        frames = {out / "dropped" / f"{batch}.parquet": drops}
+        if finished:
+            frames[out / f"{batch}.parquet"] = align._table([])
+        asyncio.run(write_parquet(frames))
+    assert align._build_dropped(base)["clip_id"].to_list() == ["c00000"]
+    assert asyncio.run(read_parquet(base / "dropped.parquet"))["batch"].to_list() == ["00000"]
+
+
 def test_the_temp_copy_is_removed_after_a_run_and_a_failure(stage):
     write_index(stage, speakers_clips(stage, n=2))
     run_align(stage.cfg, ["de"])

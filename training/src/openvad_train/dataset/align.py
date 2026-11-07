@@ -711,8 +711,10 @@ def _read_tables(paths: list[Path], schema: dict, columns: list[str] | None = No
 
 
 def _dropped_files(base: Path) -> list[Path]:
-    # Kept inside each language's words folder, so deleting that folder to start over deletes its drops too.
-    return sorted((base / "words").glob("*/*/dropped/*.parquet"))
+    """The drop tables of finished batches. They live inside each language's words folder, so deleting that folder
+    to start over deletes its drops too; one whose words table is missing belongs to a batch a kill cut short.
+    """
+    return sorted(p for p in (base / "words").glob("*/*/dropped/*.parquet") if (p.parent.parent / p.name).is_file())
 
 
 def _build_dropped(base: Path) -> pl.DataFrame:
