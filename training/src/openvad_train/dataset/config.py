@@ -83,7 +83,7 @@ class BuildConfig:
         }
     )
     p_narrow: float = 0.35  # training parameter: share of wide samples narrowed at train time
-    flac_mb_per_hour: float = 63.0  # estimate for shard sizes until the slice measures it
+    flac_mb_per_hour: float = 64.8  # measured on the slice, tars per hour of audio: docs/notes/datasets.md
     max_samples: int | None = None  # keep the lowest ranks once drawn; for the slice, whose draw is far larger
 
 
