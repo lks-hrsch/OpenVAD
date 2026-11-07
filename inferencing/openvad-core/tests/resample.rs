@@ -199,6 +199,17 @@ fn impulse_response_is_causal_and_delayed() {
 }
 
 #[test]
+fn round_trip_delays_by_twice_the_group_delay_for_both_parities() {
+    for at in [500, 501] {
+        let y = interpolate_2x(&decimate_2x(&impulse(1000, at)));
+        assert_eq!(y.len(), 1000);
+        // An odd-indexed impulse is kept whole (0.5); an even-indexed one straddles two outputs.
+        assert_eq!(peak(&y), at + 2 * GROUP_DELAY_16K, "impulse at {at}");
+    }
+    assert_eq!(interpolate_2x(&decimate_2x(&[0.0; 1001])).len(), 1002);
+}
+
+#[test]
 fn matches_an_f64_reference() {
     let x = &INPUT;
     let y: Vec<f64> = convolve(&x.iter().map(|&v| f64::from(v)).collect::<Vec<_>>(), 1.0)
