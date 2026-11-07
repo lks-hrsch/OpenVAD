@@ -23,7 +23,7 @@ dev = ["pytest", "ruff", "basedpyright"]
 line-length = 120
 target-version = "py312"
 src = ["training/src", "training/tests/support", "inferencing/openvad/src", "inferencing/openvad-rs/python"]
-extend-exclude = ["docs"]
+extend-exclude = ["docs", "tools"]
 
 [tool.ruff.lint]
 select = [
@@ -47,6 +47,7 @@ lines-after-imports = 2
 
 [tool.basedpyright]
 typeCheckingMode = "standard"
+exclude = ["tools", "**/node_modules", "**/__pycache__", "**/.*"]
 extraPaths = ["training/tests/support"]
 
 [tool.pytest.ini_options]

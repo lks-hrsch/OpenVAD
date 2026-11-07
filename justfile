@@ -4,9 +4,9 @@ set dotenv-load
 default:
     just --list
 
-# fetch submodules and install Python workspace
+# fetch the thesis submodule and install the Python workspace (tools/ is fetched by build-mfa)
 setup:
-    git submodule update --init
+    git submodule update --init docs/tudcd-scr
     uv sync --all-packages
 
 # format all code
