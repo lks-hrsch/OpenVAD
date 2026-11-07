@@ -86,7 +86,7 @@ $OPENVAD_DATA_DIR/datasets/processed/openvad-v1/
     test/00000.tar
 ```
 
-Working state sits next to it, under `datasets/processed/work/<name>/` with the build configuration's name, so a slice run never overwrites the full build's state: `index/<source>.parquet` and `index/manifest.json` (every stage writes its manifest into its own directory), `words/<source>/<language>/<batch>.parquet`, `plan/plan.parquet` and one `fragments/<shard>.parquet` per finished shard.
+Working state sits next to it, under `datasets/processed/work/<name>/` with the build configuration's name, so a slice run never overwrites the full build's state: `index/<source>.parquet` and `index/manifest.json` (every stage writes its manifest into its own directory), `words/<source>/<language>/<batch>.parquet`, `plan/plan.parquet`, `fragments/manifest.json`, and one `fragments/<shard>.parquet` and `fragments/<shard>.failures.jsonl` per finished shard.
 
 - `publish` merges the fragments and as-is rows into the split files.
 - Polars reads with `scan_parquet(...).collect_async()` and writes with `sink_parquet(..., lazy=True)` under `collect_all_async`, inside `asyncio`, through one small module. Polars marks `collect_async` unstable, so the version is pinned in `uv.lock`.
@@ -214,9 +214,14 @@ Running it prints hours and bytes per source, split and condition.
 `construct_sample(plan_row, raw_data) -> (flac_bytes, labels)`, for `augmented` rows only. As-is rows skip this stage.
 
 - One worker per shard, 11 on the workstation, each writing a local uncompressed tar plus a fragment Parquet with offsets and labels, verifying them, copying to `<shard>.tmp` on the share, then `os.replace`.
-- A shard is done when its tar, fragment and sidecar SHA-256 exist.
-- Before each shard, the worker checks free space against estimated shard size plus a 50 GB margin, and stops cleanly if short. A re-run continues.
-- Train shards are written in rank order, so an early stop leaves a clean prefix.
+- A shard is done when its tar, fragment and sidecar SHA-256 exist. The fragment is renamed into place last, so a fragment means a finished shard, and a tar without one is rebuilt.
+- Before each shard starts, free space is checked against estimated shard size plus a 50 GB margin, and the run stops cleanly if short. A re-run continues.
+- Train shards are started in rank order, so a stop for space leaves a clean prefix. A failed worker can leave a hole, because shards after it may finish; a re-run fills it.
+- Labels are rasterised from the audio produced, never from file metadata, because real Common Voice MP3s without a Xing header overstate their length by 5.6 to 7.5 ms.
+- A row fails if its source is damaged, if the decode is more than 160 samples (one 10 ms frame) from `source_n`, if its RMS over the word union at G = 0 is under −70 dBFS, or if its noise is digital silence under the words. A failing row is retried once, then left out and logged to `fragments/<shard>.failures.jsonl`.
+- A source that cannot give one byte after that means the share is failing, not the clip, and aborts the run.
+- A shard with no row built, or over 5% of its rows failed, aborts without publishing, so a re-run rebuilds it.
+- `fragments/manifest.json` records the plan version, global seed, plan SHA-256 and ffmpeg version and flags. A re-run with any of them changed is refused, and so are shards with no manifest. A completed run adds the total `n_failed`, also logged as a warning.
 
 ### 5. `publish` and `verify`
 
@@ -372,7 +377,7 @@ Fallbacks, tried in order if a pilot gate fails:
 
 Each milestone ends in something runnable, and later ones build on it.
 
-1. **Vertical slice:** SWC German, DEMAND, G.722, no MFA or resampler, a few hundred samples. Covers index, labels, plan, construct, publish, verify, and `load_dataset`. Measures FLAC ratio and throughput.
+1. **Vertical slice:** SWC German, DEMAND, G.722, no MFA or resampler, none of the other chain steps or transients, a few hundred samples. Covers index, labels, plan, construct, publish, verify, and `load_dataset`. Measures FLAC ratio and throughput.
 2. **Resampler and narrowband:** the filter, bindings, G.711, the train-time transform, and AMR-NB.
 3. **MFA gate:** build it, then pilot on English, German, Italian, Catalan and Japanese. Measures throughput and settles the model table. Gates are listed below.
 4. **All adapters:** remaining sources and the MFA batches.
@@ -443,6 +448,7 @@ These are not owner decisions yet. They are settled at the owner checkpoint at t
 11. Because LibriVAD's `medium` beat its `large` on its own test but `large` won on VOiCES, the checkpoint compares a shorter rank prefix of Large against the full one before headline results.
 12. WADA-SNR saturates at its table ends on about half or more of sampled Common Voice clips, and the resulting correction to speech power is at most about 0.11 dB. `baseline_snr_db` is therefore informational unless the owner asks for Brouhaha.
 13. SWC masks an inner gap of 2 s or more between aligned words, and a word longer than 5 s, because labels would otherwise disagree with the audio. Of 30 sampled unmasked gaps per length, speech-level audio was found in 23 over 10 s, 5 at 5 to 10 s, 3 at 2 to 5 s and 2 at 1 to 2 s; `swc/german/U-Bahn_Berlin#2@202340` has a 14,240 ms gap at speech level. Words over 5 s are mostly not speech, such as an 8,920 ms word at -63 dB and a 55,830 ms word. Masking is safe because padding supplies ample non-speech.
+14. A clip whose RMS over the word union is under −70 dBFS fails as a logged row, since its speech labels would sit on digital silence. `swc/german/Aortendissektion@914740` has one 3.39 s word at −83.6 dBFS, with 84.1% of its stored samples exactly zero. About 1 row in 5,000 was measured like this.
 
 ## Left to the builder
 
