@@ -183,6 +183,27 @@
         in
         {
           inherit default;
+          # Tools for `just build-mfa` (tools/README.md): enter with `nix develop .#align`.
+          align = pkgs.mkShell (
+            shellEnv pkgs
+            // {
+              inputsFrom = [ default ];
+              packages = [
+                pkgs.cmake
+                pkgs.curl
+                (pkgs.postgresql.withPackages (ps: [ ps.pgvector ]))
+              ];
+            }
+            // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+              OPENBLAS_ROOT = pkgs.symlinkJoin {
+                name = "openblas-root";
+                paths = [
+                  pkgs.openblas
+                  pkgs.openblas.dev
+                ];
+              };
+            }
+          );
           docs = pkgs.mkShell (
             shellEnv pkgs
             // {
