@@ -19,6 +19,8 @@ import numpy as np
 import soundfile as sf
 from scipy import signal
 
+from openvad_rs import decimate_2x, interpolate_2x
+
 
 class MissingCodec(RuntimeError):  # noqa: N818 (the name is the plan's interface)
     """ffmpeg, or an encoder the construction needs, is absent on this machine."""
@@ -81,8 +83,12 @@ def encoder_of(codec: str) -> str:
     return _CODECS[codec][0]
 
 
-def roundtrip(audio: np.ndarray, codec: str, bitrate: int | None) -> np.ndarray:
-    """Encode and decode `audio` (float32, mono, at the codec's rate: 16 kHz, or 8 kHz for amr_nb).
+def roundtrip(audio: np.ndarray, codec: str, bitrate: int | None, rate: int = 16000) -> np.ndarray:
+    """Encode and decode `audio` (float32, mono) sampled at `rate`, which must be the codec's own rate.
+
+    That is 16 kHz for every codec but amr_nb, which needs `rate=8000`: the audio carries no rate, so a caller
+    declares it, and a mismatch raises `ValueError` instead of encoding audio at the wrong speed. `narrow_roundtrip`
+    is the 16 kHz entry for amr_nb.
 
     The result has the input's length and dtype. The output lags the input by `delay_ms(codec)`; nothing here
     removes it, because the labels are shifted by the table instead. A decode more than one codec frame short
@@ -90,7 +96,9 @@ def roundtrip(audio: np.ndarray, codec: str, bitrate: int | None) -> np.ndarray:
     """
     if codec not in _CODECS:
         raise ValueError(f"unknown codec {codec!r}, expected one of {sorted(_CODECS)}")
-    encoder, container, rate = _CODECS[codec]
+    encoder, container, codec_rate = _CODECS[codec]
+    if rate != codec_rate:
+        raise ValueError(f"{codec} runs at {codec_rate} Hz, got audio declared at {rate} Hz")
     frame = rate * _FRAME_MS // 1000
     padded = np.concatenate([audio.astype(np.float32), np.zeros(frame, np.float32)])
     quality = [] if bitrate is None else ["-b:a", str(bitrate)]
@@ -131,9 +139,30 @@ def measure_delay(codec: str, bitrate: int | None) -> float:
     x = (0.5 * signal.chirp(t, 100, 2.0, 0.45 * rate)).astype(np.float32)
     # Silence in front keeps the correlation peak away from the edge, and a chirp has one sharp peak.
     x[: rate // 8] = 0
-    y = roundtrip(x, codec, bitrate)
+    y = roundtrip(x, codec, bitrate, rate)
     corr = signal.correlate(y, x, mode="full", method="fft")
     return float((np.argmax(corr) - (n - 1)) / rate * 1000)
+
+
+def narrow_roundtrip(audio: np.ndarray, codec: str, bitrate: int | None) -> np.ndarray:
+    """The AMR-NB leg: 16 kHz float32 in, 16 kHz float32 of the same length out.
+
+    Decimates with the OpenVAD resampler, clips to the int16 range the codec takes, round-trips at 8 kHz,
+    interpolates, and trims the one sample that an odd length gains. A decode more than one codec frame short
+    raises `RuntimeError`, as in `roundtrip`.
+
+    The output keeps its delay; nothing is compensated. It lags the input by `delay_ms(codec)` (the codec alone,
+    measured at 8 kHz) plus the resampler round trip of `2 * GROUP_DELAY_16K` samples at 16 kHz (66 samples,
+    4.125 ms). The label shift of a plan row therefore needs that sum before it rounds to the 10 ms grid;
+    `codec_delay_ms` in `construct.py` reads the table alone and must add the resampler share when the leg is
+    restored.
+    """
+    if codec != "amr_nb":
+        raise ValueError(f"narrow_roundtrip only runs amr_nb, got {codec!r}")
+    narrow = decimate_2x(audio)
+    # The codec takes int16; clip here, not in ffmpeg's float conversion. The filter overshoots by up to 14%.
+    np.clip(narrow, -1.0, 32767 / 32768, out=narrow)
+    return interpolate_2x(roundtrip(narrow, codec, bitrate, 8000))[: len(audio)]
 
 
 _DELAYS = Path(__file__).with_name("codec_delays.json")

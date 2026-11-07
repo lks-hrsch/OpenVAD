@@ -20,6 +20,7 @@ from openvad_train.dataset.codecs import (
     decode_16k,
     delay_ms,
     measure_delay,
+    narrow_roundtrip,
     preflight,
     roundtrip,
 )
@@ -114,7 +115,7 @@ def test_roundtrip_keeps_length(codec, bitrate, encoder):
     rate = 8000 if codec == "amr_nb" else 16000
     for n in (rate, rate + 123):
         x = chirp(n, 100, 0.45 * rate, rate)
-        y = roundtrip(x, codec, bitrate)
+        y = roundtrip(x, codec, bitrate, rate)
         assert y.shape == x.shape
         assert y.dtype == np.float32
 
@@ -588,3 +589,78 @@ def test_decode_without_ffmpeg_is_missing_codec_not_a_corrupt_clip(tmp_path, mon
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
     with pytest.raises(MissingCodec, match="ffmpeg"):
         decode_16k(str(path), 0.0, 1.0)
+
+
+def tone(freq: float, n: int = 16000, rate: int = 16000) -> np.ndarray:
+    return (0.5 * np.sin(2 * np.pi * freq * np.arange(n) / rate)).astype(np.float32)
+
+
+def rms(x: np.ndarray) -> float:
+    return float(np.sqrt(np.mean(np.square(x, dtype=np.float64))))
+
+
+@pytest.mark.parametrize(("codec", "rate"), [("amr_nb", 16000), ("g722", 8000), ("amr_nb", 44100)])
+def test_roundtrip_refuses_audio_at_the_wrong_rate(codec, rate):
+    with pytest.raises(ValueError, match="Hz"):
+        roundtrip(chirp(16000), codec, None, rate)
+
+
+def test_amr_nb_needs_a_declared_rate_of_8_khz():
+    with pytest.raises(ValueError, match="8000"):
+        roundtrip(chirp(8000), "amr_nb", 12200)
+
+
+def test_narrow_roundtrip_only_runs_amr_nb():
+    with pytest.raises(ValueError, match="amr_nb"):
+        narrow_roundtrip(chirp(16000), "g722", 64000)
+
+
+def test_narrow_roundtrip_hands_the_codec_audio_inside_the_int16_range(monkeypatch):
+    seen = []
+
+    def fake(audio, codec, bitrate, rate):
+        seen.append((audio, rate))
+        return audio
+
+    monkeypatch.setattr(codecs, "roundtrip", fake)
+    loud = np.where(np.arange(16000) // 40 % 2 == 0, 1.0, -1.0).astype(np.float32)  # a square wave overshoots
+    narrow_roundtrip(loud, "amr_nb", 12200)
+    ((audio, rate),) = seen
+    assert rate == 8000
+    assert audio.max() <= 32767 / 32768
+    assert audio.min() >= -1.0
+    assert audio.max() > 0.9  # clipped, not scaled down
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize("n", [16000, 16001])
+def test_narrow_roundtrip_keeps_length_and_dtype(n):
+    require_encoders("libopencore_amrnb")
+    y = narrow_roundtrip(chirp(n, 100, 3500), "amr_nb", 12200)
+    assert y.shape == (n,)
+    assert y.dtype == np.float32
+
+
+@needs_ffmpeg
+def test_amr_nb_removes_energy_above_4_khz():
+    require_encoders("libopencore_amrnb")
+    y = narrow_roundtrip(tone(6000), "amr_nb", 12200)
+    assert rms(y) < 0.01 * rms(tone(6000))
+
+
+@needs_ffmpeg
+def test_narrow_roundtrip_refuses_a_decode_that_lost_more_than_a_frame(monkeypatch):
+    require_encoders("libopencore_amrnb")
+    real = codecs._run
+    calls = []
+
+    def truncating(cmd, data, error):
+        done = real(cmd, data, error)
+        calls.append(cmd)
+        if len(calls) == 2:  # the decode: 50 ms of 8 kHz float32 plus the padding frame
+            done.stdout = done.stdout[: len(done.stdout) - 4 * 8 * 50 - 4 * 160]
+        return done
+
+    monkeypatch.setattr(codecs, "_run", truncating)
+    with pytest.raises(RuntimeError, match="decode returned"):
+        narrow_roundtrip(chirp(16000, 100, 3500), "amr_nb", 12200)
