@@ -152,19 +152,34 @@ build-mfa:
         rm -f "$dist"/.kaldi-* "$dist"/.kalpy-*
         blas=()
         [ -z "${OPENBLAS_ROOT:-}" ] || blas=(--mathlib=OPENBLAS --openblas-root="$OPENBLAS_ROOT")
+        # LAPACK 3.9.1 and later headers (Ubuntu 24.04, nixpkgs OpenBLAS 0.3.33) declare the routines that take
+        # character arguments with hidden string lengths, and Kaldi's matrix/cblas-wrappers.h calls them without
+        # ("too few arguments to function stptri_"). A lapacke.h in front of the real one passes them.
+        kflags=
+        if [ -n "${OPENBLAS_ROOT:-}" ]; then
+            mkdir -p "$work/lapack-shim"
+            {
+                echo '#include_next <lapacke.h>'
+                echo '#ifdef LAPACK_FORTRAN_STRLEN_END'
+                for fn in stptri_ dtptri_ sgesvd_ dgesvd_; do echo "#define $fn(...) $fn(__VA_ARGS__, 1, 1)"; done
+                for fn in ssptri_ dsptri_ ssptrf_ dsptrf_; do echo "#define $fn(...) $fn(__VA_ARGS__, 1)"; done
+                echo '#endif'
+            } > "$work/lapack-shim/lapacke.h"
+            kflags="-I$work/lapack-shim"
+        fi
         (cd tools/kaldi/src && ./configure --shared --use-cuda=no --fst-root="$dist" --fst-version="$fst" ${blas[@]+"${blas[@]}"} \
-            && kmake -j"$jobs")
+            && kmake -j"$jobs" EXTRA_CXXFLAGS="$kflags")
         # Kaldi's nnet2/Makefile leaves out combine-nnet-a.cc and shrink-nnet.cc, which its CMake build globs in
         # and kalpy-kaldi needs (nnet2::ShrinkNnet), so add them to the library.
         printf 'include Makefile\nOBJFILES += combine-nnet-a.o shrink-nnet.o\nkaldi-nnet2.a: combine-nnet-a.o shrink-nnet.o\n' > "$work/nnet2.mk"
-        kmake -C tools/kaldi/src/nnet2 -f "$work/nnet2.mk" -j"$jobs"
+        kmake -C tools/kaldi/src/nnet2 -f "$work/nnet2.mk" -j"$jobs" EXTRA_CXXFLAGS="$kflags"
         # kalpy-kaldi links libkaldi-online, which Kaldi builds only with PortAudio (make ext); its own CMake
         # build compiles it with -DKALDI_NO_PORTAUDIO, so do the same and link only the Kaldi libraries.
         ext=so
         [ "$(uname)" != Darwin ] || ext=dylib
         deps=
         for lib in decoder lat hmm feat transform gmm tree util matrix base; do deps="$deps ../$lib/libkaldi-$lib.$ext"; done
-        kmake -C tools/kaldi/src/online -j"$jobs" EXTRA_CXXFLAGS=-DKALDI_NO_PORTAUDIO=1 EXTRA_LDLIBS="$deps"
+        kmake -C tools/kaldi/src/online -j"$jobs" EXTRA_CXXFLAGS="$kflags -DKALDI_NO_PORTAUDIO=1" EXTRA_LDLIBS="$deps"
         # kalpy wants KALDI_ROOT/{include/kaldi,lib}; link the in-tree build, whose rpath is src/lib.
         mkdir -p "$dist/include" "$dist/lib" "$dist/bin"
         ln -sfn ../../src "$dist/include/kaldi"
