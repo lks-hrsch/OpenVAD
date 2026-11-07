@@ -322,7 +322,9 @@ def _report_shards(done: set[Future], shards: dict[Future, str]) -> None:
 
 def _build_shards(cfg: BuildConfig, plan: pl.DataFrame, workers: int) -> None:
     """Submit unfinished shards in the plan's rank order. On a failure nothing new starts and the shards running
-    finish, because leaving the pool's context waits for them, so an early stop leaves a clean prefix.
+    finish, because leaving the pool's context waits for them. A stop for space leaves a clean prefix, but with more
+    than one worker a shard after a failed one can finish and leave a hole, which a re-run fills: it goes by what is
+    finished, not by position.
     """
     raw, data, fragments = data_dir(), dataset_root(cfg) / "data", work_dir(cfg) / "fragments"
     data.mkdir(parents=True, exist_ok=True)

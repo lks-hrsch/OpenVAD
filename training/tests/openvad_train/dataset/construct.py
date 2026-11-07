@@ -874,6 +874,30 @@ def test_a_failing_shard_stops_new_work_and_is_reported(cfg, monkeypatch, in_pro
     assert len(in_process_pool) <= 2
 
 
+def test_a_failed_shard_leaves_a_hole_and_a_rerun_fills_only_it(cfg, monkeypatch, in_process_pool):
+    many_shards(cfg, make_row)
+    record = construct.write_shard
+
+    def first_fails(rows, *args):
+        if rows[0]["shard"] == "train/00004":
+            raise MissingCodec("no ffmpeg")
+        return record(rows, *args)
+
+    monkeypatch.setattr(construct, "write_shard", first_fails)
+    with pytest.raises(MissingCodec):
+        run_construct(cfg, workers=2)
+    assert "train/00003" in in_process_pool
+    assert "train/00004" not in in_process_pool
+
+    built = list(in_process_pool)
+    in_process_pool.clear()
+    monkeypatch.setattr(construct, "write_shard", record)
+    run_construct(cfg, workers=2)
+    assert in_process_pool[0] == "train/00004"
+    assert not set(in_process_pool) & set(built)
+    assert sorted(built + in_process_pool) == [f"train/{i:05d}" for i in range(5)]
+
+
 def test_a_row_asking_for_an_unbuilt_leg_aborts_through_the_workers(cfg, planned_rows):
     write_plan(cfg, [planned_rows[0] | {"room": True}, *planned_rows[1:]])
     with pytest.raises(NotImplementedError, match="room"):
