@@ -153,7 +153,7 @@ The conditions are LibriVAD's nine noise categories plus clean and competing tal
 ## Consequences
 
 - Results are reported per dataset (owner, 2026-11-03): no macro averages over languages (owner, 2026-11-03), no per-language results and no per-family headline (owner, 2026-11-04).
-- Common Voice dominates the pool, at about 79% of the train hours after the 30 h cap (≈ 16,830 of ≈ 21,390 h, partly estimated until its fetch ends); nothing caps it per source or language for now, so the tiers may reflect that.
+- Common Voice dominates the pool, at about 78% of the train hours after the 30 h cap (≈ 16,580 of ≈ 21,140 h, partly estimated until its fetch ends); nothing caps it per source or language for now, so the tiers may reflect that.
 - Which machines may render and train on these sources is limited by [0024](0024-training-data-licence-policy.md).
 
 ## Open questions

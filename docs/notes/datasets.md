@@ -1,7 +1,7 @@
 # Datasets
 
 Measured numbers and source facts for every dataset OpenVAD uses.
-State of 2026-11-06.
+State of 2026-11-07.
 
 Decisions are in the ADRs: sources and roles in [0018](../project/adr/0018-datasets.md), experiment stages and the dev subset for early stopping in [0017](../project/adr/0017-experiment-budget.md), benchmarks, test pools and thresholds in [0020](../project/adr/0020-evaluation-benchmarks.md), composition, splits and labels in [0023](../project/adr/0023-dataset-composition.md), licence policy and data location in [0024](../project/adr/0024-training-data-licence-policy.md), forced-alignment labelling in [0025](../project/adr/0025-alignment-labelling.md).
 What each fetcher downloads, and each licence, is in [`data/README.md`](../../data/README.md).
@@ -54,7 +54,7 @@ The family and source-type tables use these train hours.
 
 | Source | Languages | Speakers (all splits; train where marked) | Train hours (audio; speech where marked) | Rendered |
 | --- | --- | --- | --- | --- |
-| Common Voice 27.0 | 53 locales | ≈ 330,000 | ≈ 16,830 h after the cap: 14,750.5 h measured in 20 locales, ≈ 2,080 h estimated for the other 33 | augmented |
+| Common Voice 27.0 | 53 locales | ≈ 330,000 | ≈ 16,580 h after the cap: 15,575.3 h measured in 27 locales, ≈ 1,000 h estimated for the other 26 | augmented |
 | MLS | DE 819, FR 497, ES 318, IT 238, NL 135, PT 104, PL 67 (after the cap) | 562 (train) | 2,178 h | augmented |
 | VoxPopuli transcribed | 13: EN 477, DE 231, FR 184, ES 134, PL 90, IT 74, RO 72, HU 51, CS 50, NL 43, HR 34, FI 22, ET 2 | ≈ 2,380 IDs, plus rows without an ID | ≈ 1,464 h: 80% of the rows with a speaker ID, plus the 263.6 h of `None` rows (EN 201.0, FR 28.6, DE 16.3; train only) | as is |
 | SWC | EN ≈ 147, DE ≈ 166, NL ≈ 34 (after the cap) | ≈ 900 reader names, plus 25.6 h without one | ≈ 347 h aligned speech: 80% of the 434.4 h left under the cap | augmented |
@@ -64,19 +64,19 @@ The family and source-type tables use these train hours.
 | CallHome | EN, DE, ES, JA, ZH | ≈ 528 calls (80% of 660), ≈ 1,245 speaker labels (train) | 71 h speech in 80 h audio, before the ±0.25 s mask | as is |
 | Speech Commands v0.02 | EN | 2,618 (2,112 train) | ≈ 15 h speech (estimate) in ≤ 23.6 h audio | as is |
 | VOiCES devkit | EN | 300 (re-recorded LibriSpeech), 288 after the drop | ≈ 2.6 h unique (600 utterances; ≈ 84 h of re-recordings in the devkit) | as is |
-| **Total** | **≈ 53 languages** | | **≈ 21,390 h** | |
+| **Total** | **≈ 53 languages** | | **≈ 21,140 h** | |
 
 - The total is the sum of the rows.
 - About 53 languages is a union: Common Voice has 51 distinct languages in its 53 locales, and FLEURS adds Bosnian and Croatian.
   The 53 locales and the ≈ 53 languages are different counts that happen to be equal.
-- The estimate for the 33 locales not yet extracted applies the ratio of the 12 measured locales under 500 h to their 2,509.6 h in the release statistics: 85.2% in the train pool, 82.9% under the cap. It is replaced by measurements as the locales arrive, by about 11 November.
+- The estimate for the 26 locales not yet extracted applies the ratio of the 19 measured locales under 500 h to their 1,273.5 h in the release statistics: 81.9% in the train pool, 78.8% under the cap. It is replaced by measurements as the locales arrive, by about 11 November.
 
 ### Effect of the 30 h cap
 
 | Source | Before | After | Removed | Who passes 30 h |
 | --- | --- | --- | --- | --- |
-| Common Voice, 20 locales measured | 16,439.5 h | 14,750.5 h | 1,689.0 h | 47 speakers in 13 of the 20 locales; per locale in [Common Voice](#common-voice) |
-| Common Voice, all 53 locales | ≈ 18,580 h: 16,439.5 h measured, ≈ 2,140 h estimated | ≈ 16,830 h | | |
+| Common Voice, 27 locales measured | 17,329.2 h | 15,575.3 h | 1,753.9 h | 49 speakers in 15 of the 27 locales; per locale in [Common Voice](#common-voice) |
+| Common Voice, all 53 locales | ≈ 18,370 h: 17,329.2 h measured, ≈ 1,040 h estimated | ≈ 16,580 h | | |
 | MLS | 6,027.0 h | 2,178 h | 3,849.5 h | a few narrators; Dutch keeps 135 of 1,554 h |
 | SWC, aligned speech | 516.9 h | 434.4 h | 82.4 h | two readers, see [SWC](#swc) |
 
@@ -88,36 +88,36 @@ Information only: there is no per-family headline, and there is no minimum share
 
 | Family | Hours | Share | Main sources |
 | --- | --- | --- | --- |
-| Indo-European | ≈ 15,125 | 71% | Common Voice (English, Catalan, German, Belarusian, French, Spanish, ...), MLS, VoxPopuli, SWC, FLEURS, LibriVAD, AMI, CallHome English, German and Spanish, Speech Commands, VOiCES |
+| Indo-European | ≈ 15,040 | 71% | Common Voice (English, Catalan, German, Belarusian, French, Spanish, ...), MLS, VoxPopuli, SWC, FLEURS, LibriVAD, AMI, CallHome English, German and Spanish, Speech Commands, VOiCES |
 | Atlantic–Congo | ≈ 2,510 | 12% | Common Voice Kinyarwanda, Luganda, Swahili; FLEURS Luganda, Swahili |
-| Turkic | ≈ 880 | 4% | Common Voice Uyghur, Bashkir, Turkish, Uzbek, Kyrgyz, Tatar, Chuvash, Kazakh; FLEURS Kyrgyz, Turkish, Uzbek, Kazakh |
-| Sino-Tibetan | ≈ 585 | 3% | Common Voice Mandarin and Cantonese, CallHome Mandarin, FLEURS |
+| Turkic | ≈ 850 | 4% | Common Voice Uyghur, Bashkir, Turkish, Uzbek, Kyrgyz, Tatar, Chuvash, Kazakh; FLEURS Kyrgyz, Turkish, Uzbek, Kazakh |
+| Sino-Tibetan | ≈ 575 | 3% | Common Voice Mandarin and Cantonese, CallHome Mandarin, FLEURS |
 | Afroasiatic | ≈ 460 | 2% | Common Voice Kabyle and Hausa; FLEURS Hausa |
 | Basque | ≈ 430 | 2% | Common Voice |
 | Japonic | ≈ 370 | 2% | Common Voice, CallHome, FLEURS |
 | Kartvelian | ≈ 160 | 1% | Common Voice Georgian, FLEURS |
-| Uralic | ≈ 275 | 1% | Common Voice and VoxPopuli Hungarian, Estonian, Finnish; FLEURS |
-| Dravidian, Kra–Dai, NW Caucasian, Mongolic | ≈ 575 | 3% | Common Voice Tamil, Thai, Abkhaz, Mongolian; FLEURS Tamil, Thai, Mongolian |
+| Uralic | ≈ 265 | 1% | Common Voice and VoxPopuli Hungarian, Estonian, Finnish; FLEURS |
+| Dravidian, Kra–Dai, NW Caucasian, Mongolic | ≈ 455 | 2% | Common Voice Tamil, Thai, Abkhaz, Mongolian; FLEURS Tamil, Thai, Mongolian |
 | Austroasiatic | ≈ 16 | < 0.1% | Common Voice and FLEURS Vietnamese |
 | Koreanic | ≈ 10 | < 0.1% | Common Voice and FLEURS Korean |
 | Tupian | ≈ 4 | < 0.1% | Common Voice Guarani |
 
-- Rows are rounded and built per language after the cap; they sum to ≈ 21,400 h, ≈ 10 h above the pool total, and the rounded shares to 101%.
-- Each row adds the measured Common Voice hours, the estimate of 82.9% of the release hours for locales not yet extracted, the measured FLEURS train hours, the VoxPopuli hours per language and CallHome speech split by the hours of its calls.
-- Non-Indo-European ≈ 6,270 h, 29% of the pool.
+- Rows are rounded and built per language after the cap; they sum to ≈ 21,145 h, ≈ 5 h above the pool total, and the rounded shares to 100%.
+- Each row adds the measured Common Voice hours, the estimate of 78.8% of the release hours for locales not yet extracted, the measured FLEURS train hours, the VoxPopuli hours per language and CallHome speech split by the hours of its calls.
+- Non-Indo-European ≈ 6,105 h, 29% of the pool.
 - Families by current speakers ([Wikipedia, List of language families](https://en.wikipedia.org/wiki/List_of_language_families)): Indo-European (586 languages, 3.24 billion speakers), Sino-Tibetan (1.39 billion), Atlantic–Congo (500 million), Afroasiatic (499 million), Austronesian (326 million), Dravidian (253 million), Turkic (180 million), Japonic (129 million), Austroasiatic (116 million), Kra–Dai (82 million), Koreanic (77 million), Nilotic, Mande, Uralic (21 million), Mongolic, Quechuan; Basque is an isolate.
 
 ### Source types
 
 | Type | Sources | Share |
 | --- | --- | --- |
-| Crowd-sourced read sentences | Common Voice, Speech Commands | ≈ 79% |
+| Crowd-sourced read sentences | Common Voice, Speech Commands | ≈ 78% |
 | Read audiobooks and Wikipedia | MLS, SWC, FLEURS, LibriVAD | ≈ 14% |
 | Parliament, semi-spontaneous | VoxPopuli | ≈ 7% |
 | Meetings and telephone conversations | AMI, CallHome | ≈ 0.7% |
 | Re-recorded far-field read speech | VOiCES | < 0.1% |
 
-- Common Voice is 79% of the train hours.
+- Common Voice is 78% of the train hours.
 - Outside Europe, Common Voice is the only public source with many speakers and transcripts, so the non-Indo-European hours are almost all Common Voice, and language family and source type are confounded.
 - Conversational and telephone speech is a small share of the pool (AMI and CallHome, about 0.7%), although the deployment target is telephone audio; the channel simulation of [0021](../project/adr/0021-telephone-channel-simulation.md) runs on augmented samples only, its mix includes a no-channel group, and it does not make them conversational.
 
@@ -128,7 +128,7 @@ Information only: there is no per-family headline, and there is no minimum share
 - Licence: CC0-1.0. The dataset terms add two forbidden uses: re-hosting or re-sharing the dataset, and any attempt to identify speakers. The MDC terms (updated 2026-10-28) grant rights only through that licence and forbid redistribution; they do not restrict machine-learning training or commercial use of the data, and "model outputs" must contain no personal data. Audio, also modified (mixed, noised, resampled), is never published, only code and our own labels.
 - Download: after accepting each dataset's terms on the MDC site, the official API returns a short-lived URL, so the fetch is scripted.
 - Validated clips: English 1,929,854 (2,723.8 h), German 953,365 (1,385.7 h), French 792,011 (1,095.3 h). Official splits (clips): English train 1,147,829, dev and test 16,403 each; German 624,800 and 16,209; French 621,982 and 16,207.
-- The release statistics give 19,954 validated hours for the 53 locales, but as validated clips times the mean duration of all clips, so they are an estimate and not an upper bound: English 2,826.8 h against 2,723.8 h measured, Catalan 3,392.4 h against 3,465.7 h. Across the 20 measured locales the two agree within 0.1% (17,444.5 h and 17,455.7 h).
+- The release statistics give 19,954 validated hours for the 53 locales, but as validated clips times the mean duration of all clips, so they are an estimate and not an upper bound: English 2,826.8 h against 2,723.8 h measured, Catalan 3,392.4 h against 3,465.7 h. Across the 27 measured locales the two agree within 0.1% (18,680.8 h and 18,683.8 h).
 - The splits come from CorporaCreator: every speaker lands in exactly one split, each sentence is kept once, and the speakers with the fewest clips fill test, then dev, so every heavy speaker is in train.
 - The trap in the official splits: because each sentence is kept once in train, for many languages the official train split is a small part of the validated clips: Japanese 24 h of 373 h, Persian 33 of 373, Russian 39 of 257, Pashto 252 of 3,530.
   A VAD does not need sentence-disjoint splits, only speaker-disjoint ones, so [0023](../project/adr/0023-dataset-composition.md) trains on every validated clip whose speaker is in neither the official dev nor test split.
@@ -136,7 +136,7 @@ Information only: there is no per-family headline, and there is no minimum share
 - Speaker imbalance cannot be read from the release statistics; the manifest records the ten largest train speakers.
 - Common Voice is its own device source, not clean speech: the clips carry device noise, reverberation and clicks, at an unknown baseline.
 - Spontaneous Speech 5.0 (CC0-1.0, the same MDC terms) has one transcript per clip and no timestamps: English 18.6 h (8.4 h validated; train 5.0 h, dev 1.8 h, test 1.6 h), German 1.5 h and French 2.4 h without splits.
-- Hours per locale, measured 2026-11-06 from the extracted TSVs by the rule of `split_stats` in `fetch/commonvoice.py`; the other 33 locales are not extracted yet. The train pool is every validated clip of a speaker in neither dev nor test.
+- Hours per locale, measured 2026-11-06 and 2026-11-07 from the extracted TSVs by the rule of `split_stats` in `fetch/commonvoice.py`; the other 26 locales are not extracted yet. The train pool is every validated clip of a speaker in neither dev nor test.
 
   | Locale | Validated h | Train pool h | Pool speakers | Under the cap h | Speakers over 30 h | Largest speaker h |
   | --- | --- | --- | --- | --- | --- | --- |
@@ -159,8 +159,15 @@ Information only: there is no per-family headline, and there is no minimum share
   | Russian (`ru`) | 254.4 | 203.4 | 624 | 203.4 | 0 | 13.4 |
   | Georgian (`ka`) | 251.0 | 193.2 | 1,292 | 154.6 | 1 | 68.6 |
   | Cantonese (`yue`) | 204.1 | 182.3 | 111 | 182.3 | 0 | 9.6 |
+  | Tamil (`ta`) | 234.5 | 182.1 | 29 | 120.2 | 1 | 91.9 |
+  | Abkhaz (`ab`) | 204.9 | 157.4 | 376 | 157.4 | 0 | 2.8 |
+  | Portuguese (`pt`) | 184.1 | 133.7 | 567 | 133.7 | 0 | 15.8 |
+  | Polish (`pl`) | 175.6 | 122.9 | 299 | 122.9 | 0 | 12.3 |
+  | Thai (`th`) | 178.9 | 117.2 | 294 | 114.2 | 1 | 33.0 |
+  | Welsh (`cy`) | 120.9 | 89.9 | 505 | 89.9 | 0 | 5.2 |
+  | Turkish (`tr`) | 129.2 | 86.5 | 57 | 86.5 | 0 | 23.6 |
   | Kazakh (`kk`) | 2.5 | 0.9 | 6 | 0.9 | 0 | 0.2 |
-  | **Total, 20 locales** | **17,455.7** | **16,439.5** | **141,079** | **14,750.5** | **47** | |
+  | **Total, 27 locales** | **18,683.8** | **17,329.2** | **143,206** | **15,575.3** | **49** | |
 
 ## Per-source facts
 

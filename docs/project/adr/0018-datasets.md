@@ -16,7 +16,7 @@ In the Scale column, sizes on disk come from the manifests on the data share, ho
 
 | Source | Role | Reason | Scale |
 | --- | --- | --- | --- |
-| Common Voice Scripted Speech 27.0 | train, dev, test | the only public source with many speakers and transcripts outside Europe; its clips carry device noise, so it never enters a fixed-SNR test | partial: 20 of 53 locales extracted; ≈ 16,830 h train after the 30 h cap (14,750.5 h measured in the 20, ≈ 2,080 h estimated for the rest); 670 GB download, of which 558 GB is extracted |
+| Common Voice Scripted Speech 27.0 | train, dev, test | the only public source with many speakers and transcripts outside Europe; its clips carry device noise, so it never enters a fixed-SNR test | partial: 27 of 53 locales extracted; ≈ 16,580 h train after the 30 h cap (15,575.3 h measured in the 27, ≈ 1,000 h estimated for the rest); 670 GB download, of which 558 GB is extracted |
 | MLS, 7 languages | train, dev, test | read audiobooks with speaker-disjoint splits; FLAC, because the [0021](0021-telephone-channel-simulation.md) chain must be the only codec stage and Opus would put a hidden codec before every sample | 1,445,342 segments and 562 speakers in train, 13,974 segments in dev, 13,933 in test; 2,178 h train after the 30 h cap; 377.2 GB on disk |
 | FLEURS, 42 languages | train, dev, test | the same sentences in every language, so content is controlled across languages | 397.6 h train, 49.3 h dev, 115.8 h test; 129.4 GB on disk |
 | SWC, English, German, Dutch | train, dev, test | long read articles with word alignments; only aligned words are speech, and unaligned stretches are unknown | ≈ 347 h aligned train after the 30 h cap; 38.8 GB on disk |
