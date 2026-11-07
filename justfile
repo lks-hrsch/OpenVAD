@@ -123,10 +123,10 @@ build-mfa:
     rebuilt=
     mkdir -p "$dist" "$work"
 
-    # fetch URL SHA256 DEST: download to a temporary name and move it into place once the checksum passes,
-    # so an interrupted or corrupt download is retried instead of reused.
+    # fetch URL SHA256 DEST: keep DEST if it matches the checksum; otherwise download to a temporary name and
+    # move it into place once the checksum passes, so an interrupted, corrupt or outdated file is replaced.
     fetch() {
-        [ ! -f "$3" ] || return 0
+        if [ -f "$3" ] && echo "$2  $3" | shasum -a 256 -c - >/dev/null 2>&1; then return 0; fi
         curl -fsSL -o "$3.part" "$1"
         echo "$2  $3.part" | shasum -a 256 -c - || { rm -f "$3.part"; exit 1; }
         mv "$3.part" "$3"
