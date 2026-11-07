@@ -8,7 +8,7 @@
 import argparse
 from collections.abc import Callable
 
-from openvad_train.dataset import construct, index, plan, publish
+from openvad_train.dataset import construct, index, plan, publish, verify
 
 
 # Each stage registers here with the task that adds it; a stage without an entry is not implemented yet.
@@ -17,6 +17,7 @@ STAGES: dict[str, Callable[[list[str]], None]] = {
     "plan": plan.main,
     "construct": construct.main,
     "publish": publish.main,
+    "verify": verify.main,
 }
 
 

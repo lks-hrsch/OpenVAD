@@ -6,7 +6,7 @@
 import pytest
 
 from openvad_train.dataset import __main__ as cli
-from openvad_train.dataset import construct, publish
+from openvad_train.dataset import construct, publish, verify
 from openvad_train.dataset.config import SLICE
 
 
@@ -41,3 +41,7 @@ def test_publish_is_registered_and_takes_a_config(monkeypatch):
     monkeypatch.setattr(publish, "run_publish", lambda c: seen.append(c.name))
     cli.main(["publish", "--config", "slice"])
     assert seen == [SLICE.name]
+
+
+def test_verify_is_registered():
+    assert cli.STAGES["verify"] is verify.main
