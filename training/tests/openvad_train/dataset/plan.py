@@ -390,7 +390,7 @@ def plan_frame(sources: list[str], n: int = 300) -> pl.DataFrame:
         for source in sources
         for i in range(n)
     ]
-    return pl.DataFrame(rows, schema=plan_module._PLAN_SCHEMA)
+    return pl.DataFrame(rows, schema=plan_module.PLAN_SCHEMA)
 
 
 def test_only_augmented_rows_get_shards_in_rank_order():
@@ -471,7 +471,7 @@ def test_run_plan_writes_one_row_per_clip_in_rank_order_with_a_manifest(data, ca
 
 
 def test_the_parquet_schema_names_exactly_the_row_columns():
-    assert set(plan_module._PLAN_SCHEMA) == set(draw_sample(clip(), timing(), SLICE))
+    assert set(plan_module.PLAN_SCHEMA) == set(draw_sample(clip(), timing(), SLICE))
 
 
 def test_a_row_read_back_feeds_the_labels(data):

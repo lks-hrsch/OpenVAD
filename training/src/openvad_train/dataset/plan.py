@@ -46,7 +46,7 @@ _CODEC_MODES = {
 _CONDITIONS_WITH_A_DRAW = {"clean", *DEMAND_CATEGORIES}
 
 _INTERVALS = pl.List(pl.List(pl.Int64))
-_PLAN_SCHEMA = {
+PLAN_SCHEMA = {
     "sample_id": pl.String,
     "clip_id": pl.String,
     "split": pl.String,
@@ -395,9 +395,9 @@ def _plan_source(cfg: BuildConfig, name: str, pool: NoisePool) -> tuple[list[pl.
             counts["reserved"] += clip.reserved
             counts["without_sample"] += not sample_rows and not clip.reserved
             if len(rows) >= _ROWS_PER_FRAME:
-                frames.append(pl.DataFrame(rows, schema=_PLAN_SCHEMA))
+                frames.append(pl.DataFrame(rows, schema=PLAN_SCHEMA))
                 rows = []
-    frames.append(pl.DataFrame(rows, schema=_PLAN_SCHEMA))
+    frames.append(pl.DataFrame(rows, schema=PLAN_SCHEMA))
     kinds = ("reserved", "without_sample", "short_chunks", "masked_chunks")
     return frames, {"clips": index.height, **{k: counts[k] for k in kinds}}
 

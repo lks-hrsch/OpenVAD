@@ -3,7 +3,15 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+import asyncio
+import hashlib
 import io
+import json
+import os
+import pickle
+import subprocess
+import sys
+import tarfile
 from pathlib import Path
 
 import numpy as np
@@ -11,10 +19,12 @@ import pytest
 import soundfile as sf
 
 from openvad_train.dataset import construct
-from openvad_train.dataset.codecs import DecodeError
+from openvad_train.dataset.audio import load_audio
+from openvad_train.dataset.codecs import DecodeError, MissingCodec
 from openvad_train.dataset.config import SLICE
-from openvad_train.dataset.construct import construct_sample
+from openvad_train.dataset.construct import construct_sample, write_shard
 from openvad_train.dataset.mix import loop_slice
+from openvad_train.dataset.parquet_io import read_parquet
 from openvad_train.dataset.plan import draw_sample
 from openvad_train.dataset.schema import Clip, Timing
 from openvad_train.fetch.common import data_dir
@@ -31,13 +41,12 @@ NOISE_N = 400_000
 @pytest.fixture(autouse=True)
 def raw(tmp_path, monkeypatch) -> Path:
     """The data root of every test here, so no test can reach the real data directory by forgetting a fixture."""
-    root = tmp_path / "data"
-    monkeypatch.setenv("OPENVAD_DATA_DIR", str(root))
-    noise = root / NOISE_FILE
+    monkeypatch.setenv("OPENVAD_DATA_DIR", str(tmp_path))
+    noise = tmp_path / NOISE_FILE
     noise.parent.mkdir(parents=True)
     x = (0.1 * np.random.default_rng(7).standard_normal(NOISE_N)).astype(np.float32)
     sf.write(noise, x, 16000, subtype="PCM_16")
-    return root
+    return tmp_path
 
 
 def noisy(snr_db: float = 5.0, offset_n: int = 1000) -> dict:
@@ -310,3 +319,257 @@ def test_a_noise_row_without_exactly_one_noise_is_refused(raw):
 def test_an_offset_off_the_millisecond_grid_is_refused(raw):
     with pytest.raises(ValueError, match="millisecond"):
         construct_sample(make_row(speech_offset_n=17, total_n=6 * 16000), raw)
+
+
+# write_shard
+
+
+@pytest.fixture
+def rows() -> list[dict]:
+    return [
+        make_row(name="c0", **CLEAN, **NO_CODEC),
+        make_row(tone(2 * 16000), speech=[(100, 1800)], name="c1", **noisy(), **G722),
+        make_row(tone(3 * 16000, 0.1), speech=[(0, 3000)], name="c2", **CLEAN, **G722),
+    ]
+
+
+def read_fragment(path: Path) -> list[dict]:
+    return asyncio.run(read_parquet(path)).to_dicts()
+
+
+def test_load_audio_reads_tar_member_by_offset(tmp_path, rows, raw):
+    write_shard(rows, tmp_path / "00000.tar", tmp_path / "00000.parquet", raw)
+    row = asyncio.run(read_parquet(tmp_path / "00000.parquet")).row(0, named=True)
+    flac, _ = construct_sample(rows[0], raw)
+    assert np.array_equal(load_audio(row, tmp_path), sf.read(io.BytesIO(flac), dtype="float32")[0])
+
+
+def test_tar_is_uncompressed_and_opens_with_tarfile(tmp_path, rows, raw):
+    write_shard(rows, tmp_path / "00000.tar", tmp_path / "00000.parquet", raw)
+    with tarfile.open(tmp_path / "00000.tar", "r:") as tar:
+        members = tar.getmembers()
+    assert [m.name for m in members] == [f"{r['sample_id']}.flac" for r in rows]
+    assert all(m.name.endswith(".flac") for m in members)
+
+
+def test_fragment_points_at_each_member_and_holds_its_labels(tmp_path, rows, raw):
+    tar_path = raw / "datasets/processed/x/data/train/00000.tar"
+    result = write_shard(rows, tar_path, raw / "work/fragments/train/00000.parquet", raw)
+    assert result.n_ok == 3
+    assert result.n_failed == 0
+    fragment = read_fragment(raw / "work/fragments/train/00000.parquet")
+    assert [r["sample_id"] for r in fragment] == [r["sample_id"] for r in rows]
+    with tar_path.open("rb") as f:
+        for row, source in zip(fragment, rows, strict=True):
+            assert row["audio_filepath"] == "datasets/processed/x/data/train/00000.tar"
+            assert row["audio_format"] == "flac_tar"
+            f.seek(row["byte_offset"])
+            flac, labels = construct_sample(source, raw)
+            assert f.read(row["byte_length"]) == flac
+            assert row["labels"] == labels.tolist()
+            assert row["seed"] == source["seed"]
+    assert [r["codec_delay_ms"] for r in fragment] == [0, 1, 1]
+
+
+def test_a_sample_id_with_slashes_and_umlauts_points_right(tmp_path, rows, raw):
+    rows[0]["sample_id"] = "swc/german/K\u00f6ln#2@" + "1" * 150
+    write_shard(rows, tmp_path / "s.tar", tmp_path / "s.parquet", raw)
+    row = read_fragment(tmp_path / "s.parquet")[0]
+    assert len(load_audio(row, tmp_path)) == rows[0]["total_n"]
+
+
+def test_sidecar_is_the_hash_of_the_tar(tmp_path, rows, raw):
+    result = write_shard(rows, tmp_path / "s.tar", tmp_path / "s.parquet", raw)
+    assert result.sha256 == hashlib.sha256((tmp_path / "s.tar").read_bytes()).hexdigest()
+    assert (tmp_path / "s.tar.sha256").read_text() == f"{result.sha256}  s.tar\n"
+
+
+def test_the_same_rows_give_the_same_shard(tmp_path, rows, raw):
+    first = write_shard(rows, tmp_path / "a.tar", tmp_path / "a.parquet", raw)
+    second = write_shard(rows, tmp_path / "b.tar", tmp_path / "b.parquet", raw)
+    assert first.sha256 == second.sha256
+
+
+def test_killed_worker_leaves_no_finished_shard(tmp_path, rows, raw, monkeypatch):
+    def raise_keyboard_interrupt(*_args, **_kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(construct, "_publish_shard", raise_keyboard_interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        write_shard(rows, tmp_path / "00000.tar", tmp_path / "00000.parquet", raw)
+    assert not (tmp_path / "00000.tar").exists()
+    assert not (tmp_path / "00000.parquet").exists()
+
+
+def finished_looking(tmp_path: Path) -> list[str]:
+    return sorted(p.name for p in tmp_path.iterdir() if p.is_file() and p.suffix in (".tar", ".parquet", ".sha256"))
+
+
+def test_a_copy_dying_midway_leaves_nothing_on_the_share(tmp_path, rows, raw, monkeypatch):
+    def dies_midway(src, dst):
+        Path(dst).write_bytes(Path(src).read_bytes()[:1000])
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(construct.shutil, "copyfile", dies_midway)
+    with pytest.raises(OSError, match="No space"):
+        write_shard(rows, tmp_path / "s.tar", tmp_path / "s.parquet", raw)
+    assert finished_looking(tmp_path) == []
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_a_truncated_copy_is_not_replaced_into_place(tmp_path, rows, raw, monkeypatch):
+    monkeypatch.setattr(
+        construct.shutil, "copyfile", lambda src, dst: Path(dst).write_bytes(Path(src).read_bytes()[:1000])
+    )
+    with pytest.raises(OSError, match="copied"):
+        write_shard(rows, tmp_path / "s.tar", tmp_path / "s.parquet", raw)
+    assert finished_looking(tmp_path) == []
+
+
+KILLED_WORKER = """
+import os, pickle, shutil, signal, sys
+from pathlib import Path
+from openvad_train.dataset.construct import write_shard
+
+rows, tar, fragment, raw, when = pickle.loads(Path(sys.argv[1]).read_bytes())
+die = lambda: os.kill(os.getpid(), signal.SIGKILL)
+if when == "copying":
+    def copyfile(src, dst):
+        Path(dst).write_bytes(Path(src).read_bytes()[:1000])
+        die()
+    shutil.copyfile = copyfile
+else:
+    real_replace = os.replace
+    def replace(src, dst):
+        if Path(dst) == fragment:
+            die()
+        real_replace(src, dst)
+    os.replace = replace
+write_shard(rows, tar, fragment, raw)
+"""
+
+
+@pytest.mark.parametrize(("when", "tar_visible"), [("copying", False), ("before_the_fragment", True)])
+def test_a_sigkilled_worker_leaves_no_fragment_and_a_rerun_recovers(tmp_path, rows, raw, when, tar_visible):
+    share, stage = tmp_path / "share", tmp_path / "stage"
+    share.mkdir()
+    stage.mkdir()
+    tar, fragment = share / "s.tar", share / "s.parquet"
+    job = tmp_path / "job.pkl"
+    job.write_bytes(pickle.dumps((rows, tar, fragment, raw, when)))
+    env = os.environ | {"TMPDIR": str(stage)}
+    done = subprocess.run([sys.executable, "-c", KILLED_WORKER, str(job)], env=env, capture_output=True, check=False)
+    assert done.returncode == -9, done.stderr.decode()
+    assert not fragment.exists()
+    assert tar.exists() == tar_visible
+    if when == "copying":
+        assert (share / "s.tar.tmp").stat().st_size == 1000
+
+    result = write_shard(rows, tar, fragment, raw)
+    assert result.n_ok == 3
+    assert hashlib.sha256(tar.read_bytes()).hexdigest() == result.sha256
+    assert not list(share.glob("*.tmp"))
+
+
+def test_the_fragment_replaces_last(tmp_path, rows, raw, monkeypatch):
+    real, done = os.replace, []
+
+    def recording(src, dst):
+        done.append(Path(dst).name)
+        real(src, dst)
+
+    monkeypatch.setattr(construct.os, "replace", recording)
+    write_shard(rows, tmp_path / "s.tar", tmp_path / "s.parquet", raw)
+    assert done[-1] == "s.parquet"
+    assert {"s.tar", "s.tar.sha256", "s.failures.jsonl"} <= set(done)
+
+
+def test_a_rebuild_removes_the_old_fragment_before_it_touches_the_tar(tmp_path, rows, raw, monkeypatch):
+    write_shard(rows, tmp_path / "s.tar", tmp_path / "s.parquet", raw)
+
+    def dies(*_args):
+        raise OSError(5, "Input/output error")
+
+    monkeypatch.setattr(construct.shutil, "copyfile", dies)
+    with pytest.raises(OSError, match="Input/output"):
+        write_shard(rows, tmp_path / "s.tar", tmp_path / "s.parquet", raw)
+    assert not (tmp_path / "s.parquet").exists()
+
+
+@pytest.fixture
+def rows_with_corrupt_clip(rows, raw) -> list[dict]:
+    (raw / rows[0]["source_path"]).write_bytes(b"this is not audio" * 100)
+    return rows
+
+
+def test_corrupt_clip_is_logged_and_skipped(rows_with_corrupt_clip, raw, tmp_path):
+    r = write_shard(rows_with_corrupt_clip, tmp_path / "s.tar", tmp_path / "s.parquet", raw)
+    assert r.n_failed == 1
+    assert "c0" in (tmp_path / "s.failures.jsonl").read_text()
+    assert r.n_ok == 2
+    assert [row["clip_id"] for row in read_fragment(tmp_path / "s.parquet")] == ["c1", "c2"]
+
+
+def test_a_failure_line_names_the_sample_and_the_error(rows_with_corrupt_clip, raw, tmp_path):
+    write_shard(rows_with_corrupt_clip, tmp_path / "s.tar", tmp_path / "s.parquet", raw)
+    line = json.loads((tmp_path / "s.failures.jsonl").read_text())
+    assert line["sample_id"] == "common-voice/c0"
+    assert line["source_path"] == rows_with_corrupt_clip[0]["source_path"]
+    assert "Invalid data" in line["error"]
+
+
+def test_a_shard_without_failures_has_an_empty_failures_file(tmp_path, rows, raw):
+    write_shard(rows, tmp_path / "s.tar", tmp_path / "s.parquet", raw)
+    assert (tmp_path / "s.failures.jsonl").read_text() == ""
+
+
+def test_every_row_failing_still_gives_a_finished_empty_shard(rows_with_corrupt_clip, raw, tmp_path):
+    r = write_shard(rows_with_corrupt_clip[:1], tmp_path / "s.tar", tmp_path / "s.parquet", raw)
+    assert (r.n_ok, r.n_failed) == (0, 1)
+    assert read_fragment(tmp_path / "s.parquet") == []
+    with tarfile.open(tmp_path / "s.tar", "r:") as tar:
+        assert tar.getmembers() == []
+
+
+def test_a_vanished_source_aborts_instead_of_emptying_the_shard(rows, raw, tmp_path):
+    # Every file vanishes at once when the share drops, and a skip would mark the shard finished.
+    (raw / rows[0]["source_path"]).unlink()
+    with pytest.raises(DecodeError):
+        write_shard(rows, tmp_path / "s.tar", tmp_path / "s.parquet", raw)
+    assert finished_looking(tmp_path) == []
+
+
+@pytest.mark.parametrize(
+    "error",
+    [MissingCodec("no ffmpeg"), ValueError("bad row"), NotImplementedError("room")],
+    ids=lambda e: type(e).__name__,
+)
+def test_a_broken_setup_aborts_the_shard(rows, raw, tmp_path, monkeypatch, error):
+    def broken(*_args):
+        raise error
+
+    monkeypatch.setattr(construct, "construct_sample", broken)
+    with pytest.raises(type(error)):
+        write_shard(rows, tmp_path / "s.tar", tmp_path / "s.parquet", raw)
+    assert finished_looking(tmp_path) == []
+
+
+def test_verification_refuses_labels_that_do_not_match_the_audio(rows, raw, tmp_path, monkeypatch):
+    real = construct.construct_sample
+
+    def one_frame_short(row, root):
+        flac, labels = real(row, root)
+        return flac, labels[:-1]
+
+    monkeypatch.setattr(construct, "construct_sample", one_frame_short)
+    with pytest.raises(RuntimeError, match="labels"):
+        write_shard(rows, tmp_path / "s.tar", tmp_path / "s.parquet", raw)
+    assert finished_looking(tmp_path) == []
+
+
+def test_the_local_stage_is_removed(rows, raw, tmp_path, monkeypatch):
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    monkeypatch.setattr(construct.tempfile, "tempdir", str(stage))
+    write_shard(rows, tmp_path / "s.tar", tmp_path / "s.parquet", raw)
+    assert list(stage.iterdir()) == []
