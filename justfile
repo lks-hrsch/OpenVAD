@@ -105,6 +105,13 @@ build-mfa:
         git -C tools/kaldi checkout -- src/configure
     fi
     git submodule update --init --depth 1 tools/kaldi tools/montreal-forced-aligner
+    # A shallow checkout has no tags unless the pin is the tip of main, and setuptools_scm would then write
+    # 0.1.dev1+g<sha> as the MFA version. Fetch the tag and stop unless it is the pinned commit.
+    mfa_tag=v3.4.3
+    git -C tools/montreal-forced-aligner rev-parse -q --verify "$mfa_tag^{commit}" >/dev/null \
+        || git -C tools/montreal-forced-aligner fetch --depth 1 origin tag "$mfa_tag"
+    [ "$(git -C tools/montreal-forced-aligner rev-parse "$mfa_tag^{commit}")" = "$(git rev-parse :tools/montreal-forced-aligner)" ] \
+        || { echo "build-mfa: tag $mfa_tag of tools/montreal-forced-aligner is not the pinned commit; move the pin and mfa_tag together" >&2; exit 1; }
     kmake() {
         if [ -x /bin/bash ]; then make "$@"; else make SHELL="$(command -v bash)" "$@"; fi
     }
