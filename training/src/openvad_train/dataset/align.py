@@ -833,8 +833,10 @@ def _calibrate(
     run: Callable[[list[Clip]], tuple[list[Timing], list[Drop]]],
 ) -> DropRules | None:
     """The frozen drop rules of a language and source: loaded if a calibration batch was run before, else fitted on
-    one MFA run of `clips`, whose alignments are discarded. With fewer than `MIN_CALIBRATION_CLIPS` aligned the
-    language is not aligned (None), and that outcome is saved too, so a re-run reproduces it.
+    one MFA run of `clips`, whose alignments are discarded. Only calibration clips that pass the fixed rules (beam,
+    word and phone length, coverage, onset) are fitted on and counted: thresholds describe acceptable alignments,
+    and a clip the fixed rules drop would lower the log-likelihood floor. With fewer than `MIN_CALIBRATION_CLIPS`
+    of those the language is not aligned (None), and that outcome is saved too, so a re-run reproduces it.
     """
     rules_path, outcome_path = words_dir / "rules.json", words_dir / "calibration.json"
     if rules_path.is_file():
@@ -842,28 +844,34 @@ def _calibrate(
     if outcome_path.is_file():
         return None
     timings, _ = run(clips)
+    fixed = DropRules(source, None, None, None)  # with nothing fitted, `apply` runs the fixed rules only
+    verdicts = [(t, fixed.apply(t)) for t in timings]
+    passing = [t for t, reason in verdicts if reason is None]
+    enough = len(passing) >= MIN_CALIBRATION_CLIPS
     info = {
-        "outcome": "fitted" if len(timings) >= MIN_CALIBRATION_CLIPS else "too_few_to_calibrate",
+        "outcome": "fitted" if enough else "too_few_to_calibrate",
         "clips": len(clips),
         "speakers": len({c.speaker if c.speaker is not None else c.clip_id for c in clips}),
         "aligned": len(timings),
+        "passing_fixed_rules": len(passing),
+        "fixed_rule_drops": dict(sorted(Counter(reason for _, reason in verdicts if reason).items())),
         "rank_cut": rank(clips[-1].clip_id) if clips else None,
         "digest": _digest(c.clip_id for c in clips),
         "per_speaker": CALIBRATION_PER_SPEAKER,
         "max_clips": CALIBRATION_MAX_CLIPS,
         "min_aligned": MIN_CALIBRATION_CLIPS,
     }
-    if len(timings) < MIN_CALIBRATION_CLIPS:
+    if not enough:
         log.warning(
-            "%s/%s: %d of %d calibration clips aligned, not enough: not aligning",
+            "%s/%s: %d of %d calibration clips aligned and passed the fixed rules, not enough: not aligning",
             source,
             language,
-            len(timings),
+            len(passing),
             len(clips),
         )
         _write_atomically(outcome_path, json.dumps(info, sort_keys=True) + "\n")
         return None
-    rules = DropRules.fit(timings, source, info)
+    rules = DropRules.fit(passing, source, info)
     rules.save(rules_path)
     return rules
 

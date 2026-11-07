@@ -781,6 +781,32 @@ def test_clips_that_fail_to_align_do_not_count_toward_the_calibration_minimum(st
     assert (summary["calibration"]["clips"], summary["calibration"]["aligned"]) == (4, 2)
 
 
+def test_calibration_clips_that_the_fixed_rules_drop_do_not_move_the_floor_or_count_toward_the_minimum(
+    stage, monkeypatch
+):
+    speakers = [make_clip(stage.root, f"s{i}/c0", f"s{i}", "aa") for i in range(6)]
+    retried = [make_clip(stage.root, f"r{i}/c0", f"r{i}", "aa RETRY LOWER") for i in range(3)]  # -95, needs the beam
+
+    def floor_of(clips: list[Clip]) -> dict:
+        shutil.rmtree(work_dir(stage.cfg), ignore_errors=True)
+        write_index(stage, clips)
+        run_align(stage.cfg, ["de"])
+        return json.loads((work_dir(stage.cfg) / "words/fake/de/rules.json").read_text())
+
+    plain, mixed = floor_of(speakers), floor_of(speakers + retried)
+    assert plain["loglik_floor"] == mixed["loglik_floor"] == -50.0
+    cal = mixed["calibration"]
+    assert (cal["aligned"], cal["passing_fixed_rules"], cal["fixed_rule_drops"]) == (9, 6, {"needs_wider_beam": 3})
+    assert reasons(stage) == {c.clip_id: "needs_wider_beam" for c in retried}
+    monkeypatch.setattr(align, "MIN_CALIBRATION_CLIPS", 7)  # 9 aligned, but only 6 pass
+    shutil.rmtree(work_dir(stage.cfg))
+    write_index(stage, speakers + retried)
+    run_align(stage.cfg, ["de"])
+    outcome = json.loads((work_dir(stage.cfg) / "words/manifest.json").read_text())["per_source"]["fake"]["de"]
+    assert outcome["calibration"]["outcome"] == "too_few_to_calibrate"
+    assert (outcome["calibration"]["aligned"], outcome["calibration"]["passing_fixed_rules"]) == (9, 6)
+
+
 def test_a_kill_during_the_calibration_leaves_nothing_behind(stage):
     write_index(stage, speakers_clips(stage))
     stage.fake.kill_at = 0
@@ -848,6 +874,7 @@ def test_the_manifest_records_the_calibration_and_the_fitted_rules(stage):
     cal = summary["calibration"]
     assert cal["outcome"] == "fitted"
     assert (cal["clips"], cal["speakers"], cal["aligned"]) == (8, 4, 8)
+    assert (cal["passing_fixed_rules"], cal["fixed_rule_drops"]) == (8, {})
     assert cal["rank_cut"] == max(rank(c.clip_id) for c in clips)
     assert cal["digest"] == align._digest(c.clip_id for c in align._by_rank(clips))
     assert summary["rules"]["mad_scale"] == 1.4826
