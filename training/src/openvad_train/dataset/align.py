@@ -29,6 +29,7 @@ import re
 import sqlite3
 import subprocess
 import tempfile
+import unicodedata
 import zipfile
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
@@ -258,18 +259,30 @@ def _provenance(tools: Tools, models: Models) -> str:
 # ---------------------------------------------------------------------------------------------------- text
 
 
+def _strip_edges(word: str) -> str:
+    """`word` without leading and trailing punctuation and symbols (Unicode categories P and S). Marks (M) stay: Thai
+    vowels and tones, and the accents of text that is not precomposed, are part of the word.
+    """
+    start, end = 0, len(word)
+    while start < end and unicodedata.category(word[start])[0] in "PS":
+        start += 1
+    while end > start and unicodedata.category(word[end - 1])[0] in "PS":
+        end -= 1
+    return word[start:end]
+
+
 def prepare_transcript(text: str, language: str) -> str | None:
     """The transcript MFA gets, or None when no word is left to align.
 
-    Punctuation at the edges of a word goes. A word with a digit becomes `<unk>`; Japanese and Mandarin have no
-    spaces, so there each digit run becomes one. `<unk>` is not a word: a transcript of digits and punctuation is
-    None. Whether MFA's Japanese and Mandarin tokenisers keep a literal `<unk>` is not verified.
+    The text is composed to NFC. Punctuation and symbols at the edges of a word go. A word with a digit becomes
+    `<unk>`; Japanese and Mandarin have no spaces, so there each digit run becomes one. `<unk>` is not a word: a
+    transcript of digits and punctuation is None. Whether MFA's Japanese and Mandarin tokenisers keep a literal
+    `<unk>` is not verified.
     """
     words = []
-    for token in text.split():
+    for token in unicodedata.normalize("NFC", text).split():
         for part in re.split(r"(\d+)", token) if language in ("ja", "zh") else [token]:
-            word = re.sub(r"^\W+|\W+$", "", part)
-            if word:
+            if word := _strip_edges(part):
                 words.append("<unk>" if any(c.isdigit() for c in word) else word)
     return " ".join(words) if any(w != "<unk>" for w in words) else None
 

@@ -56,6 +56,18 @@ def test_edge_punctuation_goes_and_inner_apostrophes_stay():
     assert prepare_transcript("3rd place, 4.5 km", "en") == "<unk> place <unk> km"
 
 
+def test_thai_tone_and_vowel_marks_at_the_end_of_a_word_stay():
+    assert (
+        prepare_transcript("\u0e17\u0e35\u0e48\u0e19\u0e35\u0e48 \u0e14\u0e35", "th")
+        == "\u0e17\u0e35\u0e48\u0e19\u0e35\u0e48 \u0e14\u0e35"
+    )
+
+
+def test_text_that_is_not_precomposed_is_composed_and_keeps_its_accents():
+    assert prepare_transcript("re\u0301sume\u0301 u\u0308ber.", "de") == "r\u00e9sum\u00e9 \u00fcber"
+    assert prepare_transcript("\u00ab r\u00e9sum\u00e9 \u00bb \u20ac5 \u2014 ok", "fr") == "r\u00e9sum\u00e9 <unk> ok"
+
+
 def test_chinese_and_japanese_digit_runs_become_unk_inside_a_token():
     assert prepare_transcript("我有12只狗", "zh") == "我有 <unk> 只狗"
     assert prepare_transcript("12", "ja") is None
