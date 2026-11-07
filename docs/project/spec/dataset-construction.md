@@ -322,7 +322,7 @@ Stored codec leg:
 - It applies to any `wide` sample, as-is sources included; `treatment` lets training exclude them.
 - G.711 is A-law in 90% and μ-law in 10% of draws (ADR 0021).
 - G.711 is a numpy lookup table in `training/`; the engine has no user for it, so it stays out of `openvad-core`.
-- Delay: decimator and interpolator total about 3.9 ms at 63 taps, which rounds to 0 on the 10 ms grid. The function computes the shift from the coefficients, and a test asserts the result.
+- Delay: decimator and interpolator total 66 samples at 16 kHz (33 each, 4.125 ms, 0.4125 frames) at 67 taps, which rounds to 0 on the 10 ms grid. The function computes the shift from the coefficients, and a test asserts the result.
 - Training draws randomly per sample. Validation and test use a seed derived from `sample_id`, so scoring is repeatable.
 
 Scoring conditions over validation and test (owner, 2026-11-06):
@@ -341,11 +341,11 @@ The scorer itself is deferred (ADR 0020).
 
 Fixed now (owner, 2026-11-06), which answers ADR 0009's open question.
 
-- `openvad-core` gets a half-band decimator and interpolator: causal, linear-phase, 71 taps, at least 70 dB stopband, committed coefficients, explicit `mul_add` in canonical order, scalar tier only.
+- `openvad-core` gets a half-band decimator and interpolator: causal, linear-phase, 67 taps, at least 70 dB stopband, committed coefficients, explicit `mul_add` in canonical order, scalar tier only.
 - `openvad-rs` exposes them on NumPy arrays through the `numpy` crate, because `Vec<f32>` from Python lists is too slow here.
 - A committed script designs the coefficients, and the coefficient hash goes in `manifest.json`.
 - Tests: frequency response against the stated stopband, group delay, known vectors, and a Python and Rust comparison at `1e-6`.
-- 63 taps and 70 dB were starting values. Measured: 63 taps reach only -69.6 dB across 3500 to 4500 Hz, and 67 taps -67.3 dB with exactly unity DC gain, so the committed design has 71 taps (-71.0 dB, group delay 35 samples at 16 kHz).
+- 63 taps and 70 dB were starting values. Measured across 3500 to 4500 Hz: 63 taps reach only -69.6 dB, so the committed design has 67 taps, the smallest valid length (-73.3 dB, one-way group delay 33 samples at 16 kHz, DC gain 0.0019 dB above unity).
 
 ## Tools
 
