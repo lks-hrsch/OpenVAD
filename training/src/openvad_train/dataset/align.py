@@ -69,7 +69,6 @@ EXEMPT_FROM_RATE_AND_ONSET = frozenset({"speech-commands"})
 
 _SILENCE = frozenset({"", "sil", "<eps>"})
 _OOV_PHONE = "spn"
-_SPEAKERLESS = "none"
 
 WORDS_SCHEMA = {
     "clip_id": pl.String,
@@ -578,7 +577,7 @@ def _align_round(
     sent: dict[str, tuple[Clip, int]] = {}
     with tempfile.TemporaryDirectory(prefix="openvad-align-") as tmp:
         corpus, out, mfa_root = Path(tmp) / "corpus", Path(tmp) / "out", Path(tmp) / "mfa"
-        speakers: dict[str | None, str] = {}
+        speakers: dict[tuple[bool, str], str] = {}
         for i, clip in enumerate(clips):
             text = prepare_transcript(clip.transcript or "", language)
             if text is None:
@@ -594,7 +593,9 @@ def _align_round(
                 drops.append(Drop(clip.clip_id, "decode_failed", None))
                 continue
             stem = f"u{i:07d}"
-            folder = corpus / speakers.setdefault(clip.speaker, f"s{len(speakers)}" if clip.speaker else _SPEAKERLESS)
+            # A clip without a speaker is a speaker of its own, so fMLLR never adapts across unrelated voices.
+            key = (clip.speaker is None, clip.clip_id if clip.speaker is None else clip.speaker)
+            folder = corpus / speakers.setdefault(key, f"s{len(speakers)}")
             folder.mkdir(parents=True, exist_ok=True)
             sf.write(folder / f"{stem}.wav", audio, 16000, subtype="PCM_16")
             (folder / f"{stem}.lab").write_text(text + "\n", encoding="utf-8")
@@ -728,7 +729,7 @@ def _align_batch(
             rules.save(rules_path)
         return [rules.apply(t) for t in timings] if rules else []
 
-    walks = [_Walk(full[speaker], hours) for speaker, hours in _speakers_of(batch)]
+    walks = [_Walk(clips, hours) for clips, hours in _walks_of(batch, full)]
     ruled: list[tuple[Timing, str]] = []
     kept = list(_walk(walks, align, judge, ruled))
     if rules is None:
@@ -746,14 +747,15 @@ def _align_batch(
     log.info("%s/%s batch %s: %d clips, %d kept, %d dropped", source, language, name, len(batch), len(kept), len(drops))
 
 
-def _speakers_of(batch: list[Clip]) -> list[tuple[str | None, float]]:
-    """The speakers of a batch in batch order, each with the hours its walk may keep; clips without a speaker are
-    not capped and share one walk.
+def _walks_of(batch: list[Clip], full: dict[str | None, list[Clip]]) -> list[tuple[list[Clip], float]]:
+    """The clips and cap of each walk in a batch: a speaker's whole list (the walk takes what fits, refills included),
+    and the batch's own clips without a speaker, which are not capped.
     """
-    seen: dict[str | None, float] = {}
-    for c in batch:
-        seen.setdefault(c.speaker, SPEAKER_CAP_HOURS if c.speaker is not None else float("inf"))
-    return list(seen.items())
+    speakers = dict.fromkeys(c.speaker for c in batch if c.speaker is not None)
+    walks = [(full[speaker], SPEAKER_CAP_HOURS) for speaker in speakers]
+    if loose := [c for c in batch if c.speaker is None]:
+        walks.append((loose, float("inf")))
+    return walks
 
 
 def _align_language(

@@ -608,6 +608,49 @@ def test_the_cap_aligns_a_speaker_only_while_room_is_left_and_refills_drops(stag
     assert summary["kept"] + sum(summary["dropped"].values()) + summary["over_cap_not_aligned"] == 6
 
 
+def test_clips_without_a_speaker_are_aligned_once_each_over_several_batches_each_as_its_own_speaker(stage):
+    clips = [make_clip(stage.root, f"n/c{i}", None) for i in range(5)]
+    write_index(stage, clips)
+    run_align(stage.cfg, ["de"])
+    t = tables(stage)
+    kept = [r["clip_id"] for rows in t["words"].values() for r in rows]
+    assert sorted(kept) == sorted(c.clip_id for c in clips)
+    assert len(t["words"]) == 5
+    assert [len(call) for call in stage.fake.calls] == [1] * 5
+    manifest = json.loads((work_dir(stage.cfg) / "words/manifest.json").read_text())
+    assert manifest["per_source"]["fake"]["de"]["over_cap_not_aligned"] == 0
+
+
+def test_every_clip_id_is_in_exactly_one_file_when_speakers_and_loose_clips_mix(stage):
+    clips = [
+        *speakers_clips(stage, n=3),
+        *(make_clip(stage.root, f"n/c{i}", None, "FAIL" if i == 2 else "aa") for i in range(4)),
+    ]
+    write_index(stage, clips)
+    run_align(stage.cfg, ["de"])
+    t = tables(stage)
+    seen = [r["clip_id"] for rows in t["words"].values() for r in rows] + [r["clip_id"] for r in t["dropped"]]
+    assert sorted(seen) == sorted(c.clip_id for c in clips)
+    manifest = json.loads((work_dir(stage.cfg) / "words/manifest.json").read_text())
+    assert manifest["per_source"]["fake"]["de"]["over_cap_not_aligned"] == 0
+
+
+def test_loose_clips_in_one_run_do_not_share_an_mfa_speaker(stage, monkeypatch):
+    monkeypatch.setattr(align, "BATCH_HOURS", 100.0 / 3600)
+    folders = []
+
+    def spy(tools, models, corpus, out, mfa_root):
+        folders.append(sorted(p.name for p in corpus.iterdir()))
+        stage.fake(tools, models, corpus, out, mfa_root)
+
+    monkeypatch.setattr(align, "_run_mfa", spy)
+    write_index(
+        stage, [*(make_clip(stage.root, f"n/c{i}", None) for i in range(3)), make_clip(stage.root, "a/c0", "a")]
+    )
+    run_align(stage.cfg, ["de"])
+    assert folders == [["s0", "s1", "s2", "s3"]]
+
+
 def test_clips_without_a_speaker_are_not_capped(stage, monkeypatch):
     monkeypatch.setattr(align, "SPEAKER_CAP_HOURS", 1.5 / 3600)
     monkeypatch.setattr(align, "BATCH_HOURS", 100 / 3600)
