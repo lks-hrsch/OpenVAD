@@ -341,11 +341,11 @@ The scorer itself is deferred (ADR 0020).
 
 Fixed now (owner, 2026-11-06), which answers ADR 0009's open question.
 
-- `openvad-core` gets a half-band decimator and interpolator: causal, linear-phase, 63 taps, at least 70 dB stopband, committed coefficients, explicit `mul_add` in canonical order, scalar tier only.
+- `openvad-core` gets a half-band decimator and interpolator: causal, linear-phase, 71 taps, at least 70 dB stopband, committed coefficients, explicit `mul_add` in canonical order, scalar tier only.
 - `openvad-rs` exposes them on NumPy arrays through the `numpy` crate, because `Vec<f32>` from Python lists is too slow here.
 - A committed script designs the coefficients, and the coefficient hash goes in `manifest.json`.
 - Tests: frequency response against the stated stopband, group delay, known vectors, and a Python and Rust comparison at `1e-6`.
-- 63 taps and 70 dB are starting values; the design step may adjust them before they are committed.
+- 63 taps and 70 dB were starting values. Measured: 63 taps reach only -69.6 dB across 3500 to 4500 Hz, and 67 taps -67.3 dB with exactly unity DC gain, so the committed design has 71 taps (-71.0 dB, group delay 35 samples at 16 kHz).
 
 ## Tools
 
