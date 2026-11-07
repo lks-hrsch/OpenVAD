@@ -9,6 +9,11 @@ use std::fmt;
 
 use safetensors::{Dtype, SafeTensors};
 
+mod resample;
+mod resample_coefficients;
+
+pub use resample::{GROUP_DELAY_16K, HALF_BAND, decimate_2x, interpolate_2x};
+
 /// Error returned by [`load_f32`].
 #[derive(Debug)]
 pub enum Error {
