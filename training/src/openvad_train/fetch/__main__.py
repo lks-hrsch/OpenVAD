@@ -7,9 +7,6 @@
 
 import argparse
 import fcntl
-import os
-import re
-import socket
 from collections.abc import Callable
 from pathlib import Path
 
@@ -17,7 +14,15 @@ from openvad_train.fetch.alignments import fetch_alignments
 from openvad_train.fetch.ami import fetch_ami
 from openvad_train.fetch.ava import fetch_ava
 from openvad_train.fetch.callhome import fetch_callhome
-from openvad_train.fetch.common import MANIFEST, cache_dir, count_tree, is_complete, raw_dir, read_manifest
+from openvad_train.fetch.common import (
+    MANIFEST,
+    cache_dir,
+    count_tree,
+    is_complete,
+    raw_dir,
+    read_manifest,
+    take_share_lock,
+)
 from openvad_train.fetch.commonvoice import fetch_commonvoice
 from openvad_train.fetch.demand import fetch_demand
 from openvad_train.fetch.fleurs import fetch_fleurs
@@ -59,33 +64,6 @@ FETCHERS: dict[str, Callable[[], None]] = {
 RAW_NAMES = {"alignments": "librispeech-alignments", "ava": "ava-speech"}
 
 
-def _take_share_lock(name: str) -> Path:
-    """Create the lock file on the share; take over a stale one left by a dead process on this host."""
-    path = cache_dir() / f"{name}.fetching"
-    while True:
-        try:
-            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            held = re.fullmatch(r"host=(\S+) pid=(\d+)\s*", path.read_text(errors="replace"))
-            # An unparsable file counts as held by another host, so it is never deleted silently.
-            host, pid = (held[1], int(held[2])) if held else ("unknown", None)
-            if host == socket.gethostname() and pid is not None:
-                try:
-                    os.kill(pid, 0)
-                except ProcessLookupError:
-                    path.unlink(missing_ok=True)
-                    continue
-                except PermissionError:
-                    pass  # the process exists under another user
-            raise SystemExit(
-                f"{name}: held by host {host}, pid {pid if pid is not None else 'unknown'}; "
-                f"delete {path} if no fetch is running there"
-            ) from None
-        with os.fdopen(fd, "w") as f:
-            f.write(f"host={socket.gethostname()} pid={os.getpid()}")
-        return path
-
-
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("dataset", choices=sorted(FETCHERS))
@@ -101,7 +79,7 @@ def main(argv: list[str] | None = None) -> None:
         except BlockingIOError:
             raise SystemExit(f"{name}: another fetch of this dataset is already running") from None
         # Two machines mount the share and flock does not reach across SMB, so a lock file on the share covers them.
-        share_lock = _take_share_lock(name)
+        share_lock = take_share_lock(name)
         try:
             _fetch(name)
         finally:

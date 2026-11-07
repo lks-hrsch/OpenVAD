@@ -7,6 +7,9 @@ import hashlib
 import io
 import json
 import os
+import socket
+import subprocess
+import sys
 import tarfile
 import threading
 import time
@@ -484,3 +487,31 @@ def test_download_ranges_keyboard_interrupt_cancels_and_reraises(monkeypatch, tm
         common.download_ranges("https://x/a.tar", tmp_path / "a.tar", jobs=1)
     assert ran == [0]  # one piece was running; the queued ones were cancelled, none started
     assert not (tmp_path / "a.tar").exists()
+
+
+def test_take_share_lock_refuses_a_lock_held_by_a_live_process(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENVAD_DATA_DIR", str(tmp_path))
+    common.cache_dir().mkdir()
+    path = common.take_share_lock("x")
+    assert path.read_text() == f"host={socket.gethostname()} pid={os.getpid()}"
+    with pytest.raises(SystemExit, match=f"x: held by host {socket.gethostname()}, pid {os.getpid()}"):
+        common.take_share_lock("x")
+
+
+def test_take_share_lock_takes_over_from_a_dead_process_on_this_host(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENVAD_DATA_DIR", str(tmp_path))
+    common.cache_dir().mkdir()
+    dead = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"], capture_output=True, text=True)
+    (common.cache_dir() / "x.fetching").write_text(f"host={socket.gethostname()} pid={dead.stdout.strip()}")
+    assert common.take_share_lock("x").read_text().endswith(f"pid={os.getpid()}")
+
+
+@pytest.mark.parametrize("held", ["host=elsewhere pid=1", "not a lock file"])
+def test_take_share_lock_never_deletes_a_lock_it_cannot_judge(monkeypatch, tmp_path, held):
+    monkeypatch.setenv("OPENVAD_DATA_DIR", str(tmp_path))
+    common.cache_dir().mkdir()
+    path = common.cache_dir() / "x.fetching"
+    path.write_text(held)
+    with pytest.raises(SystemExit, match="held by host"):
+        common.take_share_lock("x")
+    assert path.read_text() == held

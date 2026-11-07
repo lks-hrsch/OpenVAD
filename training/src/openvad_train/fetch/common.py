@@ -11,6 +11,8 @@ import gzip
 import hashlib
 import json
 import os
+import re
+import socket
 import tarfile
 import time
 import urllib.error
@@ -82,6 +84,33 @@ def raw_dir(name: str) -> Path:
 
 def cache_dir() -> Path:
     return data_dir() / "cache"
+
+
+def take_share_lock(name: str) -> Path:
+    """Create the lock file on the share; take over a stale one left by a dead process on this host."""
+    path = cache_dir() / f"{name}.fetching"
+    while True:
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            held = re.fullmatch(r"host=(\S+) pid=(\d+)\s*", path.read_text(errors="replace"))
+            # An unparsable file counts as held by another host, so it is never deleted silently.
+            host, pid = (held[1], int(held[2])) if held else ("unknown", None)
+            if host == socket.gethostname() and pid is not None:
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    path.unlink(missing_ok=True)
+                    continue
+                except PermissionError:
+                    pass  # the process exists under another user
+            raise SystemExit(
+                f"{name}: held by host {host}, pid {pid if pid is not None else 'unknown'}; "
+                f"delete {path} if no fetch is running there"
+            ) from None
+        with os.fdopen(fd, "w") as f:
+            f.write(f"host={socket.gethostname()} pid={os.getpid()}")
+        return path
 
 
 def file_hash(path: Path, algo: str) -> str:
