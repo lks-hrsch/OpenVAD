@@ -92,7 +92,22 @@ build-mfa:
         exit 1
     fi
 
+    # Kaldi wants /bin/bash (the shebang of configure, SHELL in its makefiles), which e.g. NixOS lacks. Without it,
+    # every Kaldi make gets SHELL=<bash on PATH> and configure's shebang is rewritten. configure is a tracked
+    # file, so the rewrite is marked skip-worktree and undone here, before the submodule can move.
+    if [ -e tools/kaldi/.git ]; then
+        git -C tools/kaldi update-index --no-skip-worktree src/configure
+        git -C tools/kaldi checkout -- src/configure
+    fi
     git submodule update --init tools/kaldi tools/montreal-forced-aligner
+    kmake() {
+        if [ -x /bin/bash ]; then make "$@"; else make SHELL="$(command -v bash)" "$@"; fi
+    }
+    if [ ! -x /bin/bash ]; then
+        sed -i.orig "1s|.*|#!$(command -v bash)|" tools/kaldi/src/configure
+        rm tools/kaldi/src/configure.orig
+        git -C tools/kaldi update-index --skip-worktree src/configure
+    fi
     dist="$PWD/tools/kaldi/dist"
     work="$PWD/tools/kaldi/build"
     jobs="${JOBS:-$(getconf _NPROCESSORS_ONLN)}"
@@ -132,18 +147,18 @@ build-mfa:
         blas=()
         [ -z "${OPENBLAS_ROOT:-}" ] || blas=(--mathlib=OPENBLAS --openblas-root="$OPENBLAS_ROOT")
         (cd tools/kaldi/src && ./configure --shared --use-cuda=no --fst-root="$dist" --fst-version="$fst" ${blas[@]+"${blas[@]}"} \
-            && make -j"$jobs")
+            && kmake -j"$jobs")
         # Kaldi's nnet2/Makefile leaves out combine-nnet-a.cc and shrink-nnet.cc, which its CMake build globs in
         # and kalpy-kaldi needs (nnet2::ShrinkNnet), so add them to the library.
         printf 'include Makefile\nOBJFILES += combine-nnet-a.o shrink-nnet.o\nkaldi-nnet2.a: combine-nnet-a.o shrink-nnet.o\n' > "$work/nnet2.mk"
-        make -C tools/kaldi/src/nnet2 -f "$work/nnet2.mk" -j"$jobs"
+        kmake -C tools/kaldi/src/nnet2 -f "$work/nnet2.mk" -j"$jobs"
         # kalpy-kaldi links libkaldi-online, which Kaldi builds only with PortAudio (make ext); its own CMake
         # build compiles it with -DKALDI_NO_PORTAUDIO, so do the same and link only the Kaldi libraries.
         ext=so
         [ "$(uname)" != Darwin ] || ext=dylib
         deps=
         for lib in decoder lat hmm feat transform gmm tree util matrix base; do deps="$deps ../$lib/libkaldi-$lib.$ext"; done
-        make -C tools/kaldi/src/online -j"$jobs" EXTRA_CXXFLAGS=-DKALDI_NO_PORTAUDIO=1 EXTRA_LDLIBS="$deps"
+        kmake -C tools/kaldi/src/online -j"$jobs" EXTRA_CXXFLAGS=-DKALDI_NO_PORTAUDIO=1 EXTRA_LDLIBS="$deps"
         # kalpy wants KALDI_ROOT/{include/kaldi,lib}; link the in-tree build, whose rpath is src/lib.
         mkdir -p "$dist/include" "$dist/lib" "$dist/bin"
         ln -sfn ../../src "$dist/include/kaldi"
