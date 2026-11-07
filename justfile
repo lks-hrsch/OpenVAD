@@ -111,6 +111,7 @@ build-mfa:
     if [ ! -x /bin/bash ]; then
         sed -i.orig "1s|.*|#!$(command -v bash)|" tools/kaldi/src/configure
         rm tools/kaldi/src/configure.orig
+        chmod +x tools/kaldi/src/configure
         git -C tools/kaldi update-index --skip-worktree src/configure
     fi
     dist="$PWD/tools/kaldi/dist"
