@@ -22,8 +22,8 @@ The engine design follows from this: it runs natively at 16 kHz and upsamples 8 
 - The input rate is set once at stream creation (for example `Stream::new(model, sample_rate)`) and fixed for the stream's lifetime.
 - The streaming API accepts any block length (for example `Stream::push(samples)`) and buffers internally up to the model's stride.
 - One resampler for 8 and 16 kHz conversion: `openvad-core` provides a 2:1 decimator and a 2:1 interpolator, exposed via `openvad-rs`. The engine, training and the benchmarks all use it. It is fixed and documented. Other rates in data preparation use ffmpeg, with the version recorded in the manifest (owner, 2026-11-04).
-- The filter is fixed in the dataset construction phase (owner, 2026-11-06): a half-band decimator and interpolator, causal and linear-phase, 63 taps, at least 70 dB stopband, with committed coefficients and explicit `mul_add` in the canonical order, in the scalar tier only.
-  - 63 taps and 70 dB are starting values; the design step may adjust them before the coefficients are committed.
+- The filter is fixed in the dataset construction phase (owner, 2026-11-06): a half-band decimator and interpolator, causal and linear-phase, 67 taps, at least 70 dB stopband, with committed coefficients and explicit `mul_add` in the canonical order, in the scalar tier only.
+  - 63 taps and 70 dB were the starting values, and the design step could adjust them before the coefficients were committed. It moved to 67 taps: 63 reach only -69.6 dB, and 67 reach -73.3 dB.
   - A committed script designs the coefficients, and the hash of the coefficients goes in the dataset manifest.
   - `openvad-rs` exposes both on NumPy arrays through the `numpy` crate, because `Vec<f32>` from Python lists is too slow for dataset work.
   - Tests cover the frequency response against the stated stopband, the group delay, known vectors, and a Python and Rust comparison at `1e-6`.

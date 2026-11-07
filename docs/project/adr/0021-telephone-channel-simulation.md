@@ -55,7 +55,7 @@ Train-time narrowband (owner, 2026-11-06):
 - It applies to every `wide` sample, as-is sources included; the `treatment` column lets training exclude them.
 - G.711 is A-law in 90% and μ-law in 10% of the draws (proposed; see Open questions).
 - Validation and test draw with a seed derived from `sample_id`, so scoring is repeatable. The scoring conditions are in [0020](0020-evaluation-benchmarks.md).
-- Decimator and interpolator together delay about 3.9 ms at 63 taps, which rounds to 0 on the 10 ms grid. The transform computes the shift from the coefficients, and a test asserts the result.
+- Decimator and interpolator together delay 4.125 ms at 67 taps, which rounds to 0 on the 10 ms grid. The transform computes the shift from the coefficients, and a test asserts the result.
 
 ### Tools
 

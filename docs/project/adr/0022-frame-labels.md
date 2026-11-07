@@ -45,7 +45,7 @@ Following Foreground VAD (Yang et al. 2026, arXiv 2609.19856):
 
 - Labels are shifted by the codec delay table of [0021](0021-telephone-channel-simulation.md), after the padding offset.
 - Room impulse responses are peak-aligned to zero, so reverberation adds no shift. The reverb tail after the speech offset is non-speech (owner, 2026-11-06).
-- Decimator and interpolator together delay about 3.9 ms at 63 taps, which rounds to 0 on the 10 ms grid. The train-time narrowband transform computes the shift from the coefficients, and a test asserts the result.
+- Decimator and interpolator together delay 4.125 ms at 67 taps, which rounds to 0 on the 10 ms grid. The train-time narrowband transform computes the shift from the coefficients, and a test asserts the result.
 - PLC-filled frames and comfort noise (CNG) belong to packet loss, DTX and CNG, which are deferred ([0021](0021-telephone-channel-simulation.md)). When they return, PLC frames stay speech and CNG is non-speech.
 
 ## Consequences
