@@ -23,7 +23,7 @@ from openvad_train.fetch.common import cache_dir, data_dir, file_hash, raw_dir, 
 
 log = logging.getLogger(__name__)
 
-# Rows of as-is files decoded in full (rate and label length); every as-is pointer is only checked to exist.
+# Rows per source of as-is files decoded in full (rate and label length); every as-is pointer is only checked to exist.
 _AS_IS_SAMPLE = 200
 _MAX_REPORTED = 20
 
@@ -87,10 +87,11 @@ def _check_constructed(rows: pl.DataFrame, problems: list[str]) -> int:
 
 
 def _check_as_is(rows: pl.DataFrame, problems: list[str]) -> int:
-    """Every as-is path exists; a seeded sample is decoded, at 16 kHz, with a label for each frame."""
+    """Every as-is path exists; a seeded sample of each source is decoded, at 16 kHz, with a label for each frame."""
     absent = {path for path in rows["audio_filepath"].unique().sort() if not (data_dir() / path).exists()}
     problems.extend(f"{path}: an as-is row points at a file that does not exist" for path in sorted(absent))
-    sample = rows.sample(min(_AS_IS_SAMPLE, rows.height), seed=0)
+    # Per source: a single sample over all of them would miss a small source, and nothing else checks its files.
+    sample = pl.concat([g.sample(min(_AS_IS_SAMPLE, g.height), seed=0) for g in rows.partition_by("source")])
     for row in sample.iter_rows(named=True):
         if row["audio_filepath"] in absent:
             continue

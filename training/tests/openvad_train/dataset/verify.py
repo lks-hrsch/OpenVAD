@@ -179,6 +179,16 @@ def test_a_raw_file_that_is_not_16_khz_fails_verify(built, data):
         run_verify(built)
 
 
+@pytest.mark.parametrize("source", ["ami", "librivad"])
+def test_every_as_is_source_is_sampled_not_only_the_set_as_a_whole(built, data, monkeypatch, source):
+    monkeypatch.setattr(verify, "_AS_IS_SAMPLE", 1)
+    assert run_verify(built).as_is_decoded == 2
+    for path in (data / "datasets/raw" / source).glob("*.wav"):
+        sf.write(path, np.zeros(8000, np.float32), 8000, subtype="PCM_16")
+    with pytest.raises(VerifyError, match=f"{source}/.*: raw file is 8000 Hz"):
+        run_verify(built)
+
+
 def test_changed_raw_data_makes_the_set_stale(built, data):
     (data / "datasets/raw/swc/manifest.json").write_text('{"dataset": "swc", "changed": true}')
     with pytest.raises(VerifyError, match="swc: the raw manifest changed"):

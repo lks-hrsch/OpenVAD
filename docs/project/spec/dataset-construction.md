@@ -227,7 +227,7 @@ Running it prints hours and bytes per source, split and condition.
 
 `publish` merges fragments and as-is rows into `train.parquet`, `validation.parquet` and `test.parquet`, and writes `index.parquet`, `README.md` and `manifest.json`.
 A build missing planned shards is marked `state: interim`.
-`verify` checks: sidecar hashes, every pointer resolves and decodes, label length against audio length on a sample of as-is rows and all of the constructed ones, one index row per sample, speech ratio and condition shares per source and split, and speakers disjoint between splits where ADR 0023 says they can be.
+`verify` checks: sidecar hashes, every pointer resolves, every constructed row decodes, as-is rows decode on a seeded sample of up to 200 per source (decoding every raw file over SMB would take weeks), label length against audio length on all constructed rows and on that sample, one index row per sample, speech ratio and condition shares per source and split, and speakers disjoint between splits where ADR 0023 says they can be.
 
 ### Labels
 
