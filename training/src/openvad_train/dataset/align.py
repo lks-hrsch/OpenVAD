@@ -9,7 +9,9 @@ Per source and language, the foreground clips of the index go through MFA in bat
 speaker whole in one batch, so a batch is a target size and one speaker may exceed it. Every clip is decoded in this
 process by the decode `construct` uses, cut to its offset and duration and written as a 16 kHz WAV into a local
 temporary directory, so the times MFA returns are relative to the samples `construct` will cut. MFA never reads a
-source file. Each clip ends as exactly one row in `work/words/<source>/<language>/<batch>.parquet` or one drop in
+source file. Before the first batch a calibration batch (many speakers, a few clips each) fits the drop thresholds,
+which are then frozen; its alignments are discarded. Each clip ends as exactly one row in
+`work/words/<source>/<language>/<batch>.parquet` or one drop in
 `work/words/<source>/<language>/dropped/<batch>.parquet`; `work/dropped.parquet` is their union.
 
 `mfa_models.tsv` has one row per language: the acoustic model, dictionary and G2P model with the release version to
@@ -31,7 +33,7 @@ import subprocess
 import tempfile
 import unicodedata
 import zipfile
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import closing
 from pathlib import Path
@@ -59,9 +61,9 @@ BATCH_HOURS = 5.0
 
 # ADR 0025, drop rules: a word over 1.5 s, a phone over 0.5 s, a first word in the first 20 ms, speech under 20%,
 # a speaking rate more than three median absolute deviations from the median, and the bottom 5% of log-likelihoods.
-# The last two are fitted on the first batch (`DropRules`). The deviation is scaled by 1.4826 (consistent with the
-# standard deviation of a normal population, owner to confirm): unscaled, 3 of them are 2.02 sigma and drop 4.3% of
-# a clean population.
+# The last two are fitted on a calibration batch (`calibration_clips`, `DropRules`). The deviation is scaled by
+# 1.4826, consistent with the standard deviation of a normal population (owner to confirm): unscaled, 3 of them are
+# 2.02 sigma and drop 4.3% of a clean population.
 MAX_WORD_MS = 1500
 MAX_PHONE_MS = 500
 MIN_ONSET_MS = 20
@@ -69,6 +71,11 @@ MIN_COVERAGE = 0.2
 RATE_MADS = 3.0
 MAD_SCALE = 1.4826
 LOGLIK_QUANTILE = 0.05
+# The calibration batch: clips in rank order, at most 10 per speaker, 1000 clips; fewer than 50 aligned clips and the
+# language is not aligned. Its alignments are not labels and are discarded.
+CALIBRATION_PER_SPEAKER = 10
+CALIBRATION_MAX_CLIPS = 1000
+MIN_CALIBRATION_CLIPS = 50
 # Speech Commands is exempt from the speaking-rate and first-20-ms rules (owner, 2026-11-06).
 EXEMPT_FROM_RATE_AND_ONSET = frozenset({"speech-commands"})
 
@@ -364,7 +371,8 @@ def read_alignment(textgrid: Path, metrics: dict, provenance: str = "") -> Timin
 @dataclasses.dataclass(frozen=True)
 class DropRules:
     """ADR 0025's drop rules for one language and source. The thresholds that depend on data (the log-likelihood
-    floor and the speaking rate's median and spread) are fitted once, on the first batch, and then saved and loaded.
+    floor and the speaking rate's median and spread) are fitted once, on the calibration batch, and then saved and
+    loaded; `calibration` says which clips they came from.
     """
 
     source: str
@@ -372,9 +380,10 @@ class DropRules:
     rate_median: float | None
     rate_mad: float | None  # raw, not scaled
     mad_scale: float = MAD_SCALE
+    calibration: dict | None = None
 
     @classmethod
-    def fit(cls, timings: Iterable[Timing], source: str = "") -> "DropRules":
+    def fit(cls, timings: Iterable[Timing], source: str = "", calibration: dict | None = None) -> "DropRules":
         metrics = [t.metrics or {} for t in timings]
         logliks = [m["loglik"] for m in metrics if m.get("loglik") is not None]
         rates = np.array([m["rate"] for m in metrics if m.get("rate") is not None])
@@ -384,6 +393,7 @@ class DropRules:
             float(np.quantile(logliks, LOGLIK_QUANTILE)) if logliks else None,
             median,
             float(np.median(np.abs(rates - median))) if median is not None else None,
+            calibration=calibration,
         )
 
     def apply(self, timing: Timing) -> str | None:
@@ -460,6 +470,24 @@ def _leading(clips: list[Clip], budget_s: float) -> int:
         if total > budget_s:
             return i
     return len(clips)
+
+
+def calibration_clips(clips: Iterable[Clip]) -> list[Clip]:
+    """The calibration batch: clips in rank order, at most `CALIBRATION_PER_SPEAKER` per speaker, stopping at
+    `CALIBRATION_MAX_CLIPS`. A clip without a speaker counts as a speaker of its own. Because the first speakers in
+    rank order are the most prolific, a batch of whole speakers would be one voice; this one is many.
+    """
+    taken: Counter[str] = Counter()
+    chosen: list[Clip] = []
+    for c in _by_rank(clips):
+        if c.speaker is not None and taken[c.speaker] >= CALIBRATION_PER_SPEAKER:
+            continue
+        if c.speaker is not None:
+            taken[c.speaker] += 1
+        chosen.append(c)
+        if len(chosen) >= CALIBRATION_MAX_CLIPS:
+            break
+    return chosen
 
 
 class _Walk:
@@ -744,15 +772,12 @@ def _align_batch(
     source: str,
     language: str,
     words_dir: Path,
+    rules: DropRules,
     run: Callable[[list[Clip]], tuple[list[Timing], list[Drop]]],
 ) -> None:
-    """Align one batch to its two tables. The rules are fitted on the first batch and saved before its tables are
-    written, and the words table is written last, so its existence means the batch is finished.
+    """Align one batch to its two tables with the frozen `rules`. The words table is written last, so its existence
+    means the batch is finished.
     """
-    rules_path = words_dir / "rules.json"
-    rules = DropRules.load(rules_path) if rules_path.is_file() else None
-    if rules is None and name != "00000":
-        raise StateMismatchError(f"{rules_path} is missing although batch 00000 is finished: delete {words_dir}")
     unaligned: list[Drop] = []
 
     def align(chunk: list[Clip]) -> list[Timing]:
@@ -760,18 +785,9 @@ def _align_batch(
         unaligned.extend(drops)
         return timings
 
-    def judge(timings: list[Timing]) -> list[str | None]:
-        nonlocal rules
-        if rules is None and timings:
-            rules = DropRules.fit(timings, source)
-            rules.save(rules_path)
-        return [rules.apply(t) for t in timings] if rules else []
-
     walks = [_Walk(clips, hours) for clips, hours in _walks_of(batch, full)]
     ruled: list[tuple[Timing, str]] = []
-    kept = list(_walk(walks, align, judge, ruled))
-    if rules is None:
-        raise MfaFailedError(f"{source}/{language} batch {name}: no clip aligned, so the drop rules cannot be fitted")
+    kept = list(_walk(walks, align, lambda ts: [rules.apply(t) for t in ts], ruled))
     drops = unaligned + [Drop(t.clip_id, reason, t.metrics) for t, reason in ruled]
     (words_dir / "dropped").mkdir(parents=True, exist_ok=True)
     asyncio.run(
@@ -796,6 +812,49 @@ def _walks_of(batch: list[Clip], full: dict[str | None, list[Clip]]) -> list[tup
     return walks
 
 
+def _calibrate(
+    source: str,
+    language: str,
+    clips: list[Clip],
+    words_dir: Path,
+    run: Callable[[list[Clip]], tuple[list[Timing], list[Drop]]],
+) -> DropRules | None:
+    """The frozen drop rules of a language and source: loaded if a calibration batch was run before, else fitted on
+    one MFA run of `clips`, whose alignments are discarded. With fewer than `MIN_CALIBRATION_CLIPS` aligned the
+    language is not aligned (None), and that outcome is saved too, so a re-run reproduces it.
+    """
+    rules_path, outcome_path = words_dir / "rules.json", words_dir / "calibration.json"
+    if rules_path.is_file():
+        return DropRules.load(rules_path)
+    if outcome_path.is_file():
+        return None
+    timings, _ = run(clips)
+    info = {
+        "outcome": "fitted" if len(timings) >= MIN_CALIBRATION_CLIPS else "too_few_to_calibrate",
+        "clips": len(clips),
+        "speakers": len({c.speaker if c.speaker is not None else c.clip_id for c in clips}),
+        "aligned": len(timings),
+        "rank_cut": rank(clips[-1].clip_id) if clips else None,
+        "digest": _digest(c.clip_id for c in clips),
+        "per_speaker": CALIBRATION_PER_SPEAKER,
+        "max_clips": CALIBRATION_MAX_CLIPS,
+        "min_aligned": MIN_CALIBRATION_CLIPS,
+    }
+    if len(timings) < MIN_CALIBRATION_CLIPS:
+        log.warning(
+            "%s/%s: %d of %d calibration clips aligned, not enough: not aligning",
+            source,
+            language,
+            len(timings),
+            len(clips),
+        )
+        _write_atomically(outcome_path, json.dumps(info, sort_keys=True) + "\n")
+        return None
+    rules = DropRules.fit(timings, source, info)
+    rules.save(rules_path)
+    return rules
+
+
 def _align_language(
     cfg: BuildConfig,
     source: str,
@@ -818,11 +877,18 @@ def _align_language(
         for c in (group if speaker is None else group[: _leading(group, SPEAKER_CAP_HOURS * 3600)])
     ]
     batches = list(make_batches(first_round, BATCH_HOURS))
+    calibration = calibration_clips(c for group in full.values() for c in group)
     provenance = _provenance(tools, models)
     state = {
         "provenance": provenance,
         "batch_hours": BATCH_HOURS,
         "batches": [_digest(c.clip_id for c in b) for b in batches],
+        "calibration": [
+            CALIBRATION_PER_SPEAKER,
+            CALIBRATION_MAX_CLIPS,
+            MIN_CALIBRATION_CLIPS,
+            _digest(c.clip_id for c in calibration),
+        ],
     }
     state_path = words_dir / "state.json"
     if state_path.is_file() and json.loads(state_path.read_text()) != state:
@@ -835,12 +901,15 @@ def _align_language(
     def run(chunk: list[Clip]) -> tuple[list[Timing], list[Drop]]:
         return _align_round(chunk, language, tools, models, provenance)
 
+    rules = _calibrate(source, language, calibration, words_dir, run) if batches else None
+    if rules is None:
+        return
     for i, batch in enumerate(batches):
         name = f"{i:05d}"
         if (words_dir / f"{name}.parquet").is_file():
             log.info("%s/%s batch %s is finished", source, language, name)
             continue
-        _align_batch(batch, full, name, source, language, words_dir, run)
+        _align_batch(batch, full, name, source, language, words_dir, rules, run)
 
 
 def run_align(cfg: BuildConfig, languages: list[str] | None = None) -> None:
@@ -888,12 +957,22 @@ def _write_manifest(
                 sorted((base / "words" / source / language).glob("*.parquet")), WORDS_SCHEMA, ["clip_id"]
             ).height
             mine = dropped.filter((pl.col("source") == source) & (pl.col("language") == language))
+            words_dir = base / "words" / source / language
+            rules = json.loads((words_dir / "rules.json").read_text()) if (words_dir / "rules.json").is_file() else None
+            calibration = rules.pop("calibration") if rules else None
+            if rules is None and (words_dir / "calibration.json").is_file():
+                calibration = json.loads((words_dir / "calibration.json").read_text())
+            unaligned = sum(not c.reserved for c in clips) - words - mine.height
+            too_few = calibration is not None and calibration["outcome"] == "too_few_to_calibrate"
             summary.setdefault(source, {})[language] = {
                 "index_clips": len(clips),
                 "reserved_not_aligned": sum(c.reserved for c in clips),
                 "kept": words,
                 "dropped": dict(mine.group_by("reason").len().sort("reason").iter_rows()),
-                "over_cap_not_aligned": sum(not c.reserved for c in clips) - words - mine.height,
+                "over_cap_not_aligned": 0 if too_few else unaligned,
+                "not_aligned_too_few_to_calibrate": unaligned if too_few else 0,
+                "calibration": calibration,
+                "rules": rules,
                 "models": fetched[language].info if language in fetched else None,
             }
     out = base / "words"

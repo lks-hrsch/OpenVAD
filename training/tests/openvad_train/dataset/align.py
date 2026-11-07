@@ -11,6 +11,7 @@ import shutil
 import sqlite3
 import tempfile
 import zipfile
+from collections import Counter
 from collections.abc import Collection
 from contextlib import closing
 from importlib import resources
@@ -316,11 +317,13 @@ def test_fit_takes_the_5th_percentile_and_the_median_and_mad_of_the_rate():
     assert DropRules.fit([], "x") == DropRules("x", None, None, None)
 
 
-def test_thresholds_are_frozen_after_first_batch(tmp_path):
-    r = DropRules.fit([timing([(100, 500)], loglik=-50.0 - i) for i in range(10)], "common-voice")
+def test_thresholds_are_frozen_after_the_calibration_batch(tmp_path):
+    r = DropRules.fit([timing([(100, 500)], loglik=-50.0 - i) for i in range(10)], "common-voice", {"clips": 10})
     r.save(tmp_path / "sub/r.json")
     loaded = DropRules.load(tmp_path / "sub/r.json")
     assert loaded == r
+    assert loaded.calibration == {"clips": 10}
+    assert json.loads((tmp_path / "sub/r.json").read_text())["mad_scale"] == 1.4826
     assert loaded.loglik_floor == r.loglik_floor
     assert not list(tmp_path.rglob("*.tmp"))
 
@@ -450,6 +453,7 @@ def stage(monkeypatch, tmp_path):
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "tmp"))
     (tmp_path / "tmp").mkdir()
     monkeypatch.setattr(align, "BATCH_HOURS", 1.0 / 3600)  # one speaker per batch
+    monkeypatch.setattr(align, "MIN_CALIBRATION_CLIPS", 1)
     fake = install(monkeypatch)
     cfg = dataclasses.replace(SLICE, name="align-test", sources=("fake",), languages=None)
     monkeypatch.setitem(index.SOURCES, "fake", SimpleNamespace(clips=lambda raw, languages: iter(())))
@@ -477,6 +481,11 @@ def reasons(stage) -> dict[str, str]:
     return {r["clip_id"]: r["reason"] for r in tables(stage)["dropped"]}
 
 
+def batch_calls(stage) -> list[list[str]]:
+    """The MFA runs after the calibration run, which comes first."""
+    return stage.fake.calls[1:]
+
+
 def speakers_clips(stage, n=4, per=2, **kw) -> list[Clip]:
     return [make_clip(stage.root, f"s{s}/c{i}", f"s{s}", **kw) for s in range(n) for i in range(per)]
 
@@ -487,7 +496,8 @@ def test_run_align_writes_one_table_per_batch_and_drops_none_when_all_is_well(st
     run_align(stage.cfg, ["de"])
     t = tables(stage)
     assert len(t["words"]) == 4
-    assert len(stage.fake.calls) == 4
+    assert len(batch_calls(stage)) == 4
+    assert len(stage.fake.calls[0]) == len(clips)  # the calibration run, before any label batch
     rows = [r for rows in t["words"].values() for r in rows]
     assert sorted(r["clip_id"] for r in rows) == sorted(c.clip_id for c in clips)
     assert t["dropped"] == []
@@ -509,7 +519,7 @@ def test_finished_batch_is_skipped(stage):
     run_align(stage.cfg, ["de"])
     first = tables(stage)
     run_align(stage.cfg, ["de"])
-    assert len(stage.fake.calls) == 4 == len(first["words"])
+    assert len(stage.fake.calls) == 1 + 4 == 1 + len(first["words"])  # the calibration is not repeated
     assert tables(stage) == first
 
 
@@ -529,7 +539,7 @@ def test_a_clip_that_does_not_decode_is_dropped_before_mfa_and_the_batch_goes_on
     write_index(stage, clips)
     run_align(stage.cfg, ["de"])
     assert reasons(stage) == {"a/bad": "decode_failed"}
-    assert stage.fake.calls == [["aa bb cc"]]
+    assert stage.fake.calls == [["aa bb cc"]] * 2  # the calibration run and the batch; the corrupt file is in neither
 
 
 def test_a_clip_that_decodes_to_the_wrong_length_is_dropped(stage):
@@ -591,7 +601,7 @@ def test_a_textgrid_for_a_file_it_was_not_given_fails_the_batch(stage):
 
 def test_a_failing_mfa_leaves_the_batch_unfinished_and_no_temp_copy(stage):
     write_index(stage, speakers_clips(stage))
-    stage.fake.kill_at = 2
+    stage.fake.kill_at = 3  # the calibration and two batches ran
     with pytest.raises(Killed):
         run_align(stage.cfg, ["de"])
     assert not list(stage.tmp.iterdir())
@@ -605,7 +615,7 @@ def test_reserved_speakers_are_never_aligned(stage):
     run_align(stage.cfg, ["de"])
     done = {r["clip_id"] for rows in tables(stage)["words"].values() for r in rows}
     assert done == {c.clip_id for c in clips if c.speaker != "s1"}
-    assert sum(len(call) for call in stage.fake.calls) == 4
+    assert sum(len(call) for call in batch_calls(stage)) == 4
 
 
 def test_languages_are_chosen_and_each_gets_its_own_models_and_tables(stage):
@@ -620,7 +630,7 @@ def test_languages_are_chosen_and_each_gets_its_own_models_and_tables(stage):
     assert set(tables(stage)["words"]) == {"words/fake/fr/00000.parquet"}
     run_align(stage.cfg, None)
     assert stage.fetched == ["fr", "de", "fr"]
-    assert len(stage.fake.calls) == 1 + 2
+    assert len(stage.fake.calls) == 2 + 3  # fr is finished, de is calibrated and runs two batches
     assert {k.split("/")[2] for k in tables(stage)["words"]} == {"de", "fr"}
 
 
@@ -651,11 +661,11 @@ def test_the_cap_aligns_a_speaker_only_while_room_is_left_and_refills_drops(stag
     kept = sorted(r["clip_id"] for rows in tables(stage)["words"].values() for r in rows)
     texts = {c.clip_id: c.transcript for c in clips}
     if failing == 0:  # the first clip fails, so a fourth is aligned to fill its place
-        assert [len(call) for call in stage.fake.calls] == [3, 1]
+        assert [len(call) for call in batch_calls(stage)] == [3, 1]
         assert kept == sorted(c.clip_id for c in order[1:4])
         assert reasons(stage) == {order[0].clip_id: "no_alignment"}
     else:  # the failing clip is past the cap, so it is never aligned or even looked at
-        assert [len(call) for call in stage.fake.calls] == [3]
+        assert [len(call) for call in batch_calls(stage)] == [3]
         assert kept == sorted(c.clip_id for c in order[:3])
         assert texts[order[5].clip_id] == "FAIL"
         assert reasons(stage) == {}
@@ -673,7 +683,7 @@ def test_clips_without_a_speaker_are_aligned_once_each_over_several_batches_each
     kept = [r["clip_id"] for rows in t["words"].values() for r in rows]
     assert sorted(kept) == sorted(c.clip_id for c in clips)
     assert len(t["words"]) == 5
-    assert [len(call) for call in stage.fake.calls] == [1] * 5
+    assert [len(call) for call in batch_calls(stage)] == [1] * 5
     manifest = json.loads((work_dir(stage.cfg) / "words/manifest.json").read_text())
     assert manifest["per_source"]["fake"]["de"]["over_cap_not_aligned"] == 0
 
@@ -705,7 +715,7 @@ def test_loose_clips_in_one_run_do_not_share_an_mfa_speaker(stage, monkeypatch):
         stage, [*(make_clip(stage.root, f"n/c{i}", None) for i in range(3)), make_clip(stage.root, "a/c0", "a")]
     )
     run_align(stage.cfg, ["de"])
-    assert folders == [["s0", "s1", "s2", "s3"]]
+    assert folders == [["s0", "s1", "s2", "s3"]] * 2  # the calibration run and the batch
 
 
 def test_clips_without_a_speaker_are_not_capped(stage, monkeypatch):
@@ -724,12 +734,103 @@ def test_the_batch_composition_is_checked_on_a_rerun(stage, monkeypatch):
         run_align(stage.cfg, ["de"])
 
 
-def test_a_first_batch_that_aligns_nothing_fails_instead_of_freezing_empty_rules(stage):
-    write_index(stage, [make_clip(stage.root, f"s{s}/c0", f"s{s}", "FAIL") for s in range(3)])
-    with pytest.raises(MfaFailedError, match="no clip aligned"):
-        run_align(stage.cfg, ["de"])
+def test_a_language_with_too_few_calibration_clips_is_not_aligned_and_says_so(stage, monkeypatch):
+    monkeypatch.setattr(align, "MIN_CALIBRATION_CLIPS", 50)
+    write_index(stage, speakers_clips(stage, n=5, per=2))
+    run_align(stage.cfg, ["de"])
+    words = work_dir(stage.cfg) / "words/fake/de"
+    assert len(stage.fake.calls) == 1
+    assert not list(words.glob("*.parquet"))
+    assert not (words / "rules.json").exists()
+    summary = json.loads((work_dir(stage.cfg) / "words/manifest.json").read_text())["per_source"]["fake"]["de"]
+    cal = summary["calibration"]
+    assert cal["outcome"] == "too_few_to_calibrate"
+    assert (cal["clips"], cal["aligned"], cal["min_aligned"]) == (10, 10, 50)
+    assert (summary["kept"], summary["not_aligned_too_few_to_calibrate"], summary["over_cap_not_aligned"]) == (0, 10, 0)
+    run_align(stage.cfg, ["de"])
+    assert len(stage.fake.calls) == 1  # the outcome is reproduced, not recomputed
+
+
+def test_clips_that_fail_to_align_do_not_count_toward_the_calibration_minimum(stage, monkeypatch):
+    monkeypatch.setattr(align, "MIN_CALIBRATION_CLIPS", 3)
+    write_index(stage, [make_clip(stage.root, f"s{i}/c0", f"s{i}", "FAIL" if i < 2 else "aa") for i in range(4)])
+    run_align(stage.cfg, ["de"])
     assert not (work_dir(stage.cfg) / "words/fake/de/rules.json").exists()
-    assert not list((work_dir(stage.cfg) / "words/fake/de").glob("*.parquet"))
+    summary = json.loads((work_dir(stage.cfg) / "words/manifest.json").read_text())["per_source"]["fake"]["de"]
+    assert (summary["calibration"]["clips"], summary["calibration"]["aligned"]) == (4, 2)
+
+
+def test_a_kill_during_the_calibration_leaves_nothing_behind(stage):
+    write_index(stage, speakers_clips(stage))
+    stage.fake.kill_at = 0
+    with pytest.raises(Killed):
+        run_align(stage.cfg, ["de"])
+    words = work_dir(stage.cfg) / "words/fake/de"
+    assert not (words / "rules.json").exists()
+    assert not (words / "calibration.json").exists()
+    stage.fake.kill_at = None
+    run_align(stage.cfg, ["de"])
+    assert len(tables(stage)["words"]) == 4
+
+
+def prolific_speaker_corpus(stage, n_big=12, others=6, per=2) -> list[Clip]:
+    """One speaker owns the lowest ranks, which makes its whole-speaker batch the first one."""
+    ids = sorted((f"c{i}" for i in range(n_big + others * per)), key=rank)
+    return [make_clip(stage.root, i, "big" if k < n_big else f"o{(k - n_big) % others}") for k, i in enumerate(ids)]
+
+
+def test_the_calibration_batch_takes_many_speakers_even_when_one_owns_the_lowest_ranks(stage):
+    clips = prolific_speaker_corpus(stage)
+    first_label_batch = next(iter(make_batches(clips, 100.0 / 3600)))
+    assert {c.speaker for c in first_label_batch} == {c.speaker for c in clips}  # one big batch
+    chosen = align.calibration_clips(clips)
+    per_speaker = Counter(c.speaker for c in chosen)
+    assert per_speaker["big"] == align.CALIBRATION_PER_SPEAKER == 10
+    assert len(per_speaker) == 7
+    assert [rank(c.clip_id) for c in chosen] == sorted(rank(c.clip_id) for c in chosen)
+
+
+def test_the_rules_do_not_change_when_clips_of_the_prolific_speaker_outside_the_calibration_change(stage):
+    clips = prolific_speaker_corpus(stage)
+    in_calibration = {c.clip_id for c in align.calibration_clips(clips)}
+    outside = {c.clip_id for c in clips if c.speaker == "big" and c.clip_id not in in_calibration}
+    inside = {c.clip_id for c in clips if c.speaker == "big" and c.clip_id in in_calibration}
+    assert outside
+
+    def rules_with(changed: set[str]) -> dict:
+        shutil.rmtree(work_dir(stage.cfg), ignore_errors=True)
+        write_index(
+            stage, [dataclasses.replace(c, transcript="aa LOWER") if c.clip_id in changed else c for c in clips]
+        )
+        run_align(stage.cfg, ["de"])
+        return json.loads((work_dir(stage.cfg) / "words/fake/de/rules.json").read_text())
+
+    base = rules_with(set())
+    assert rules_with(outside) == base
+    assert rules_with(inside)["loglik_floor"] < base["loglik_floor"]  # the same test can see a change
+    assert base["calibration"]["speakers"] == 7
+
+
+def test_the_calibration_stops_at_the_clip_limit_and_a_clip_without_a_speaker_is_its_own_speaker(stage, monkeypatch):
+    loose = [make_clip(stage.root, f"n/c{i}", None) for i in range(30)]
+    assert len(align.calibration_clips(loose)) == 30  # more than the per-speaker limit, as each is a speaker
+    monkeypatch.setattr(align, "CALIBRATION_MAX_CLIPS", 12)
+    chosen = align.calibration_clips(loose)
+    assert [c.clip_id for c in chosen] == [c.clip_id for c in align._by_rank(loose)][:12]
+
+
+def test_the_manifest_records_the_calibration_and_the_fitted_rules(stage):
+    clips = speakers_clips(stage)
+    write_index(stage, clips)
+    run_align(stage.cfg, ["de"])
+    summary = json.loads((work_dir(stage.cfg) / "words/manifest.json").read_text())["per_source"]["fake"]["de"]
+    cal = summary["calibration"]
+    assert cal["outcome"] == "fitted"
+    assert (cal["clips"], cal["speakers"], cal["aligned"]) == (8, 4, 8)
+    assert cal["rank_cut"] == max(rank(c.clip_id) for c in clips)
+    assert cal["digest"] == align._digest(c.clip_id for c in align._by_rank(clips))
+    assert summary["rules"]["mad_scale"] == 1.4826
+    assert "calibration" not in summary["rules"]
 
 
 def test_dropped_parquet_is_the_union_of_the_per_batch_tables(stage):
@@ -767,30 +868,34 @@ def varied_clips(stage) -> list[Clip]:
     return [dataclasses.replace(c, transcript="aa bb") if c.clip_id == first.clip_id else c for c in clips]
 
 
-def test_the_rules_are_fitted_on_the_first_batch_and_saved_before_the_second(stage):
+def test_the_rules_are_fitted_on_the_calibration_batch_and_saved_before_the_first_label_batch(stage, monkeypatch):
+    monkeypatch.setattr(align, "CALIBRATION_MAX_CLIPS", 2)
     clips = varied_clips(stage)
-    first = next(iter(make_batches(clips, align.BATCH_HOURS)))[0]
-    # Everything outside the first batch is much worse than anything inside it.
-    clips = [dataclasses.replace(c, transcript="aa LOWER" if c.clip_id != first.clip_id else "aa") for c in clips]
+    calibration = {c.clip_id for c in align.calibration_clips(clips)}
+    # Everything outside the calibration batch is much worse than anything inside it.
+    clips = [dataclasses.replace(c, transcript="aa" if c.clip_id in calibration else "aa LOWER") for c in clips]
     write_index(stage, clips)
-    stage.fake.kill_at = 1
+    stage.fake.kill_at = 1  # the first label batch
     with pytest.raises(Killed):
         run_align(stage.cfg, ["de"])
     rules_file = work_dir(stage.cfg) / "words/fake/de/rules.json"
     saved = rules_file.read_text()
-    assert json.loads(saved)["loglik_floor"] == -50.0
+    rules = json.loads(saved)
+    assert rules["loglik_floor"] == -50.0
+    assert rules["calibration"]["clips"] == 2
     stage.fake.kill_at = None
     run_align(stage.cfg, ["de"])
     assert rules_file.read_text() == saved
+    assert len(stage.fake.calls) == 1 + 8  # not calibrated again
     assert set(reasons(stage).values()) == {"low_loglik"}
-    assert len(reasons(stage)) == len(clips) - 1
+    assert set(reasons(stage)) == {c.clip_id for c in clips} - calibration
 
 
 def test_a_kill_between_batches_resumes_to_the_uninterrupted_result(stage):
     clips = varied_clips(stage)
     expected = reference(stage, clips)
     write_index(stage, clips)
-    stage.fake.kill_at = 3
+    stage.fake.kill_at = 4  # the calibration and three batches ran
     with pytest.raises(Killed):
         run_align(stage.cfg, ["de"])
     assert len(list((work_dir(stage.cfg) / "words/fake/de").glob("*.parquet"))) == 3
