@@ -12,7 +12,6 @@ from scipy import signal
 
 import openvad_rs
 from openvad_rs import GROUP_DELAY_16K, decimate_2x, half_band_taps, interpolate_2x
-from openvad_train.design_resampler import coefficients
 
 
 FIXTURE = Path(__file__).resolve().parents[2] / "fixtures/smoke/linear.safetensors"
@@ -25,18 +24,17 @@ def test_bindings_match_fixture():
 
 
 def reference_decimate(x):
-    """Float64 filtering of the design taps with scipy, independent of the Rust code."""
-    return signal.lfilter(coefficients().astype(np.float64), 1.0, x.astype(np.float64))[::2]
+    """Float64 filtering of the committed taps with scipy, independent of the Rust filter loops."""
+    return signal.lfilter(half_band_taps().astype(np.float64), 1.0, x.astype(np.float64))[::2]
 
 
 def reference_interpolate(x):
-    return 2.0 * signal.upfirdn(coefficients().astype(np.float64), x.astype(np.float64), up=2)[: 2 * len(x)]
+    return 2.0 * signal.upfirdn(half_band_taps().astype(np.float64), x.astype(np.float64), up=2)[: 2 * len(x)]
 
 
-def test_taps_are_the_design_taps():
+def test_taps_are_float32_and_the_group_delay_follows_their_length():
     taps = half_band_taps()
     assert taps.dtype == np.float32
-    np.testing.assert_array_equal(taps, coefficients())
     assert GROUP_DELAY_16K == (len(taps) - 1) // 2 == 33
 
 

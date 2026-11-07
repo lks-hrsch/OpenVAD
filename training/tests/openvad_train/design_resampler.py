@@ -8,7 +8,12 @@ import re
 import numpy as np
 from scipy.signal import freqz
 
+from openvad_rs import half_band_taps
 from openvad_train.design_resampler import OUTPUT, coefficients
+
+
+def test_the_bindings_expose_the_design_taps_exactly():
+    np.testing.assert_array_equal(half_band_taps(), coefficients())
 
 
 def test_stopband_at_least_70_db():
