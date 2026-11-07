@@ -8,7 +8,7 @@ import asyncio
 import polars as pl
 import pytest
 
-from openvad_train.dataset.parquet_io import read_parquet, write_parquet
+from openvad_train.dataset.parquet_io import read_parquet, read_parquet_row, write_parquet
 
 
 def test_parquet_round_trip_keeps_labels(tmp_path):
@@ -58,3 +58,16 @@ def test_write_replaces_an_existing_file_only_on_success(tmp_path):
     assert asyncio.run(read_parquet(p))["a"].to_list() == [1]
     asyncio.run(write_parquet({p: pl.LazyFrame({"a": [2]})}))
     assert asyncio.run(read_parquet(p))["a"].to_list() == [2]
+
+
+def test_read_parquet_row_returns_one_row_as_a_dict(tmp_path):
+    path = tmp_path / "a.parquet"
+    asyncio.run(write_parquet({path: pl.DataFrame({"a": [1, 2, 3], "b": ["x", "y", "z"]}).lazy()}))
+    assert asyncio.run(read_parquet_row(path, 1, ["b"])) == {"b": "y"}
+
+
+def test_read_parquet_row_past_the_end_is_an_error(tmp_path):
+    path = tmp_path / "a.parquet"
+    asyncio.run(write_parquet({path: pl.DataFrame({"a": [1]}).lazy()}))
+    with pytest.raises(IndexError, match="row 1"):
+        asyncio.run(read_parquet_row(path, 1, ["a"]))
