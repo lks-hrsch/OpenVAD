@@ -30,7 +30,7 @@ from openvad_train.dataset.codecs import DecodeError, MissingCodec
 from openvad_train.dataset.config import SLICE, BuildConfig, dataset_root, work_dir
 from openvad_train.dataset.construct import OutOfSpace, PlanMismatch, construct_sample, run_construct, write_shard
 from openvad_train.dataset.cutting import Chunk
-from openvad_train.dataset.mix import loop_slice
+from openvad_train.dataset.mix import dither, loop_slice
 from openvad_train.dataset.parquet_io import read_parquet, write_parquet
 from openvad_train.dataset.plan import PLAN_SCHEMA, draw_sample
 from openvad_train.dataset.schema import Clip, Timing
@@ -254,6 +254,13 @@ def test_clean_padding_is_dither_at_the_drawn_level(raw):
     padding = audio[3 * 16000 + 100 :]
     assert db(rms(padding)) == pytest.approx(-70.0, abs=1.0)
     assert np.count_nonzero(padding) > 0.5 * len(padding)
+
+
+def test_dither_has_its_own_stream_and_not_the_plans(raw):
+    row = make_row(dither_dbfs=-70.0, speech=[(0, 3000)], total_n=6 * 16000, speech_offset_n=0)
+    padding = stored(construct_sample(row, raw)[0])[3 * 16000 :]
+    own = dither(row["total_n"], -70.0, np.random.default_rng([row["seed"], 1]))[3 * 16000 :]
+    np.testing.assert_allclose(padding, own, atol=1 / 16384)
 
 
 def test_noise_read_matches_loop_slice_inside_and_across_the_end(raw):

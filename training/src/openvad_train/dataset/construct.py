@@ -105,8 +105,8 @@ def construct_sample(row: dict, raw: Path) -> tuple[bytes, np.ndarray]:
     """16-bit 16 kHz mono FLAC and one label per 10 ms frame for a plan row.
 
     `raw` is the root the row's paths are relative to, `$OPENVAD_DATA_DIR` in a build. The only draw made here is
-    the dither of a clean row: its `total_n` normals from `default_rng(row["seed"])`. Bytes then depend only on the
-    row, its source files and the ffmpeg version.
+    the dither of a clean row: its `total_n` normals from `default_rng([row["seed"], 1])`, a stream apart from the
+    one the plan drew from. Bytes then depend only on the row, its source files and the ffmpeg version.
 
     Labels come from the audio produced, never from file metadata. `DecodeError` means this clip cannot be built: a
     damaged file, a decode further than one 10 ms frame from `source_n`, or words under -70 dBFS RMS. A decode can
@@ -136,7 +136,7 @@ def construct_sample(row: dict, raw: Path) -> tuple[bytes, np.ndarray]:
     if not active.any() or np.sqrt(np.mean(np.square(x[active], dtype=np.float64))) < 10 ** (_MIN_WORD_DBFS / 20):
         raise DecodeError(f"{path}: silent under the words of {row['sample_id']}: under {_MIN_WORD_DBFS} dBFS")
     if row["condition"] == "clean":
-        x = x + dither(total_n, row["dither_dbfs"], np.random.default_rng(row["seed"]))
+        x = x + dither(total_n, row["dither_dbfs"], np.random.default_rng([row["seed"], 1]))
     else:
         noise = _noise_of(row, raw)
         if not noise[active].any():
