@@ -12,6 +12,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = { workspace = true, features = ["abi3-py312"] }
+numpy = { workspace = true }
 openvad-core = { path = "../openvad-core" }
 
 [lints]

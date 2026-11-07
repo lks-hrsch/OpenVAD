@@ -3,9 +3,10 @@ name = "openvad-rs"
 version = "0.1.0"
 requires-python = ">=3.12,<3.13"
 license = "MPL-2.0"
+dependencies = ["numpy"]
 
 [dependency-groups]
-dev = ["numpy", "safetensors"]
+dev = ["safetensors", "scipy"]
 
 [build-system]
 requires = ["maturin>=1.12.6,<2"]
