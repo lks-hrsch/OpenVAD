@@ -6,7 +6,7 @@
 import pytest
 
 from openvad_train.dataset import __main__ as cli
-from openvad_train.dataset import construct
+from openvad_train.dataset import construct, publish
 from openvad_train.dataset.config import SLICE
 
 
@@ -34,3 +34,10 @@ def test_workers_default_to_eleven(monkeypatch):
     monkeypatch.setattr(construct, "run_construct", lambda c, workers: seen.append((c.name, workers)))
     cli.main(["construct", "--config", "full"])
     assert seen == [("openvad-v1", 11)]
+
+
+def test_publish_is_registered_and_takes_a_config(monkeypatch):
+    seen = []
+    monkeypatch.setattr(publish, "run_publish", lambda c: seen.append(c.name))
+    cli.main(["publish", "--config", "slice"])
+    assert seen == [SLICE.name]
