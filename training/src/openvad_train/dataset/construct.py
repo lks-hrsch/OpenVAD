@@ -301,6 +301,8 @@ def _check_build_state(cfg: BuildConfig, plan_manifest: dict, plan_path: Path, f
     fragments = work_dir(cfg) / "fragments"
     built_from = read_manifest(fragments)
     if built_from is None:
+        if next(fragments.rglob("*.parquet"), None) is not None:
+            raise PlanMismatch(f"{fragments} holds shards and no manifest: delete its shards too to rebuild")
         fragments.mkdir(parents=True, exist_ok=True)
         write_manifest(fragments, state)
         return

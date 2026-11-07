@@ -961,6 +961,16 @@ def test_another_ffmpeg_refuses_mixing_shards(cfg_built, monkeypatch):
         run_construct(cfg_built)
 
 
+def test_a_deleted_build_manifest_does_not_let_a_new_plan_keep_old_shards(cfg_built, planned_rows):
+    (work_dir(cfg_built) / "fragments/manifest.json").unlink()
+    write_plan(cfg_built, planned_rows[:2])
+    before = shard_mtimes(cfg_built)
+    with pytest.raises(PlanMismatch, match="manifest"):
+        run_construct(cfg_built)
+    assert shard_mtimes(cfg_built) == before
+    assert not (work_dir(cfg_built) / "fragments/manifest.json").exists()
+
+
 def test_a_run_without_a_plan_says_so(raw):
     with pytest.raises(FileNotFoundError, match="plan"):
         run_construct(dataclasses.replace(SLICE, name="no-plan"))
