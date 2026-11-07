@@ -118,7 +118,7 @@ build-mfa:
         rm -f "$dist"/.kaldi-*
         blas=()
         [ -z "${OPENBLAS_ROOT:-}" ] || blas=(--mathlib=OPENBLAS --openblas-root="$OPENBLAS_ROOT")
-        (cd tools/kaldi/src && ./configure --shared --use-cuda=no --fst-root="$dist" --fst-version="$fst" "${blas[@]}" \
+        (cd tools/kaldi/src && ./configure --shared --use-cuda=no --fst-root="$dist" --fst-version="$fst" ${blas[@]+"${blas[@]}"} \
             && make -j"$jobs")
         # Kaldi's nnet2/Makefile leaves out combine-nnet-a.cc and shrink-nnet.cc, which its CMake build globs in
         # and kalpy-kaldi needs (nnet2::ShrinkNnet), so add them to the library.
