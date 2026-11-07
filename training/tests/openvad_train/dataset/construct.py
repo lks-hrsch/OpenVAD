@@ -340,6 +340,12 @@ def rows() -> list[dict]:
     ]
 
 
+@pytest.fixture
+def twenty_rows(rows) -> list[dict]:
+    extra = [make_row(tone(16000), speech=[(100, 900)], name=f"c{i}", **CLEAN, **NO_CODEC) for i in range(3, 20)]
+    return rows + extra
+
+
 def read_fragment(path: Path) -> list[dict]:
     return asyncio.run(read_parquet(path)).to_dicts()
 
@@ -503,18 +509,22 @@ def test_a_rebuild_removes_the_old_fragment_before_it_touches_the_tar(tmp_path, 
     assert not (tmp_path / "s.parquet").exists()
 
 
+def corrupt(row: dict, raw: Path) -> None:
+    (raw / row["source_path"]).write_bytes(b"this is not audio" * 100)
+
+
 @pytest.fixture
-def rows_with_corrupt_clip(rows, raw) -> list[dict]:
-    (raw / rows[0]["source_path"]).write_bytes(b"this is not audio" * 100)
-    return rows
+def rows_with_corrupt_clip(twenty_rows, raw) -> list[dict]:
+    corrupt(twenty_rows[0], raw)
+    return twenty_rows
 
 
 def test_corrupt_clip_is_logged_and_skipped(rows_with_corrupt_clip, raw, tmp_path):
     r = write_shard(rows_with_corrupt_clip, tmp_path / "s.tar", tmp_path / "s.parquet", raw)
     assert r.n_failed == 1
     assert "c0" in (tmp_path / "s.failures.jsonl").read_text()
-    assert r.n_ok == 2
-    assert [row["clip_id"] for row in read_fragment(tmp_path / "s.parquet")] == ["c1", "c2"]
+    assert r.n_ok == 19
+    assert [row["clip_id"] for row in read_fragment(tmp_path / "s.parquet")] == [f"c{i}" for i in range(1, 20)]
 
 
 def test_a_failure_line_names_the_sample_and_the_error(rows_with_corrupt_clip, raw, tmp_path):
@@ -530,20 +540,74 @@ def test_a_shard_without_failures_has_an_empty_failures_file(tmp_path, rows, raw
     assert (tmp_path / "s.failures.jsonl").read_text() == ""
 
 
-def test_every_row_failing_still_gives_a_finished_empty_shard(rows_with_corrupt_clip, raw, tmp_path):
-    r = write_shard(rows_with_corrupt_clip[:1], tmp_path / "s.tar", tmp_path / "s.parquet", raw)
-    assert (r.n_ok, r.n_failed) == (0, 1)
-    assert read_fragment(tmp_path / "s.parquet") == []
-    with tarfile.open(tmp_path / "s.tar", "r:") as tar:
-        assert tar.getmembers() == []
+def test_a_shard_with_no_row_built_aborts_without_publishing(rows_with_corrupt_clip, raw, tmp_path):
+    with pytest.raises(RuntimeError, match="1 of 1 rows failed"):
+        write_shard(rows_with_corrupt_clip[:1], tmp_path / "s.tar", tmp_path / "s.parquet", raw)
+    assert finished_looking(tmp_path) == []
+
+
+def test_one_row_in_twenty_is_within_the_failed_share(rows_with_corrupt_clip, raw, tmp_path):
+    assert write_shard(rows_with_corrupt_clip, tmp_path / "s.tar", tmp_path / "s.parquet", raw).n_failed == 1
+
+
+def test_one_row_in_nineteen_is_over_the_failed_share(rows_with_corrupt_clip, raw, tmp_path):
+    with pytest.raises(RuntimeError, match="1 of 19 rows failed"):
+        write_shard(rows_with_corrupt_clip[:19], tmp_path / "s.tar", tmp_path / "s.parquet", raw)
+    assert finished_looking(tmp_path) == []
+
+
+def test_the_failed_share_abort_names_the_first_error(rows_with_corrupt_clip, raw, tmp_path):
+    with pytest.raises(RuntimeError, match="Invalid data"):
+        write_shard(rows_with_corrupt_clip[:1], tmp_path / "s.tar", tmp_path / "s.parquet", raw)
 
 
 def test_a_vanished_source_aborts_instead_of_emptying_the_shard(rows, raw, tmp_path):
     # Every file vanishes at once when the share drops, and a skip would mark the shard finished.
     (raw / rows[0]["source_path"]).unlink()
-    with pytest.raises(DecodeError):
+    with pytest.raises(FileNotFoundError):
         write_shard(rows, tmp_path / "s.tar", tmp_path / "s.parquet", raw)
     assert finished_looking(tmp_path) == []
+
+
+def test_a_source_that_exists_but_cannot_be_read_aborts(rows, raw, tmp_path):
+    # stat works and read does not, as on a failing SMB mount.
+    source = raw / rows[0]["source_path"]
+    source.chmod(0)
+    try:
+        with pytest.raises(PermissionError):
+            write_shard(rows, tmp_path / "s.tar", tmp_path / "s.parquet", raw)
+    finally:
+        source.chmod(0o644)
+    assert finished_looking(tmp_path) == []
+
+
+def test_a_transient_decode_failure_is_retried_and_keeps_the_row(rows, raw, tmp_path, monkeypatch):
+    real, calls = construct.construct_sample, []
+
+    def fails_once(row, root):
+        calls.append(row["sample_id"])
+        if len(calls) == 1:
+            raise DecodeError("a transient failure")
+        return real(row, root)
+
+    monkeypatch.setattr(construct, "construct_sample", fails_once)
+    result = write_shard(rows, tmp_path / "s.tar", tmp_path / "s.parquet", raw)
+    assert (result.n_ok, result.n_failed) == (3, 0)
+    assert calls[:2] == [rows[0]["sample_id"]] * 2
+    assert (tmp_path / "s.failures.jsonl").read_text() == ""
+
+
+def test_a_row_is_tried_twice_before_it_is_logged(rows_with_corrupt_clip, raw, tmp_path, monkeypatch):
+    real, calls = construct.construct_sample, []
+
+    def counting(row, root):
+        calls.append(row["sample_id"])
+        return real(row, root)
+
+    monkeypatch.setattr(construct, "construct_sample", counting)
+    write_shard(rows_with_corrupt_clip, tmp_path / "s.tar", tmp_path / "s.parquet", raw)
+    assert calls.count(rows_with_corrupt_clip[0]["sample_id"]) == 2
+    assert calls.count(rows_with_corrupt_clip[1]["sample_id"]) == 1
 
 
 @pytest.mark.parametrize(
@@ -705,7 +769,8 @@ def in_process_pool(monkeypatch) -> list[str]:
 
     def record(rows, tar_path, fragment_path, _raw):
         submitted.append(rows[0]["shard"])
-        for path in (tar_path, tar_path.with_name(tar_path.name + ".sha256"), fragment_path):
+        sidecar, failures = tar_path.with_name(tar_path.name + ".sha256"), fragment_path.with_suffix(".failures.jsonl")
+        for path in (tar_path, sidecar, failures, fragment_path):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b"")
         return construct.ShardResult(len(rows), 0, "")
@@ -861,3 +926,49 @@ def test_workers_default_to_eleven(monkeypatch):
     monkeypatch.setattr(construct, "run_construct", lambda c, workers: seen.append((c.name, workers)))
     cli.main(["construct", "--config", "full"])
     assert seen == [("openvad-v1", 11)]
+
+
+def test_unreadable_sources_abort_the_run_and_a_rerun_repairs_it(cfg, planned_rows, raw):
+    sources = [raw / row["source_path"] for row in planned_rows[:3]]
+    for source in sources:
+        source.chmod(0)
+    try:
+        with pytest.raises(PermissionError):
+            run_construct(cfg, workers=1)
+    finally:
+        for source in sources:
+            source.chmod(0o644)
+    assert not list((work_dir(cfg) / "fragments").rglob("*.parquet"))
+    run_construct(cfg, workers=1)
+    assert len(read_fragment(work_dir(cfg) / "fragments/train/00000.parquet")) == 2
+
+
+def test_a_shard_over_the_failed_share_aborts_the_run_and_a_rerun_rebuilds_it(cfg, planned_rows, raw):
+    good = (raw / planned_rows[0]["source_path"]).read_bytes()
+    corrupt(planned_rows[0], raw)
+    with pytest.raises(RuntimeError, match="1 of 2 rows failed"):
+        run_construct(cfg, workers=1)
+    assert not (work_dir(cfg) / "fragments/train/00000.parquet").exists()
+    (raw / planned_rows[0]["source_path"]).write_bytes(good)
+    run_construct(cfg, workers=1)
+    assert len(read_fragment(work_dir(cfg) / "fragments/train/00000.parquet")) == 2
+
+
+def test_the_failed_total_reaches_the_manifest_and_a_warning(cfg, twenty_rows, raw, caplog):
+    corrupt(twenty_rows[0], raw)
+    write_plan(cfg, [row | {"shard": "train/00000"} for row in twenty_rows])
+    run_construct(cfg, workers=1)
+    assert json.loads((work_dir(cfg) / "fragments/manifest.json").read_text())["n_failed"] == 1
+    assert "1 rows failed" in caplog.text
+    assert any(record.levelname == "WARNING" for record in caplog.records)
+    # A re-run builds nothing, and the total still counts the shards it skipped.
+    caplog.clear()
+    run_construct(cfg, workers=1)
+    assert json.loads((work_dir(cfg) / "fragments/manifest.json").read_text())["n_failed"] == 1
+    assert "1 rows failed" in caplog.text
+
+
+def test_a_run_without_failures_records_zero_and_stays_quiet(cfg, caplog):
+    run_construct(cfg, workers=1)
+    assert json.loads((work_dir(cfg) / "fragments/manifest.json").read_text())["n_failed"] == 0
+    assert not [record for record in caplog.records if record.levelname == "WARNING"]

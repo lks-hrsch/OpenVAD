@@ -45,6 +45,7 @@ log = logging.getLogger(__name__)
 
 
 _SPACE_MARGIN_BYTES = 50_000_000_000
+_MAX_FAILED_SHARE = 0.05
 _CONDITIONS_BUILT = {"clean", *DEMAND_CATEGORIES}
 _CODECS_BUILT = {"none", "g722"}
 
@@ -155,18 +156,34 @@ class ShardResult(NamedTuple):
     sha256: str
 
 
+def _construct_with_a_retry(row: dict, raw: Path) -> tuple[bytes, np.ndarray]:
+    """`construct_sample`, tried once more on `DecodeError` so a transient failure does not drop the row for good.
+
+    After the second failure the source must still give one byte: an `OSError` here means the share is failing, not
+    the clip, and aborts the run. ffmpeg reports both the same way.
+    """
+    try:
+        return construct_sample(row, raw)
+    except DecodeError as e:
+        log.info("%s: retrying after %s", row["sample_id"], e)
+    try:
+        return construct_sample(row, raw)
+    except DecodeError:
+        with (raw / row["source_path"]).open("rb") as f:
+            f.read(1)
+        raise
+
+
 def _write_tar(rows: list[dict], tar_path: Path, failures_path: Path, raw: Path) -> tuple[list[dict], int]:
     """The uncompressed tar of `rows`, and the built rows with their labels. A clip that cannot be built goes to the
-    failures file; a source that no longer exists raises, because a dropped share would empty every later shard.
+    failures file.
     """
     built, n_failed = [], 0
     with tarfile.open(tar_path, "w") as tar, failures_path.open("w") as failures:
         for row in rows:
             try:
-                flac, labels = construct_sample(row, raw)
+                flac, labels = _construct_with_a_retry(row, raw)
             except DecodeError as e:
-                if not (raw / row["source_path"]).is_file():
-                    raise
                 log.warning("%s: %s", row["sample_id"], e)
                 failure = {"sample_id": row["sample_id"], "source_path": row["source_path"], "error": str(e)}
                 failures.write(json.dumps(failure) + "\n")
@@ -222,6 +239,9 @@ def write_shard(rows: list[dict], tar_path: Path, fragment_path: Path, raw: Path
     """Build one shard in a local temporary directory, verify it, and publish it to `tar_path` and `fragment_path`,
     with `<tar>.sha256` and `<fragment stem>.failures.jsonl` beside them. `raw` is the root of `construct_sample`,
     and `tar_path` must lie under it because the fragment's pointers are relative to it.
+
+    A shard with no row built or over `_MAX_FAILED_SHARE` of its rows failed raises without publishing, so a re-run
+    rebuilds it: that many failures point at the setup, and a published shard would never be looked at again.
     """
     audio_filepath = tar_path.relative_to(raw).as_posix()
     tar_path.parent.mkdir(parents=True, exist_ok=True)
@@ -231,6 +251,9 @@ def write_shard(rows: list[dict], tar_path: Path, fragment_path: Path, raw: Path
         stage_tar, stage_fragment = stage / "shard.tar", stage / "fragment.parquet"
         stage_failures, stage_sidecar = stage / "failures.jsonl", stage / "sha256"
         built, n_failed = _write_tar(rows, stage_tar, stage_failures, raw)
+        if not built or n_failed / len(rows) > _MAX_FAILED_SHARE:
+            first = stage_failures.read_text().partition("\n")[0]
+            raise RuntimeError(f"{tar_path}: {n_failed} of {len(rows)} rows failed, not published; first: {first}")
         # Offsets come from parsing the tar, so a pointer holds what any reader of this tar will find there.
         with tarfile.open(stage_tar, "r:") as tar:
             members = tar.getmembers()
@@ -318,11 +341,22 @@ def _build_shards(cfg: BuildConfig, plan: pl.DataFrame, workers: int) -> None:
         _report_shards(wait(running).done, running)
 
 
+def _record_failures(cfg: BuildConfig, plan: pl.DataFrame) -> None:
+    """Total the failures files of every shard, so a re-run that built nothing still reports the rows left out."""
+    fragments = work_dir(cfg) / "fragments"
+    shards = plan["shard"].unique()
+    n_failed = sum(len((fragments / f"{shard}.failures.jsonl").read_text().splitlines()) for shard in shards)
+    write_manifest(fragments, (read_manifest(fragments) or {}) | {"n_failed": n_failed})
+    if n_failed:
+        log.warning("%d rows failed and were left out; see the .failures.jsonl files under %s", n_failed, fragments)
+
+
 def run_construct(cfg: BuildConfig, workers: int = 11) -> None:
     """Build every unfinished shard of the plan's `augmented` rows; a re-run continues where one stopped.
 
     Raises `SystemExit` when another run holds the lock, `OutOfSpace` and `PlanMismatch` as named, and whatever a
-    worker raised for a broken setup. A clip that cannot be built does not stop the run: see `write_shard`.
+    worker raised for a broken setup. A clip that cannot be built does not stop the run, within the limit of
+    `write_shard`; the total left out goes in `fragments/manifest.json` as `n_failed` and in a warning.
     """
     cache_dir().mkdir(parents=True, exist_ok=True)
     lock = take_share_lock(f"construct-{cfg.name}")
@@ -337,6 +371,7 @@ def run_construct(cfg: BuildConfig, workers: int = 11) -> None:
         ffmpeg = preflight({encoder_of(c) for c in plan["codec"].unique() if c != "none"})
         _check_build_state(cfg, manifest, plan_dir / "plan.parquet", ffmpeg)
         _build_shards(cfg, plan, workers)
+        _record_failures(cfg, plan)
     finally:
         lock.unlink(missing_ok=True)
 
