@@ -59,7 +59,15 @@ def _roundtrip_table(law: str) -> np.ndarray:
 _TABLES = {"alaw": _roundtrip_table("alaw"), "mulaw": _roundtrip_table("mulaw")}
 
 
+def require_finite(x: np.ndarray) -> None:
+    """Raise `ValueError` naming the count if `x` holds NaN or infinity, which no int16 conversion defines."""
+    bad = x.size - np.count_nonzero(np.isfinite(x))
+    if bad:
+        raise ValueError(f"audio holds {bad} non-finite samples")
+
+
 def _roundtrip(x8k: np.ndarray, law: str) -> np.ndarray:
+    require_finite(x8k)
     # Clipping first keeps the index inside the table when a filter overshoots full scale. The upper bound is the
     # largest int16, since +1.0 * 32768 is not one. The scale is a power of two, so the product is exact, and
     # `rint` (halves to even) decides the bucket of a value between two int16 steps.
@@ -68,9 +76,10 @@ def _roundtrip(x8k: np.ndarray, law: str) -> np.ndarray:
 
 
 def alaw_roundtrip(x8k: np.ndarray) -> np.ndarray:
-    """A-law encode and decode of float audio in [-1, 1] (values beyond are clipped), as a new float32 array.
+    """A-law encode and decode of float audio in [-1, 1] (finite values beyond are clipped), as a new float32 array.
 
-    Sample for sample: no delay and no length change. The input is not modified.
+    Sample for sample: no delay and no length change. The input is not modified. NaN or infinity raises
+    `ValueError`.
     """
     return _roundtrip(x8k, "alaw")
 

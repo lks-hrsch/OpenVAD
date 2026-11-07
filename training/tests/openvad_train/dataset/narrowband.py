@@ -192,6 +192,15 @@ def test_telephone_survives_input_beyond_full_scale(u):
     assert np.abs(out).max() < 2.0
 
 
+@pytest.mark.parametrize("bad", [np.nan, np.inf, -np.inf])
+@pytest.mark.parametrize("fn", [resample_only, lambda x: telephone(x, rng())])
+def test_non_finite_input_raises_with_the_count(fn, bad):
+    x = noise(100)
+    x[[3, 50, 51]] = bad
+    with pytest.raises(ValueError, match="3 non-finite"):
+        fn(x)
+
+
 def test_eval_draw_is_repeatable():
     a = telephone(noise(), np.random.default_rng(eval_seed("x")))
     assert np.array_equal(a, telephone(noise(), np.random.default_rng(eval_seed("x"))))

@@ -99,7 +99,7 @@ def test_a_value_between_two_int16_steps_rounds_half_to_even():
 
 @pytest.mark.parametrize("roundtrip", [alaw_roundtrip, mulaw_roundtrip])
 def test_beyond_full_scale_is_clipped_not_wrapped(roundtrip):
-    x = np.array([1.0, 1.75, 100.0, -1.0, -1.75, -100.0, np.inf, -np.inf], np.float32)
+    x = np.array([1.0, 1.75, 100.0, -1.0, -1.75, -100.0, 1e30, -1e30], np.float32)
     out = roundtrip(x)
     assert out[0] > 0.9
     assert out[3] < -0.9
@@ -123,3 +123,12 @@ def test_output_is_a_new_float32_array_and_the_input_is_unchanged(roundtrip):
 @pytest.mark.parametrize("roundtrip", [alaw_roundtrip, mulaw_roundtrip])
 def test_empty_input_gives_empty_output(roundtrip):
     assert roundtrip(np.zeros(0, np.float32)).shape == (0,)
+
+
+@pytest.mark.parametrize("roundtrip", [alaw_roundtrip, mulaw_roundtrip])
+@pytest.mark.parametrize("bad", [np.nan, np.inf, -np.inf])
+def test_non_finite_input_raises_with_the_count(roundtrip, bad):
+    x = np.zeros(10, np.float32)
+    x[[2, 7]] = bad
+    with pytest.raises(ValueError, match="2 non-finite"):
+        roundtrip(x)

@@ -20,7 +20,7 @@ from collections.abc import Callable
 import numpy as np
 
 from openvad_rs import GROUP_DELAY_16K, decimate_2x, interpolate_2x
-from openvad_train.dataset.g711 import alaw_roundtrip, mulaw_roundtrip
+from openvad_train.dataset.g711 import alaw_roundtrip, mulaw_roundtrip, require_finite
 from openvad_train.dataset.schema import _blake2_64
 
 
@@ -45,6 +45,7 @@ def label_shift_frames(one_way: int = GROUP_DELAY_16K) -> int:
 
 
 def _through(audio: np.ndarray, law: Callable[[np.ndarray], np.ndarray] | None) -> np.ndarray:
+    require_finite(audio)  # the filter would spread one infinity over 133 samples and the int16 cast is undefined
     # An odd length gains one sample in the round trip; the cut restores the input's length.
     narrow = decimate_2x(np.ascontiguousarray(audio, np.float32))
     return interpolate_2x(law(narrow) if law else narrow)[: len(audio)]
