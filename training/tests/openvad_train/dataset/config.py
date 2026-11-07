@@ -37,6 +37,11 @@ def test_slice_is_swc_german_demand_with_two_codecs():
     assert sum(SLICE.condition_shares.values()) == pytest.approx(1.0)
 
 
+def test_slice_draws_no_leg_of_the_chain_that_is_not_built():
+    legs = (SLICE.room_p, SLICE.handset_p, SLICE.agc_p, SLICE.clip_p, SLICE.suppression_p, SLICE.transient_p)
+    assert set(legs) == {0.0}
+
+
 def test_dataset_root_follows_data_dir(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENVAD_DATA_DIR", str(tmp_path))
     assert dataset_root(FULL) == tmp_path / "datasets/processed/openvad-v1"

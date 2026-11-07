@@ -377,6 +377,13 @@ def test_common_voice_waits_for_its_wada_snr_step(raw, extra):
         construct_sample(make_row(**extra, source="common-voice"), raw)
 
 
+def test_every_slice_row_is_buildable():
+    for i in range(500):
+        clip = Clip(f"c{i}", "swc", "de", "s", "train", "a.ogg", 0.0, 10.0, "CC-BY-SA", None)
+        row = draw_sample(clip, Timing(f"c{i}", "word", [(100, 900)], [], None, "test"), SLICE)
+        assert construct._legs_not_built(row) == []
+
+
 def test_a_clip_drive_of_zero_still_asks_for_the_leg(raw):
     with pytest.raises(NotImplementedError, match="clip_drive_db"):
         construct_sample(make_row(clip_drive_db=0.0), raw)
