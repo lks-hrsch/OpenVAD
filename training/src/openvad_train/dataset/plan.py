@@ -210,7 +210,8 @@ def draw_sample(
         "speaker": clip.speaker,
         "licence": clip.licence,
         "aligner": timing.provenance,
-        "gap_ms": cfg.gap_ms,
+        # Frame labels (LibriVAD) are used as they are, so no gap is closed in them.
+        "gap_ms": 0 if timing.kind == "frame" else cfg.gap_ms,
         "byte_offset": None,
         "byte_length": None,
         "row_in_file": None,

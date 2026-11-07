@@ -379,6 +379,12 @@ def test_as_is_row_points_into_raw_and_skips_every_draw():
     assert row["transients"] == []
 
 
+def test_frame_labels_are_used_as_they_are_so_their_gap_is_zero():
+    frames = Timing("a", "frame", [(300, 1000), (1100, 2700)], [], None, "t")
+    assert draw_sample(clip("a", "librivad"), frames, SLICE)["gap_ms"] == 0
+    assert draw_sample(clip("a", "ami"), timing("a"), SLICE)["gap_ms"] == SLICE.gap_ms
+
+
 def test_as_is_row_without_speech_stays():
     assert len(clip_rows(clip("a", "speech-commands"), timing("a", speech=[]), SLICE)) == 1
 

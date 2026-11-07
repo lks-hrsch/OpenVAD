@@ -84,6 +84,13 @@ def test_as_is_labels_are_the_plan_intervals_at_g_from_the_start(built_with_as_i
     assert row["labels"] == rasterise([(500, 1500), (2000, 3000)], [], 4 * 16000).tolist()
 
 
+def test_frame_labels_keep_a_gap_under_g_after_publish(built_with_as_is):
+    row = frame(built_with_as_is, "train").filter(pl.col("sample_id") == "librivad/l0").row(0, named=True)
+    assert row["gap_ms"] == 0
+    assert row["labels"][100:110] == [0] * 10
+    assert row["labels"] == rasterise([(300, 1000), (1100, 2700)], [], 3 * 16000).tolist()
+
+
 def test_plan_only_columns_are_dropped_and_dither_stays(built_with_as_is):
     expected = [c for c in PLAN_SCHEMA if c not in PLAN_ONLY]
     for split in ("train", "validation", "test"):

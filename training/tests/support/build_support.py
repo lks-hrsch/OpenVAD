@@ -27,6 +27,7 @@ from openvad_train.fetch.common import write_manifest
 
 
 Split = Literal["train", "validation", "test"]
+Kind = Literal["word", "turn", "frame"]
 CHAIN_OFF = {"room": False, "handset": None, "agc": None, "clip_drive_db": None, "suppression": None, "transients": []}
 CLEAN = {"condition": "clean", "snr_db": None, "noise_source_ids": [], "noise_offsets": [], "dither_dbfs": -80.0}
 NOISE_FILE = "datasets/raw/demand/OOFFICE/ch01.wav"
@@ -37,13 +38,23 @@ def _tone(seconds: float) -> np.ndarray:
     return (0.3 * np.sin(2 * np.pi * 440 * np.arange(round(seconds * 16000)) / 16000)).astype(np.float32)
 
 
-def _row(root: Path, source: str, name: str, split: Split, speaker: str | None, seconds: float, speech, **override):
+def _row(
+    root: Path,
+    source: str,
+    name: str,
+    split: Split,
+    speaker: str | None,
+    seconds: float,
+    speech,
+    kind: Kind = "word",
+    **override,
+):
     path = root / "datasets/raw" / source / f"{name}.wav"
     path.parent.mkdir(parents=True, exist_ok=True)
     sf.write(path, _tone(seconds), 16000, subtype="PCM_16")
     (path.parent / "manifest.json").write_text(f'{{"dataset": "{source}"}}')
     clip = Clip(name, source, "de", speaker, split, path.relative_to(root).as_posix(), 0.0, seconds, "CC0", None)
-    row = draw_sample(clip, Timing(name, "word", list(speech), [], None, "test"), SLICE)
+    row = draw_sample(clip, Timing(name, kind, list(speech), [], None, "test"), SLICE)
     if row["treatment"] == "augmented":
         row = row | CHAIN_OFF | CLEAN | {"codec": "none", "bitrate": None, "band": "wide"} | override
     return row
@@ -75,8 +86,9 @@ def make_build(root: Path, *, as_is: bool = False, name: str = "test-build") -> 
         rows += [
             _row(root, "ami", "a0", "train", "ma", 4.0, [(500, 1500), (2000, 3000)]),
             _row(root, "ami", "a1", "validation", "mb", 2.0, [(100, 900)]),
-            _row(root, "librivad", "l0", "train", None, 3.0, [(300, 2700)]),
-            _row(root, "librivad", "l1", "test", None, 3.0, [(300, 2700)]),
+            # A gap of 100 ms, under G: frame labels keep it open.
+            _row(root, "librivad", "l0", "train", None, 3.0, [(300, 1000), (1100, 2700)], kind="frame"),
+            _row(root, "librivad", "l1", "test", None, 3.0, [(300, 2700)], kind="frame"),
         ]
     cfg = dataclasses.replace(SLICE, name=name)
     write_plan(cfg, rows)
