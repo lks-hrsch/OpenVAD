@@ -46,6 +46,8 @@ log = logging.getLogger(__name__)
 
 _SPACE_MARGIN_BYTES = 50_000_000_000
 _MAX_FAILED_SHARE = 0.05
+# Words quieter than this are digital silence with labels on it: a real SWC "word" of 3.39 s sat at -83.6 dBFS.
+_MIN_WORD_DBFS = -70.0
 _CONDITIONS_BUILT = {"clean", *DEMAND_CATEGORIES}
 _CODECS_BUILT = {"none", "g722"}
 
@@ -106,7 +108,7 @@ def construct_sample(row: dict, raw: Path) -> tuple[bytes, np.ndarray]:
     row, its source files and the ffmpeg version.
 
     Labels come from the audio produced, never from file metadata. `DecodeError` means this clip cannot be built: a
-    damaged file, a decode further than one 10 ms frame from `source_n`, or silence under the words. A decode can
+    damaged file, a decode further than one 10 ms frame from `source_n`, or words under -70 dBFS RMS. A decode can
     run long only by `decode_16k` breaking its contract, because it stops at `source_n`. `NotImplementedError` names
     the fields of a row asking for a leg that does not exist yet, and nothing is skipped silently.
     """
@@ -130,8 +132,8 @@ def construct_sample(row: dict, raw: Path) -> tuple[bytes, np.ndarray]:
     active = np.zeros(total_n, bool)
     for start, end in apply_gap_rule(speech_ms, 0):
         active[offset_n + start * SAMPLES_PER_MS : offset_n + end * SAMPLES_PER_MS] = True
-    if not x[active].any():
-        raise DecodeError(f"{path}: silent under the words of {row['sample_id']}")
+    if not active.any() or np.sqrt(np.mean(np.square(x[active], dtype=np.float64))) < 10 ** (_MIN_WORD_DBFS / 20):
+        raise DecodeError(f"{path}: silent under the words of {row['sample_id']}: under {_MIN_WORD_DBFS} dBFS")
     if row["condition"] == "clean":
         x = x + dither(total_n, row["dither_dbfs"], np.random.default_rng(row["seed"]))
     else:

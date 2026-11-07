@@ -302,6 +302,28 @@ def test_a_clip_silent_under_its_words_is_a_failed_clip(raw, extra):
         construct_sample(row, raw)
 
 
+@pytest.mark.parametrize(("level_db", "builds"), [(-70.0, True), (-70.1, False)])
+def test_words_under_70_dbfs_are_a_failed_clip(raw, level_db, builds):
+    # The nudge keeps float32 rounding from deciding the boundary case; a float file keeps 16-bit steps out of it too.
+    x = tone(3 * 16000)
+    x = (x * 10 ** (level_db / 20) * (1 + 1e-6) / rms(x)).astype(np.float32)
+    row = make_row(x, speech=[(0, 3000)])
+    sf.write(raw / row["source_path"], x, 16000, subtype="FLOAT")
+    if builds:
+        assert len(construct_sample(row, raw)[1]) == round(row["total_n"] / 160)
+    else:
+        with pytest.raises(DecodeError, match="silent"):
+            construct_sample(row, raw)
+
+
+def test_a_quiet_clip_is_measured_over_its_words_only(raw):
+    # Loud audio outside the words must not lift a word at digital-silence level over the limit.
+    x = tone(3 * 16000)
+    x[1000 * 16 : 2000 * 16] = 1e-5
+    with pytest.raises(DecodeError, match="silent"):
+        construct_sample(make_row(x, speech=[(1000, 2000)]), raw)
+
+
 def test_noise_silent_under_the_words_is_a_failed_clip(raw):
     silent = "datasets/raw/demand/OOFFICE/ch03.wav"
     sf.write(raw / silent, np.zeros(NOISE_N, np.float32), 16000, subtype="PCM_16")
