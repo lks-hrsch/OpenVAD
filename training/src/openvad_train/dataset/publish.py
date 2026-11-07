@@ -7,6 +7,7 @@
 
 import argparse
 import asyncio
+import hashlib
 import logging
 import math
 import subprocess
@@ -14,6 +15,7 @@ from pathlib import Path
 
 import polars as pl
 
+from openvad_rs import half_band_taps
 from openvad_train.dataset.codecs import _delay_table
 from openvad_train.dataset.config import FULL, SLICE, BuildConfig, dataset_root, work_dir
 from openvad_train.dataset.construct import PlanMismatch
@@ -204,8 +206,8 @@ def _publish(cfg: BuildConfig) -> None:
             "commit": commit,
             "commit_dirty": dirty,
             "ffmpeg": fragments_manifest.get("ffmpeg"),
-            # Null until the OpenVAD resampler exists (Task 11).
-            "resampler_sha256": None,
+            # Little-endian float32 bytes, so the hash does not depend on the host's byte order.
+            "resampler_sha256": hashlib.sha256(half_band_taps().astype("<f4").tobytes()).hexdigest(),
             "delays": _delay_table(),
             "licences": {
                 s: sorted(rows.filter(pl.col("source") == s)["licence"].unique()) for s in sorted(set(rows["source"]))

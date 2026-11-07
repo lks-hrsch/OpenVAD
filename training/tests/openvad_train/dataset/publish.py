@@ -5,6 +5,7 @@
 
 import asyncio
 import dataclasses
+import hashlib
 import shutil
 import subprocess
 import tarfile
@@ -23,6 +24,7 @@ from openvad_train.dataset.labels import rasterise
 from openvad_train.dataset.parquet_io import read_parquet
 from openvad_train.dataset.plan import PLAN_SCHEMA
 from openvad_train.dataset.publish import PLAN_ONLY, _git_state, run_publish, set_small
+from openvad_train.design_resampler import coefficients
 from openvad_train.fetch.common import file_hash, read_manifest
 
 
@@ -216,7 +218,8 @@ def test_manifest_records_provenance(built_with_as_is, data):
     m = read_manifest(dataset_root(built_with_as_is))
     assert m is not None
     assert {"plan_version", "global_seed", "commit", "ffmpeg", "resampler_sha256", "delays", "licences"} <= set(m)
-    assert m["resampler_sha256"] is None
+    # Computed from the design taps, not from the bindings the manifest reads them through.
+    assert m["resampler_sha256"] == hashlib.sha256(coefficients().astype("<f4").tobytes()).hexdigest()
     assert m["ffmpeg"]["version"]
     assert "delays_ms" in m["delays"]
     assert m["licences"] == {"ami": ["CC0"], "librivad": ["CC0"], "swc": ["CC0"]}
