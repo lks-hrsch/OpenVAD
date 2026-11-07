@@ -7,3 +7,4 @@
 [submodule "tools/kaldi"]
 	path = tools/kaldi
 	url = https://github.com/kaldi-asr/kaldi
+	ignore = untracked

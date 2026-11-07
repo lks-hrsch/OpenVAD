@@ -104,6 +104,7 @@ None of the kernel tiers, `OPENVAD_KERNEL`, golden checksums, the 2:1 resampler 
 - `inferencing/openvad-rs`: PyO3 bindings.
 - `inferencing/fixtures`: parity fixtures.
 - `training/`: the `openvad_train` package (dataset fetchers, smoke fixture and docs exports so far).
+- `tools/`: MFA and Kaldi as shallow submodules, `tools/mfa` (the uv project that builds them), `tools/README.md`.
 - `benchmarking/`: conventions only (`CLAUDE.md`), no adapters yet.
 - `docs/`: thesis, ADRs and specs (`docs/project/`); see `docs/README.md`.
 - `docs/notes`: build and hardware, dataset, forced-alignment and speech-quality notes.
@@ -113,7 +114,7 @@ None of the kernel tiers, `OPENVAD_KERNEL`, golden checksums, the 2:1 resampler 
 
 ## `just` recipes
 
-- `just setup`: fetch submodules and install the Python workspace.
+- `just setup`: fetch the `docs/tudcd-scr` submodule and install the Python workspace (never clones `tools/`).
 - `just fmt`: format all code.
 - `just check`: lint and type-check everything, plus fixtures, the engine guard and tests.
 - `just test`: run all tests.
@@ -128,4 +129,6 @@ None of the kernel tiers, `OPENVAD_KERNEL`, golden checksums, the 2:1 resampler 
 - `just watch <doc>`: rebuild a document on every save.
 - `just docs-generated`: regenerate numbers and figures under `docs/`.
 - `just dataset <stage>`: run one dataset construction stage (`python -m openvad_train.dataset`); only finished stages are available.
+- `just build-mfa`: fetch the `tools/` submodules, compile Kaldi into `tools/kaldi/dist` and sync `tools/mfa`; needs `initdb` and `pg_ctl` (see `tools/README.md`).
+- `just mfa <args>`: run `mfa` from `tools/mfa` with the Kaldi binaries on `PATH`.
 - `just skills`: restore the Claude skills pinned in `skills-lock.json` (needs Node).

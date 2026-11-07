@@ -1,0 +1,19 @@
+# A uv project of its own, outside the workspace in the repo root: an editable path source on a
+# submodule that is not checked out breaks `uv sync` for everyone, and kalpy-kaldi needs KALDI_ROOT.
+# Use `just build-mfa`, then `uv run --project tools/mfa mfa version`. See tools/README.md.
+[project]
+name = "openvad-mfa"
+version = "0.0.0"
+description = "Montreal Forced Aligner 3.4.3 built from the submodules, used as a tool"
+requires-python = ">=3.12,<3.13"
+dependencies = ["montreal-forced-aligner", "kalpy-kaldi==0.10.5", "pgvector", "psycopg2-binary", "jinja2"]
+
+[tool.uv]
+package = false
+environments = [
+    "sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
+
+[tool.uv.sources]
+montreal-forced-aligner = { path = "../montreal-forced-aligner", editable = true }
