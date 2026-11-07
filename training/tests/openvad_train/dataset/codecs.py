@@ -13,12 +13,14 @@ import pytest
 import soundfile as sf
 from scipy import signal
 
+from openvad_rs import GROUP_DELAY_16K
 from openvad_train.dataset import codecs
 from openvad_train.dataset.codecs import (
     DecodeError,
     MissingCodec,
     decode_16k,
     delay_ms,
+    encoder_of,
     measure_delay,
     narrow_roundtrip,
     preflight,
@@ -152,8 +154,20 @@ def test_impulse_lands_at_table_delay(codec, bitrate):
 
 
 @needs_ffmpeg
-@pytest.mark.parametrize(("codec", "bitrate"), [("g722", 64000), ("opus", 12000), ("opus", 32000)])
+@pytest.mark.parametrize(
+    ("codec", "bitrate"),
+    [
+        ("g722", 64000),
+        ("opus", 12000),
+        ("opus", 32000),
+        ("amr_wb", 6600),
+        ("amr_wb", 23850),
+        ("amr_nb", 4750),
+        ("amr_nb", 12200),
+    ],
+)
 def test_committed_delay_matches_a_fresh_measurement(codec, bitrate):
+    require_encoders(encoder_of(codec))
     assert measure_delay(codec, bitrate) == pytest.approx(delay_ms(codec), abs=0.1)
 
 
@@ -646,6 +660,17 @@ def test_amr_nb_removes_energy_above_4_khz():
     require_encoders("libopencore_amrnb")
     y = narrow_roundtrip(tone(6000), "amr_nb", 12200)
     assert rms(y) < 0.01 * rms(tone(6000))
+
+
+@needs_ffmpeg
+def test_narrow_roundtrip_lags_by_the_codec_table_plus_the_resampler():
+    require_encoders("libopencore_amrnb")
+    n = 32000
+    x = chirp(n, 100, 3500)
+    x[:2000] = 0
+    y = narrow_roundtrip(x, "amr_nb", 12200)
+    lag_ms = (np.argmax(signal.correlate(y, x, mode="full", method="fft")) - (n - 1)) / 16
+    assert lag_ms == pytest.approx(delay_ms("amr_nb") + 2 * GROUP_DELAY_16K / 16, abs=0.25)
 
 
 @needs_ffmpeg
