@@ -147,17 +147,25 @@ def delay_ms(codec: str) -> float:
     return delays[codec]
 
 
-@lru_cache(maxsize=4096)
-def _verify_intact(path: str) -> None:
-    """Decode the whole file once per process and raise `DecodeError` if ffmpeg says anything.
+# Above this, seeking plus one cached whole-file check beats one decode per read. Rank-ordered shards interleave
+# thousands of short files between chunks of one article, so a cache that also held short files would evict it.
+_LONG_FILE_S = 60.0
 
-    ffmpeg exits 0 on a damaged stream and reports only on stderr, while soundfile gives no signal at all.
-    Without this, a 120 s Ogg with 20 kB overwritten returned the full length with audio shifted by 4 s.
-    One extra full decode per file per process is accepted; a failure is not cached.
-    """
-    done = _ffmpeg(["-i", path, "-f", "null", "-"], None, DecodeError)
+
+def _raise_if_ffmpeg_reported(path: str, done: subprocess.CompletedProcess[bytes]) -> None:
+    # ffmpeg exits 0 on a damaged stream and reports only on stderr. Without this, a 120 s Ogg with 20 kB overwritten
+    # returned the full length with audio shifted by 4 s.
     if done.stderr.strip():
         raise DecodeError(f"{path}: {done.stderr.decode(errors='replace').strip()}")
+
+
+@lru_cache(maxsize=4096)
+def _verify_intact(path: str) -> None:
+    """Decode a long file once per process and raise `DecodeError` if ffmpeg says anything; soundfile gives no signal.
+
+    One extra full decode per long file per process is accepted; a failure is not cached.
+    """
+    _raise_if_ffmpeg_reported(path, _ffmpeg(["-i", path, "-f", "null", "-"], None, DecodeError))
 
 
 def _refuse_8k(path: str) -> ValueError:
@@ -170,34 +178,43 @@ def decode_16k(path: str, offset_s: float, duration_s: float) -> np.ndarray:
     The result has `round(duration_s * 16000)` samples when the file holds that much audio after the offset.
     If it ends first, what exists is returned, never padded (an offset past the end gives an empty array), so
     callers rasterising labels from the length see the real audio. Channels are averaged, and the array is
-    writable. Raises `DecodeError` for a file that is unreadable or damaged (every file is first decoded once
-    per process to find damage, see `_verify_intact`), `MissingCodec` if ffmpeg or ffprobe is absent, and
-    `ValueError` for a negative argument or an 8 kHz file, which belongs to the OpenVAD resampler (ADR 0009).
+    writable. Raises `DecodeError` for a file that is unreadable or damaged, `MissingCodec` if ffmpeg or ffprobe is
+    absent, and `ValueError` for a negative argument or an 8 kHz file, which belongs to the OpenVAD resampler
+    (ADR 0009).
 
-    Seeking is done by soundfile (libvorbisfile, libFLAC and so on), never by ffmpeg's `-ss`: on real SWC
-    Ogg Vorbis files ffmpeg's seek landed 328 samples (7 ms) off at 30 s and exact at 60.123 s, and on
-    synthetic Vorbis 128 to 256 samples off, which would shift audio against its labels. Mid-file segments
-    from soundfile agree with a full ffmpeg decode to 2e-7. Seeks into the last Ogg page are not exact
-    (up to 832 source samples off), so a read starting within 5 s of the end seeks to 5 s before the end
-    and slices. A file at a rate other than 16 kHz is read with 100 ms of context on each side, resampled by
-    ffmpeg through a pipe (version recorded in the manifest, ADR 0009) and trimmed, so the resampler's edges
-    do not touch the result. The start is rounded to the nearest source sample, which is at most 62 us off
-    for rates above 8 kHz.
+    A file of at most `_LONG_FILE_S` is decoded whole by one ffmpeg call with its stderr checked, then sliced, so
+    the integrity check is built in and nothing is cached. The length comes from soundfile, or from ffprobe for a
+    file soundfile cannot open.
 
-    A file soundfile cannot open (for example an Ogg with a Skeleton stream) is decoded by ffmpeg from the
-    start without seeking and sliced, which is exact but costs time in proportion to `offset_s`.
+    A longer file is first decoded once per process by `_verify_intact`, then read by soundfile (libvorbisfile,
+    libFLAC and so on), never with ffmpeg's `-ss`: on real SWC Ogg Vorbis files ffmpeg's seek landed 328 samples
+    (7 ms) off at 30 s and exact at 60.123 s, and on synthetic Vorbis 128 to 256 samples off, which would shift
+    audio against its labels. Mid-file segments from soundfile agree with a full ffmpeg decode to 2e-7. Seeks into
+    the last Ogg page are not exact (up to 832 source samples off), so a read starting within 5 s of the end seeks
+    to 5 s before the end and slices. A file at a rate other than 16 kHz is read with 100 ms of context on each
+    side, resampled by ffmpeg through a pipe (version recorded in the manifest, ADR 0009) and trimmed, so the
+    resampler's edges do not touch the result. The start is rounded to the nearest source sample, which is at most
+    62 us off for rates above 8 kHz. A long file soundfile cannot open (for example an Ogg with a Skeleton stream)
+    is decoded by ffmpeg from the start without seeking and sliced, which is exact but costs time in proportion to
+    `offset_s`.
     """
     if offset_s < 0 or duration_s < 0:
         raise ValueError(f"offset and duration must not be negative, got {offset_s} and {duration_s}")
     n = round(duration_s * 16000)
-    _verify_intact(path)
     try:
         info = sf.info(path)
     except RuntimeError:
-        return _decode_16k_without_seeking(path, offset_s, n)
-    rate = info.samplerate
+        info = None
+        rate, channels, seconds = _probe(path)
+    else:
+        rate, channels, seconds = info.samplerate, info.channels, info.duration
     if rate == 8000:
         raise _refuse_8k(path)
+    if seconds <= _LONG_FILE_S:
+        return _decode_whole_file(path, offset_s, n, channels, seconds)
+    _verify_intact(path)
+    if info is None:
+        return _decode_16k_without_seeking(path, offset_s, n, channels)
     start = round(offset_s * rate)
     if start >= info.frames:
         return np.empty(0, np.float32)
@@ -227,7 +244,8 @@ def _resample_to_16k(mono: np.ndarray, rate: int) -> np.ndarray:
     return np.frombuffer(raw, np.float32).copy()  # frombuffer is read-only; callers may scale in place
 
 
-def _decode_16k_without_seeking(path: str, offset_s: float, n: int) -> np.ndarray:
+def _probe(path: str) -> tuple[int, int, float]:
+    """Rate, channels and seconds of the first audio stream; an unknown length is infinite, so it counts as long."""
     probe = _run(
         [
             "ffprobe",
@@ -236,7 +254,7 @@ def _decode_16k_without_seeking(path: str, offset_s: float, n: int) -> np.ndarra
             "-select_streams",
             "a:0",
             "-show_entries",
-            "stream=channels,sample_rate",
+            "stream=channels,sample_rate:format=duration",
             "-of",
             "default=nw=1",
             path,
@@ -247,8 +265,25 @@ def _decode_16k_without_seeking(path: str, offset_s: float, n: int) -> np.ndarra
     fields = dict(line.split("=", 1) for line in probe.split())
     if "channels" not in fields:
         raise DecodeError(f"{path}: ffprobe found no audio stream")
-    if fields["sample_rate"] == "8000":
-        raise _refuse_8k(path)
+    duration = fields.get("duration", "N/A")
+    return int(fields["sample_rate"]), int(fields["channels"]), float("inf") if duration == "N/A" else float(duration)
+
+
+def _decode_whole_file(path: str, offset_s: float, n: int, channels: int, seconds: float) -> np.ndarray:
+    # -ac keeps the array's shape whatever layout ffmpeg settles on; the mean below is the actual downmix.
+    done = _ffmpeg(
+        ["-i", path, "-map", "0:a:0", "-ac", str(channels), "-ar", "16000", "-f", "f32le", "pipe:1"], None, DecodeError
+    )
+    _raise_if_ffmpeg_reported(path, done)
+    # The resampler may emit a sample past the source's end, which must not turn a past-end read into a sample.
+    if offset_s >= seconds:
+        return np.empty(0, np.float32)
+    start = round(offset_s * 16000)
+    x = np.frombuffer(done.stdout, np.float32).reshape(-1, channels)
+    return x.mean(axis=1, dtype=np.float32)[start : start + n]
+
+
+def _decode_16k_without_seeking(path: str, offset_s: float, n: int, channels: int) -> np.ndarray:
     start = round(offset_s * 16000)
     # Ten milliseconds of slack because the resampler may emit a sample fewer than the ideal count.
     raw = _ffmpeg(
@@ -268,5 +303,5 @@ def _decode_16k_without_seeking(path: str, offset_s: float, n: int) -> np.ndarra
         None,
         DecodeError,
     ).stdout
-    x = np.frombuffer(raw, np.float32).reshape(-1, int(fields["channels"]))
+    x = np.frombuffer(raw, np.float32).reshape(-1, channels)
     return x.mean(axis=1, dtype=np.float32)[start : start + n]

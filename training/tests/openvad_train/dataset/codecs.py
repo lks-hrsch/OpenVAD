@@ -203,6 +203,13 @@ def test_roundtrip_without_ffmpeg_is_missing_codec_not_a_codec_failure(tmp_path,
 # decode_16k
 
 
+@pytest.fixture(params=["whole_file", "seek"])
+def route(request, monkeypatch):
+    """Run a test on both routes through `decode_16k`: a limit of 0 sends every file down the seek route."""
+    if request.param == "seek":
+        monkeypatch.setattr(codecs, "_LONG_FILE_S", 0.0)
+
+
 def burst(rate: int, at_s: float, n: int, dur_s: float = 0.05) -> np.ndarray:
     """A 200 to 3000 Hz chirp burst of dur_s starting at at_s, in a silent signal of n samples."""
     x = np.zeros(n, np.float32)
@@ -222,7 +229,7 @@ def lag_samples_16k(y: np.ndarray, expected_at_s: float) -> float:
 
 @needs_ffmpeg
 @pytest.mark.parametrize("rate", [22050, 44100, 48000])
-def test_decode_resamples_and_keeps_time(tmp_path, rate):
+def test_decode_resamples_and_keeps_time(tmp_path, rate, route):
     total = 4.0
     x = burst(rate, 2.2345, round(total * rate))
     path = tmp_path / "a.wav"
@@ -234,7 +241,7 @@ def test_decode_resamples_and_keeps_time(tmp_path, rate):
 
 
 @needs_ffmpeg
-def test_decode_ogg_with_an_offset(tmp_path):
+def test_decode_ogg_with_an_offset(tmp_path, route):
     x = burst(44100, 2.5, 4 * 44100)
     path = tmp_path / "a.ogg"
     sf.write(path, x, 44100, format="OGG", subtype="VORBIS")
@@ -244,7 +251,7 @@ def test_decode_ogg_with_an_offset(tmp_path):
 
 
 @needs_ffmpeg
-def test_decode_ogg_already_16k_with_an_offset(tmp_path):
+def test_decode_ogg_already_16k_with_an_offset(tmp_path, route):
     x = burst(16000, 2.5, 4 * 16000)
     path = tmp_path / "a.ogg"
     sf.write(path, x, 16000, format="OGG", subtype="VORBIS")
@@ -253,7 +260,7 @@ def test_decode_ogg_already_16k_with_an_offset(tmp_path):
     assert abs(lag_samples_16k(y, 2.5 - 1.25)) <= 16
 
 
-def test_decode_16k_file_uses_soundfile_and_is_exact(tmp_path):
+def test_decode_of_a_16k_file_is_exact(tmp_path, route):
     x = burst(16000, 1.0, 3 * 16000)
     path = tmp_path / "a.flac"
     sf.write(path, x, 16000, subtype="PCM_24")
@@ -263,7 +270,7 @@ def test_decode_16k_file_uses_soundfile_and_is_exact(tmp_path):
 
 @needs_ffmpeg
 @pytest.mark.parametrize("rate", [16000, 44100])
-def test_decode_downmixes_by_the_mean_of_channels(tmp_path, rate):
+def test_decode_downmixes_by_the_mean_of_channels(tmp_path, rate, route):
     n = 2 * rate
     left, right = np.full(n, 0.4, np.float32), np.full(n, -0.1, np.float32)
     path = tmp_path / "a.wav"
@@ -274,7 +281,7 @@ def test_decode_downmixes_by_the_mean_of_channels(tmp_path, rate):
 
 
 @needs_ffmpeg
-def test_decode_downmixes_three_channels_by_the_mean(tmp_path):
+def test_decode_downmixes_three_channels_by_the_mean(tmp_path, route):
     n = 44100
     x = np.stack([np.full(n, v, np.float32) for v in (0.3, 0.0, 0.3)], axis=1)
     path = tmp_path / "a.wav"
@@ -285,7 +292,7 @@ def test_decode_downmixes_three_channels_by_the_mean(tmp_path):
 
 @needs_ffmpeg
 @pytest.mark.parametrize("rate", [16000, 22050])
-def test_decode_returns_what_exists_when_the_file_ends_early(tmp_path, rate):
+def test_decode_returns_what_exists_when_the_file_ends_early(tmp_path, rate, route):
     path = tmp_path / "a.wav"
     sf.write(path, burst(rate, 0.1, rate), rate)
     y = decode_16k(str(path), 0.5, 2.0)
@@ -295,7 +302,7 @@ def test_decode_returns_what_exists_when_the_file_ends_early(tmp_path, rate):
 @needs_ffmpeg
 @pytest.mark.parametrize("rate", [16000, 22050, 11025, 44100])
 @pytest.mark.parametrize("offset_s", [1.0, 1.00005, 3.0])
-def test_decode_offset_at_or_past_the_end_is_empty(tmp_path, rate, offset_s):
+def test_decode_offset_at_or_past_the_end_is_empty(tmp_path, rate, offset_s, route):
     path = tmp_path / "a.wav"
     sf.write(path, burst(rate, 0.1, rate), rate)
     assert len(decode_16k(str(path), offset_s, 1.0)) == 0
@@ -332,14 +339,14 @@ def test_decode_error_carries_ffmpeg_stderr(tmp_path):
 
 
 @needs_ffmpeg
-def test_decode_of_sixty_seconds_does_not_deadlock(tmp_path):
+def test_decode_of_sixty_seconds_does_not_deadlock(tmp_path, route):
     path = tmp_path / "a.wav"
     sf.write(path, np.zeros(60 * 44100, np.float32), 44100)
     assert len(decode_16k(str(path), 0.0, 60.0)) == 60 * 16000
 
 
 @needs_ffmpeg
-def test_decode_leaves_the_source_untouched(tmp_path):
+def test_decode_leaves_the_source_untouched(tmp_path, route):
     path = tmp_path / "a.wav"
     sf.write(path, burst(44100, 0.1, 44100), 44100)
     before = path.read_bytes()
@@ -348,7 +355,7 @@ def test_decode_leaves_the_source_untouched(tmp_path):
 
 
 @needs_ffmpeg
-def test_decode_without_soundfile_slices_a_full_decode(tmp_path):
+def test_decode_without_soundfile_slices_a_full_decode(tmp_path, route):
     # An AAC file in an MP4 container is one soundfile cannot open, so this takes the ffmpeg fallback.
     src = tmp_path / "a.wav"
     sf.write(src, burst(44100, 2.5, 4 * 44100), 44100)
@@ -403,17 +410,109 @@ def test_decode_of_a_damaged_ogg_raises_instead_of_returning_shifted_audio(tmp_p
 
 
 @needs_ffmpeg
-def test_decode_of_a_damaged_m4a_on_the_fallback_raises(tmp_path):
-    src = encode_ogg(tmp_path, 60.0)
+def test_decode_of_a_damaged_m4a_without_soundfile_raises(tmp_path, route):
+    src = encode_ogg(tmp_path, 30.0)
     path = tmp_path / "n.m4a"
     subprocess.run(["ffmpeg", "-v", "error", "-i", str(src), "-c:a", "aac", str(path)], check=True)
     overwrite(path, 0.3, 10000)
     with pytest.raises(DecodeError, match=r"\.m4a"):
-        decode_16k(str(path), 10.0, 30.0)
+        decode_16k(str(path), 2.0, 10.0)
 
 
 @needs_ffmpeg
-def test_decode_of_a_clean_long_ogg_passes_the_integrity_check(tmp_path):
+def test_decode_of_a_short_damaged_ogg_raises(tmp_path):
+    path = encode_ogg(tmp_path, 30.0)
+    overwrite(path, 0.3, 5000)
+    with pytest.raises(DecodeError, match=r"\.ogg"):
+        decode_16k(str(path), 2.0, 5.0)
+
+
+def count_subprocesses(monkeypatch) -> list[list[str]]:
+    real, calls = codecs._run, []
+
+    def counting(cmd, data, error):
+        calls.append(cmd)
+        return real(cmd, data, error)
+
+    monkeypatch.setattr(codecs, "_run", counting)
+    return calls
+
+
+@needs_ffmpeg
+def test_a_short_file_spawns_one_decode_and_no_separate_verify(tmp_path, monkeypatch):
+    calls = count_subprocesses(monkeypatch)
+    monkeypatch.setattr(codecs, "_verify_intact", lambda path: pytest.fail(f"verified {path} separately"))
+    path = encode_ogg(tmp_path, 10.0)
+    for _ in range(2):
+        assert len(decode_16k(str(path), 1.0, 2.0)) == 32000
+    assert len(calls) == 2
+
+
+@needs_ffmpeg
+def test_a_file_soundfile_cannot_open_is_routed_by_ffprobe(tmp_path, monkeypatch):
+    src = encode_ogg(tmp_path, 3.0)
+    path = tmp_path / "n.m4a"
+    subprocess.run(["ffmpeg", "-v", "error", "-i", str(src), "-c:a", "aac", str(path)], check=True)
+    calls = count_subprocesses(monkeypatch)
+    monkeypatch.setattr(codecs, "_verify_intact", lambda path: pytest.fail(f"verified {path} separately"))
+    assert len(decode_16k(str(path), 1.0, 1.0)) == 16000
+    assert [cmd[0] for cmd in calls] == ["ffprobe", "ffmpeg"]
+
+
+@needs_ffmpeg
+def test_a_long_file_is_verified_once_and_then_only_seeks(tmp_path, monkeypatch):
+    monkeypatch.setattr(codecs, "_LONG_FILE_S", 5.0)
+    path = encode_ogg(tmp_path, 10.0, rate=16000)
+    calls = count_subprocesses(monkeypatch)
+    for offset in (1.0, 3.0, 7.0):
+        assert len(decode_16k(str(path), offset, 1.0)) == 16000
+    assert len(calls) == 1
+
+
+@needs_ffmpeg
+def test_a_file_at_the_limit_stays_on_the_whole_file_route(tmp_path, monkeypatch):
+    path = tmp_path / "a.wav"
+    sf.write(path, burst(16000, 0.1, 16000), 16000)
+    calls = count_subprocesses(monkeypatch)
+    monkeypatch.setattr(codecs, "_LONG_FILE_S", 1.0)
+    decode_16k(str(path), 0.0, 1.0)
+    assert len(calls) == 1
+    monkeypatch.setattr(codecs, "_LONG_FILE_S", 0.999)
+    decode_16k(str(path), 0.0, 1.0)
+    assert len(calls) == 2  # now its one verify, and soundfile reads the samples
+
+
+@needs_ffmpeg
+def test_a_stream_without_a_known_duration_takes_the_seek_route(tmp_path, monkeypatch):
+    real = codecs._run
+
+    def unknown_duration(cmd, data, error):
+        done = real(cmd, data, error)
+        if cmd[0] == "ffprobe":
+            done.stdout = done.stdout.replace(b"duration=", b"duration=N/A\nignored=")
+        return done
+
+    src = encode_ogg(tmp_path, 3.0)
+    path = tmp_path / "n.m4a"
+    subprocess.run(["ffmpeg", "-v", "error", "-i", str(src), "-c:a", "aac", str(path)], check=True)
+    monkeypatch.setattr(codecs, "_run", unknown_duration)
+    assert codecs._probe(str(path))[2] == float("inf")
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize("rate", [16000, 44100])
+def test_both_routes_agree_on_a_short_file(tmp_path, monkeypatch, rate):
+    path = encode_ogg(tmp_path, 12.0, rate)
+    # A 20 ms grid is whole samples at both rates, so the two routes share a resampler phase.
+    whole = decode_16k(str(path), 4.0, 3.0)
+    monkeypatch.setattr(codecs, "_LONG_FILE_S", 0.0)
+    seek = decode_16k(str(path), 4.0, 3.0)
+    assert len(whole) == len(seek) == 48000
+    np.testing.assert_allclose(whole, seek, atol=2e-3)
+
+
+@needs_ffmpeg
+def test_decode_of_a_clean_ogg_passes_the_integrity_check(tmp_path, route):
     path = encode_ogg(tmp_path, 30.0)
     assert len(decode_16k(str(path), 5.0, 10.0)) == 160000
 
@@ -421,8 +520,9 @@ def test_decode_of_a_clean_long_ogg_passes_the_integrity_check(tmp_path):
 @needs_ffmpeg
 @pytest.mark.parametrize("rate", [44100, 22050])
 @pytest.mark.parametrize("back_s", [0.05, 0.2, 0.5, 1.5, 4.9, 6.0])
-def test_decode_near_the_end_of_an_ogg_matches_a_full_decode(tmp_path, rate, back_s):
-    # ffmpeg-encoded Vorbis seeks wrongly (up to 832 source samples) inside its last page.
+def test_decode_near_the_end_of_an_ogg_matches_a_full_decode(tmp_path, monkeypatch, rate, back_s):
+    # ffmpeg-encoded Vorbis seeks wrongly (up to 832 source samples) inside its last page: the seek route's tail rule.
+    monkeypatch.setattr(codecs, "_LONG_FILE_S", 0.0)
     path = encode_ogg(tmp_path, 12.0, rate)
     full = full_decode_16k(path)
     total = len(full) / 16000
@@ -438,7 +538,7 @@ def test_decode_near_the_end_of_an_ogg_matches_a_full_decode(tmp_path, rate, bac
 
 
 @needs_ffmpeg
-def test_decode_of_8k_audio_is_refused_until_the_resampler_exists(tmp_path):
+def test_decode_of_8k_audio_is_refused_until_the_resampler_exists(tmp_path, route):
     path = tmp_path / "a.wav"
     sf.write(path, burst(8000, 0.1, 8000), 8000)
     with pytest.raises(ValueError, match="ADR 0009"):
@@ -446,7 +546,7 @@ def test_decode_of_8k_audio_is_refused_until_the_resampler_exists(tmp_path):
 
 
 @needs_ffmpeg
-def test_decode_of_8k_audio_on_the_fallback_is_refused_too(tmp_path):
+def test_decode_of_8k_audio_on_the_fallback_is_refused_too(tmp_path, route):
     src = tmp_path / "a.wav"
     sf.write(src, burst(8000, 0.1, 8000), 8000)
     path = tmp_path / "a.m4a"
@@ -457,7 +557,7 @@ def test_decode_of_8k_audio_on_the_fallback_is_refused_too(tmp_path):
 
 @needs_ffmpeg
 @pytest.mark.parametrize("rate", [16000, 44100])
-def test_decoded_audio_is_writable_on_every_path(tmp_path, rate):
+def test_decoded_audio_is_writable_on_every_path(tmp_path, rate, route):
     path = tmp_path / "a.wav"
     sf.write(path, burst(rate, 0.1, 2 * rate), rate)
     y = decode_16k(str(path), 0.0, 1.0)
@@ -466,7 +566,7 @@ def test_decoded_audio_is_writable_on_every_path(tmp_path, rate):
 
 
 @needs_ffmpeg
-def test_decoded_audio_is_writable_on_the_fallback(tmp_path):
+def test_decoded_audio_is_writable_on_the_fallback(tmp_path, route):
     src = tmp_path / "a.wav"
     sf.write(src, burst(44100, 0.1, 44100), 44100)
     path = tmp_path / "a.m4a"
@@ -476,7 +576,7 @@ def test_decoded_audio_is_writable_on_the_fallback(tmp_path):
     assert y.flags.writeable
 
 
-def test_decode_without_ffmpeg_is_missing_codec_not_a_corrupt_clip(tmp_path, monkeypatch):
+def test_decode_without_ffmpeg_is_missing_codec_not_a_corrupt_clip(tmp_path, monkeypatch, route):
     path = tmp_path / "a.wav"
     sf.write(path, burst(16000, 0.1, 16000), 16000)
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
