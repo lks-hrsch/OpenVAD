@@ -92,6 +92,7 @@ class FakeMfa:
     def __call__(self, tools, models, corpus: Path, out: Path, mfa_root: Path) -> None:
         if self.kill_at == len(self.calls):
             raise Killed
+        self.retried = set()  # stems restart at 0 in every run, so a mark from an earlier run would hit another clip
         out.mkdir(parents=True, exist_ok=True)
         labs = sorted(corpus.glob("*/*.lab"))
         self.calls.append(sorted(lab.read_text().strip() for lab in labs))

@@ -588,6 +588,9 @@ def test_every_clip_ends_as_one_row_or_one_drop(stage):
     assert sorted(kept + dropped) == sorted(c.clip_id for c in clips)
     assert len(set(kept + dropped)) == len(clips)
     assert reasons(stage)["a/c4"] == "needs_wider_beam"
+    assert [c for c, r in reasons(stage).items() if r == "needs_wider_beam"] == [
+        "a/c4"
+    ]  # no mark leaks to another clip
     assert reasons(stage)["a/c5"] == "low_loglik"
     assert json.loads(next(r for r in t["dropped"] if r["clip_id"] == "a/c4")["metrics"])["retried"] is True
 
