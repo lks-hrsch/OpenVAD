@@ -63,6 +63,7 @@ class PlanMismatch(Exception):  # noqa: N818 (the name is the plan's interface)
 def _legs_not_built(row: dict) -> list[str]:
     """The fields of `row` that ask for a leg construction does not have yet: Task 18 and Task 19 add them."""
     asked = {
+        "baseline_snr_db": row["source"] == "common-voice",  # WADA-SNR on each clip, spec "Common Voice baseline"
         "room": row["room"],
         "handset": row["handset"] is not None,
         "agc": row["agc"] is not None,

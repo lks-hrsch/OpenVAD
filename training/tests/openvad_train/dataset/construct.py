@@ -68,7 +68,7 @@ def noisy(snr_db: float = 5.0, offset_n: int = 1000) -> dict:
 
 
 def speech_file(x: np.ndarray, name: str = "c0") -> str:
-    path = data_dir() / "datasets/raw/common-voice" / f"{name}.wav"
+    path = data_dir() / "datasets/raw/swc" / f"{name}.wav"
     path.parent.mkdir(parents=True, exist_ok=True)
     sf.write(path, x, 16000, subtype="PCM_16")
     return path.relative_to(data_dir()).as_posix()
@@ -89,7 +89,7 @@ def make_row(
     """A plan row drawn by the plan's own code, with the chain's probabilistic legs off and `overrides` forced."""
     x = tone(3 * 16000) if x is None else x
     seconds = len(x) / 16000 if duration_s is None else duration_s
-    clip = Clip(name, "common-voice", "de", "s", "train", speech_file(x, name), 0.0, seconds, "CC0", None)
+    clip = Clip(name, "swc", "de", "s", "train", speech_file(x, name), 0.0, seconds, "CC0", None)
     timing = Timing(name, "word", [tuple(s) for s in speech], [tuple(m) for m in mask], None, "test")
     return draw_sample(clip, timing, SLICE) | CHAIN_OFF | NO_CODEC | CLEAN | overrides
 
@@ -180,7 +180,7 @@ def test_a_chunk_takes_its_audio_from_its_offset_in_the_file(raw, route, rate, t
     x = np.zeros(20 * rate, np.float32)
     x[round(marker_ms / 1000 * rate)] = 0.8
     path = data_dir() / "datasets/raw/swc/article.wav"
-    path.parent.mkdir(parents=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
     sf.write(path, x, rate, subtype="FLOAT")
     clip = Clip("article", "swc", "de", "s", "train", path.relative_to(data_dir()).as_posix(), 0.0, 20.0, "CC0", None)
     timing = Timing("article", "word", [(12_300, 12_400)], [], None, "test")
@@ -363,6 +363,12 @@ def test_a_damaged_source_is_a_decode_error(raw):
 def test_a_leg_that_is_not_built_raises_instead_of_being_skipped(raw, field, value):
     with pytest.raises(NotImplementedError, match=field):
         construct_sample(make_row(**{field: value}), raw)
+
+
+@pytest.mark.parametrize("extra", [CLEAN, noisy()], ids=["clean", "noisy"])
+def test_common_voice_waits_for_its_wada_snr_step(raw, extra):
+    with pytest.raises(NotImplementedError, match="baseline_snr_db"):
+        construct_sample(make_row(**extra, source="common-voice"), raw)
 
 
 def test_a_clip_drive_of_zero_still_asks_for_the_leg(raw):
@@ -582,7 +588,7 @@ def test_corrupt_clip_is_logged_and_skipped(rows_with_corrupt_clip, raw, tmp_pat
 def test_a_failure_line_names_the_sample_and_the_error(rows_with_corrupt_clip, raw, tmp_path):
     write_shard(rows_with_corrupt_clip, tmp_path / "s.tar", tmp_path / "s.parquet", raw)
     line = json.loads((tmp_path / "s.failures.jsonl").read_text())
-    assert line["sample_id"] == "common-voice/c0"
+    assert line["sample_id"] == "swc/c0"
     assert line["source_path"] == rows_with_corrupt_clip[0]["source_path"]
     assert "Invalid data" in line["error"]
 
