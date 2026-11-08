@@ -252,6 +252,21 @@ def test_manifest_records_the_librivad_val_hash_when_a_row_reads_that_tree(data)
     assert "librivad-val" not in m["licences"]
 
 
+def test_manifest_records_the_rirs_hash_when_a_row_has_a_room(data):
+    cfg = build(data, room=True)
+    m = read_manifest(dataset_root(cfg))
+    assert m is not None
+    assert set(m["raw_sources"]) == {"demand", "rirs", "swc"}
+    assert m["raw_sources"]["rirs"] == file_hash(data / "datasets/raw/rirs/manifest.json", "sha256")
+
+
+def test_a_missing_rirs_manifest_fails_when_a_row_has_a_room(data):
+    cfg = build(data, room=True)
+    (data / "datasets/raw/rirs/manifest.json").unlink()
+    with pytest.raises(FileNotFoundError, match="rirs"):
+        run_publish(cfg)
+
+
 def test_a_missing_librivad_val_manifest_fails_when_a_row_reads_that_tree(data):
     cfg = make_build(data, as_is=True, val=True)
     (data / "datasets/raw/librivad-val/manifest.json").unlink()

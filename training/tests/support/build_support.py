@@ -24,6 +24,7 @@ from openvad_train.dataset.parquet_io import write_parquet
 from openvad_train.dataset.plan import PLAN_SCHEMA, draw_sample
 from openvad_train.dataset.schema import Clip, Timing
 from openvad_train.fetch.common import write_manifest
+from rir_support import synthetic_rir
 
 
 Split = Literal["train", "validation", "test"]
@@ -31,6 +32,7 @@ Kind = Literal["word", "turn", "frame"]
 CHAIN_OFF = {"room": False, "handset": None, "agc": None, "clip_drive_db": None, "suppression": None, "transients": []}
 CLEAN = {"condition": "clean", "snr_db": None, "noise_source_ids": [], "noise_offsets": [], "dither_dbfs": -80.0}
 NOISE_FILE = "datasets/raw/demand/OOFFICE/ch01.wav"
+RIR_FILE = "datasets/raw/rirs/but/room/rir.wav"
 OFFICE = {"condition": "office", "snr_db": 5.0, "noise_source_ids": [NOISE_FILE], "noise_offsets": [1000]}
 
 
@@ -68,16 +70,28 @@ def write_plan(cfg: BuildConfig, rows: list[dict]) -> None:
     write_manifest(out, {"stage": "plan", "plan_version": cfg.plan_version, "global_seed": cfg.global_seed})
 
 
-def make_build(root: Path, *, as_is: bool = False, val: bool = False, name: str = "test-build") -> BuildConfig:
-    """Write the raw files and the plan under `root`, which must be `$OPENVAD_DATA_DIR`."""
+def make_build(
+    root: Path, *, as_is: bool = False, val: bool = False, room: bool = False, name: str = "test-build"
+) -> BuildConfig:
+    """Write the raw files and the plan under `root`, which must be `$OPENVAD_DATA_DIR`.
+
+    `room` puts a RIR, with a raw manifest, under `datasets/raw/rirs` and gives the first row a room.
+    """
     noise = root / NOISE_FILE
     noise.parent.mkdir(parents=True)
     sf.write(
         noise, (0.1 * np.random.default_rng(7).standard_normal(400_000)).astype(np.float32), 16000, subtype="PCM_16"
     )
     (root / "datasets/raw/demand/manifest.json").write_text('{"dataset": "demand"}')
+    if room:
+        (root / RIR_FILE).parent.mkdir(parents=True)
+        sf.write(root / RIR_FILE, synthetic_rir(), 16000, subtype="FLOAT")
+        (root / "datasets/raw/rirs/manifest.json").write_text('{"dataset": "rirs"}')
     rows = [
-        _row(root, "swc", "c0", "train", "t1", 3.0, [(500, 2500)]) | {"shard": "train/00000"},
+        _row(
+            root, "swc", "c0", "train", "t1", 3.0, [(500, 2500)], **({"room": True, "rir_id": RIR_FILE} if room else {})
+        )
+        | {"shard": "train/00000"},
         _row(root, "swc", "c1", "train", "t2", 2.0, [(100, 1800)], **OFFICE) | {"shard": "train/00000"},
         _row(root, "swc", "c2", "train", "t1", 3.0, [(0, 3000)]) | {"shard": "train/00001"},
         _row(root, "swc", "c3", "validation", "v1", 2.0, [(200, 1500)]) | {"shard": "validation/00000"},

@@ -190,6 +190,8 @@ def _publish(cfg: BuildConfig) -> None:
     # `librivad` rows can read the validation split of `librivad-val`, whose own manifest would otherwise go unrecorded.
     if rows["source_path"].str.starts_with(f"datasets/raw/{VAL_SOURCE}/").any():
         sources.add(VAL_SOURCE)
+    if rows["rir_id"].is_not_null().any():
+        sources.add("rirs")
     sources = sorted(sources)
     manifest_paths = {name: raw_dir(name) / "manifest.json" for name in sources}
     if absent := [name for name, path in manifest_paths.items() if not path.exists()]:
