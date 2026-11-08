@@ -712,7 +712,7 @@ def test_talker_conditions_need_reserved_clips_in_the_index(data):
     run_index(cfg)
     index = data / "datasets/processed/work/openvad-slice/index/swc.parquet"
     asyncio.run(write_parquet({index: asyncio.run(read_parquet(index)).with_columns(reserved=pl.lit(False)).lazy()}))
-    with pytest.raises(ValueError, match="need reserved clips"):
+    with pytest.raises(ValueError, match="no reserved clip"):
         run_plan(cfg)
 
 
@@ -1027,14 +1027,16 @@ def full_pool(noise_trees) -> NoisePool:
 def reserved_talkers(split_sizes: dict[str, dict[str, int]]) -> TalkerPool:
     """Reserved clips: `split_sizes[split][language]` speakers each, one clip per speaker."""
     clips = [
-        talker(f"{split}-{lang}-{i}", lang, split)
+        talker(f"{split}-{lang}-{i}", lang, split, source="common-voice")
         for split, languages in split_sizes.items()
         for lang, n in languages.items()
         for i in range(n)
     ]
-    return TalkerPool(clips, FULL.babble_min_speakers)
+    return TalkerPool(clips, {("common-voice", lang): n for lang, n in SPEAKERS.items()}, FULL.babble_min_speakers)
 
 
+# Speakers of each language in the source index, reserved or not: kk is under the 50 of `babble_min_speakers`.
+SPEAKERS = {"de": 1000, "ja": 1000, "kk": 10, "fr": 1000}
 ALL_SPLITS = {s: {"de": 60, "ja": 60, "kk": 3, "fr": 60} for s in ("train", "validation", "test")}
 ONLY = {"clean": 0.0, "competing": 0.0, "babble": 0.0, "ssn": 0.0, "city": 0.0} | dict.fromkeys(DEMAND_CATEGORIES, 0.0)
 
@@ -1065,7 +1067,7 @@ def by_path(split_sizes: dict) -> dict[str, Clip]:
         c.path: c
         for split, languages in split_sizes.items()
         for lang, n in languages.items()
-        for c in (talker(f"{split}-{lang}-{i}", lang, split) for i in range(n))
+        for c in (talker(f"{split}-{lang}-{i}", lang, split, source="common-voice") for i in range(n))
     }
 
 
@@ -1114,7 +1116,11 @@ def test_babble_has_six_different_reserved_talkers_of_the_rows_language_and_spli
 
 
 def test_babble_offsets_start_inside_a_donor_longer_than_the_sample(talkers):
-    long = TalkerPool([dataclasses.replace(talker(f"l{i}"), duration_s=60.0) for i in range(10)], 1)
+    long = TalkerPool(
+        [dataclasses.replace(talker(f"l{i}", source="common-voice"), duration_s=60.0) for i in range(10)],
+        {("common-voice", "de"): 1000},
+        1,
+    )
     rows = rows_with(only("babble"), 50, talkers=long)
     offsets = [o for r in rows for o in r["noise_offsets"]]
     assert all(0 <= o <= (60 * 16000 - r["total_n"]) for r in rows for o in r["noise_offsets"])
@@ -1357,3 +1363,84 @@ def test_a_sample_too_short_for_a_segment_is_planned_clean_with_its_dither(talke
     assert row["total_n"] < 6400
     assert (row["condition"], row["segments"], row["tir_db"], row["snr_db"]) == ("clean", [], None, None)
     assert -90 <= row["dither_dbfs"] <= -70
+
+
+def source_clips(source: str, n: int = 80, language: str = "de") -> list[Clip]:
+    return [talker(f"{source}-{i}", language, "train", source=source) for i in range(n)]
+
+
+def test_adding_a_source_leaves_the_talker_rows_of_another_source_unchanged():
+    x, y = source_clips("swc"), source_clips("common-voice")
+    counts = {("swc", "de"): 1000, ("common-voice", "de"): 1000}
+    alone, together = TalkerPool(x, counts, 50), TalkerPool(x + y, counts, 50)
+    rirs_free = None
+    for condition in ("babble", "ssn", "competing"):
+        cfg = only(condition)
+        for i in range(100):
+            fg = dataclasses.replace(clip(f"s{i}", source="swc"), language="de")
+            a = draw_sample(fg, timing(f"s{i}"), cfg, talkers=alone, rirs=rirs_free)
+            b = draw_sample(fg, timing(f"s{i}"), cfg, talkers=together, rirs=rirs_free)
+            assert a == b
+            assert a["condition"] == condition
+
+
+def test_a_row_of_the_added_source_draws_from_its_own_reserved_speakers():
+    x, y = source_clips("swc"), source_clips("common-voice")
+    pool = TalkerPool(x + y, {("swc", "de"): 1000, ("common-voice", "de"): 1000}, 50)
+    for i in range(30):
+        row = draw_sample(clip(f"cv{i}", source="common-voice"), timing(f"cv{i}"), only("babble"), talkers=pool)
+        assert all(p.startswith("datasets/raw/common-voice/") for p in row["noise_source_ids"])
+
+
+def test_fleurs_takes_its_talkers_from_the_declared_donor_source():
+    donors = source_clips("common-voice")
+    pool = TalkerPool(donors, {("common-voice", "de"): 1000}, 50)
+    assert FULL.talker_donors == {"fleurs": "common-voice"}
+    for condition in ("babble", "ssn"):
+        for i in range(20):
+            row = draw_sample(clip(f"f{i}", source="fleurs"), timing(f"f{i}"), only(condition), talkers=pool)
+            assert row["noise_source_ids"]
+            assert all(p.startswith("datasets/raw/common-voice/") for p in row["noise_source_ids"])
+    competing = draw_sample(clip("f0", source="fleurs"), timing("f0"), only("competing"), talkers=pool)
+    assert {s["source_path"].split("/")[2] for s in competing["segments"]} == {"common-voice"}
+
+
+def test_a_config_with_fleurs_talkers_and_no_donor_source_is_refused_before_any_source_is_planned(data):
+    cfg = dataclasses.replace(FULL, name="no-donor", sources=("fleurs", "mls"), languages=None)
+    with pytest.raises(ValueError, match="talkers of fleurs come from common-voice"):
+        run_plan(cfg)
+    clean = dataclasses.replace(cfg, condition_shares={"clean": 1.0})
+    assert plan_module._needs_talkers(clean) == []  # no talker condition, no donor needed
+
+
+BABBLE_HALF = {"clean": 0.5, "babble": 0.5}
+
+
+def write_index(cfg, source: str, clips: list[Clip], reserved: set[str]) -> None:
+    out = work_dir(cfg) / "index"
+    out.mkdir(parents=True, exist_ok=True)
+    frame = index._frame(clips, {(c.split, c.language, c.speaker) for c in clips if c.clip_id in reserved})
+    asyncio.run(write_parquet({out / f"{source}.parquet": frame}))
+
+
+def test_the_talker_pool_counts_the_speakers_of_a_language_in_the_index_reserved_or_not(data):
+    cfg = dataclasses.replace(
+        CONFIG, name="speakers-test", sources=("mls",), babble_min_speakers=50, condition_shares=BABBLE_HALF
+    )
+    clips = [talker(f"kk{i}", "kk", "train") for i in range(10)] + [talker(f"de{i}", "de", "train") for i in range(60)]
+    clips = [dataclasses.replace(c, reserved=False) for c in clips]
+    write_index(cfg, "mls", clips, {"kk0", "de0", "de1", "de2"})
+    pool = plan_module._talker_pool(cfg)
+    # kk: 10 speakers in the source, under 50: borrows from every language. de: 60, over 50: stays, then fills.
+    kk = Counter(c.language for i in range(100) for c in pool.draw("mls", "kk", "train", 4, np.random.default_rng(i)))
+    assert kk["de"] > 0
+    de = [pool.draw("mls", "de", "train", 3, np.random.default_rng(i)) for i in range(100)]
+    assert all({c.language for c in picked} == {"de"} and len(picked) == 3 for picked in de)
+
+
+def test_a_split_with_rows_and_no_reserved_clip_to_draw_from_is_refused_before_planning(data):
+    cfg = dataclasses.replace(CONFIG, name="split-test", sources=("mls",), condition_shares=BABBLE_HALF)
+    clips = [talker(f"t{i}", "de", "train") for i in range(6)] + [talker(f"v{i}", "de", "validation") for i in range(6)]
+    write_index(cfg, "mls", [dataclasses.replace(c, reserved=False) for c in clips], {"t0", "t1"})
+    with pytest.raises(ValueError, match="rows in validation, where mls has no reserved clip"):
+        plan_module._talker_pool(cfg)

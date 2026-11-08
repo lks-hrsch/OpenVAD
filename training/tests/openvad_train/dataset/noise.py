@@ -188,57 +188,117 @@ def test_a_draw_with_musan_does_not_depend_on_the_listing_order(tmp_path):
         assert (x.file.name, x.channel, x.offset_n) == (y.file.name, y.channel, y.offset_n)
 
 
-def reserved_pool(languages: dict[str, int], split: str = "train", min_speakers: int = 3) -> TalkerPool:
-    clips = [talker(f"{lang}{i}", lang, split) for lang, n in languages.items() for i in range(n)]
-    return TalkerPool(clips, min_speakers)
+def reserved_pool(
+    languages: dict[str, int],
+    split: str = "train",
+    min_speakers: int = 3,
+    speakers: dict[str, int] | None = None,
+    source: str = "mls",
+) -> TalkerPool:
+    """Reserved clips of `languages` (one speaker each); `speakers` is the language count of the source's index,
+    by default the number of reserved clips times 20, as with 5% reserved.
+    """
+    clips = [talker(f"{lang}{i}", lang, split, source=source) for lang, n in languages.items() for i in range(n)]
+    counts = {(source, lang): (speakers or {}).get(lang, 20 * n) for lang, n in languages.items()}
+    return TalkerPool(clips, counts, min_speakers)
 
 
 def test_babble_talkers_are_reserved_of_the_same_language_and_split_with_different_speakers():
     pool = reserved_pool({"de": 10, "fr": 10})
-    pool_test = TalkerPool([talker(f"t{i}", "de", "test") for i in range(10)], 3)
+    pool_test = reserved_pool({"de": 10}, "test")
     for i in range(50):
-        picked = pool.draw("de", "train", 6, np.random.default_rng(i))
+        picked = pool.draw("mls", "de", "train", 6, np.random.default_rng(i))
         assert {c.language for c in picked} == {"de"}
         assert len({c.speaker for c in picked}) == 6
-        assert {c.split for c in pool_test.draw("de", "test", 6, np.random.default_rng(i))} == {"test"}
+        assert {c.split for c in pool_test.draw("mls", "de", "test", 6, np.random.default_rng(i))} == {"test"}
 
 
 def test_a_split_never_hears_the_reserved_speakers_of_another():
     train, test = [talker(f"a{i}", "de", "train") for i in range(8)], [talker(f"b{i}", "de", "test") for i in range(8)]
-    pool = TalkerPool(train + test, 3)
-    for split, own in (("train", train), ("validation", None), ("test", test)):
-        if own is None:
-            with pytest.raises(ValueError, match="validation"):
-                pool.draw("de", split, 6, np.random.default_rng(0))
-            continue
-        assert all(c in own for i in range(30) for c in pool.draw("de", split, 6, np.random.default_rng(i)))
+    pool = TalkerPool(train + test, {("mls", "de"): 100}, 3)
+    assert pool.has("mls", "train")
+    assert not pool.has("mls", "validation")
+    with pytest.raises(ValueError, match="validation"):
+        pool.draw("mls", "de", "validation", 6, np.random.default_rng(0))
+    for split, own in (("train", train), ("test", test)):
+        assert all(c in own for i in range(30) for c in pool.draw("mls", "de", split, 6, np.random.default_rng(i)))
 
 
-def test_a_language_with_too_few_reserved_speakers_borrows_from_every_language():
-    pool = reserved_pool({"kk": 2, "de": 10, "fr": 10}, min_speakers=3)
-    languages = Counter(c.language for i in range(100) for c in pool.draw("kk", "train", 6, np.random.default_rng(i)))
+def test_a_draw_takes_the_reserved_clips_of_the_rows_own_source_only():
+    clips = [talker(f"m{i}", "de", source="mls") for i in range(20)] + [
+        talker(f"c{i}", "de", source="common-voice") for i in range(20)
+    ]
+    pool = TalkerPool(clips, {("mls", "de"): 100, ("common-voice", "de"): 100}, 3)
+    for source in ("mls", "common-voice"):
+        assert {c.source for i in range(40) for c in pool.draw(source, "de", "train", 6, np.random.default_rng(i))} == {
+            source
+        }
+
+
+def test_adding_clips_of_another_source_changes_no_draw_of_this_one():
+    mls = [talker(f"m{i}", "de", source="mls") for i in range(60)]
+    cv = [talker(f"c{i}", "de", source="common-voice") for i in range(60)]
+    counts = {("mls", "de"): 100, ("common-voice", "de"): 100}
+    alone, together = TalkerPool(mls, counts, 3), TalkerPool(mls + cv, counts, 3)
+    for i in range(100):
+        rng_a, rng_b = np.random.default_rng(i), np.random.default_rng(i)
+        assert alone.draw("mls", "de", "train", 6, rng_a) == together.draw("mls", "de", "train", 6, rng_b)
+
+
+def test_a_language_with_few_speakers_in_its_source_borrows_even_if_many_of_them_are_reserved():
+    # 10 reserved kk clips, but the index counts only 2 kk speakers: under the 3 of this pool.
+    pool = reserved_pool({"kk": 10, "de": 10, "fr": 10}, speakers={"kk": 2})
+    languages = Counter(
+        c.language for i in range(100) for c in pool.draw("mls", "kk", "train", 6, np.random.default_rng(i))
+    )
     assert languages["de"] > 0
     assert languages["fr"] > 0
     assert languages["kk"] > 0
 
 
+def test_a_big_language_stays_in_its_language_however_few_of_its_speakers_are_reserved_in_the_split():
+    pool = reserved_pool({"de": 10, "fr": 10}, speakers={"de": 500})
+    for i in range(50):
+        assert {c.language for c in pool.draw("mls", "de", "train", 6, np.random.default_rng(i))} == {"de"}
+
+
+def test_when_the_same_language_has_too_few_reserved_speakers_the_rest_come_from_every_language():
+    pool = reserved_pool({"de": 2, "fr": 10}, speakers={"de": 500})
+    for i in range(50):
+        picked = pool.draw("mls", "de", "train", 6, np.random.default_rng(i))
+        assert len({c.speaker for c in picked}) == 6
+        assert {c.clip_id for c in picked} >= {"de0", "de1"}
+        assert sum(c.language == "fr" for c in picked) == 4
+
+
 def test_japanese_and_mandarin_take_their_own_language_half_the_time():
     assert {"ja", "zh", "zh-TW"} == OPEN_LANGUAGES
-    pool = reserved_pool({"ja": 20, "de": 200}, min_speakers=3)
-    same = [all(c.language == "ja" for c in pool.draw("ja", "train", 6, np.random.default_rng(i))) for i in range(1000)]
+    pool = reserved_pool({"ja": 20, "de": 200}, speakers={"ja": 500})
+    same = [
+        all(c.language == "ja" for c in pool.draw("mls", "ja", "train", 6, np.random.default_rng(i)))
+        for i in range(1000)
+    ]
     assert sum(same) / len(same) == pytest.approx(0.5, abs=0.05)
 
 
 def test_a_talker_pool_refuses_a_clip_that_is_not_a_reserved_whole_file():
     with pytest.raises(ValueError, match="reserved whole-file"):
-        TalkerPool([dataclasses.replace(talker("a"), reserved=False)], 3)
+        TalkerPool([dataclasses.replace(talker("a"), reserved=False)], {}, 3)
     with pytest.raises(ValueError, match="reserved whole-file"):
-        TalkerPool([dataclasses.replace(talker("a"), offset_s=1.0)], 3)
+        TalkerPool([dataclasses.replace(talker("a"), offset_s=1.0)], {}, 3)
 
 
-def test_a_pool_with_fewer_speakers_than_talkers_repeats_a_clip_rather_than_failing():
-    picked = reserved_pool({"de": 2}, min_speakers=1).draw("de", "train", 6, np.random.default_rng(0))
+def test_a_pool_with_fewer_clips_than_talkers_repeats_a_clip_rather_than_failing():
+    picked = reserved_pool({"de": 2}, min_speakers=1).draw("mls", "de", "train", 6, np.random.default_rng(0))
     assert len(picked) == 6
+
+
+def test_a_pool_with_fewer_speakers_than_talkers_uses_new_clips_before_it_repeats_one():
+    clips = [talker(f"x{i}", speaker=f"s{i % 3}") for i in range(30)]
+    pool = TalkerPool(clips, {("mls", "de"): 100}, 1)
+    for seed in range(1000):
+        picked = pool.draw("mls", "de", "train", 6, np.random.default_rng(seed))
+        assert len({c.clip_id for c in picked}) == 6
 
 
 def test_a_talker_offset_stays_inside_the_clip_or_is_zero():

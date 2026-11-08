@@ -54,7 +54,10 @@ class BuildConfig:
     # No segment is shorter: a few samples cannot be filtered or heard, and a 10 ms ramp must fit inside.
     competing_min_segment_ms: int = 200
     babble_talkers: int = 6
-    babble_min_speakers: int = 50  # fewer speakers: babble draws from any language
+    # A language with fewer speakers than this in its source draws its talkers from every language of the source.
+    babble_min_speakers: int = 50
+    # FLEURS has no speaker IDs and reserves none, so its talkers come from another source's reserved speakers.
+    talker_donors: dict[str, str] = field(default_factory=lambda: {"fleurs": "common-voice"})
     reserved_share: float = 0.05
     # Transients: synthetic clicks and DTMF.
     transient_p: float = 0.3

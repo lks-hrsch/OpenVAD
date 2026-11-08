@@ -10,7 +10,7 @@ babble, speech-shaped noise and competing talkers built from them.
 import csv
 from bisect import bisect_right
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from itertools import accumulate
 from pathlib import Path
 from typing import NamedTuple
@@ -161,49 +161,70 @@ class NoisePool:
 
 
 class TalkerPool:
-    """The reserved clips that feed babble, speech-shaped noise and competing talkers, by split and language.
+    """The reserved clips that feed babble, speech-shaped noise and competing talkers, by source, split and language.
 
     A clip is a whole file (`offset_s == 0`): AMI and VoxPopuli clips are spans of recordings that hold other
-    speakers, which looping the file would leak. A draw takes the row's own split, so validation and test never hear
-    a training speaker, and the row's language when the split has at least `min_speakers` reserved speakers of it
-    (a smaller language borrows from every language). Japanese and Mandarin take their own language only half the
-    time. A draw is a pure function of the rng and the sorted clips.
+    speakers, which looping the file would leak. A draw takes the reserved clips of one source and the row's own
+    split, so validation and test never hear a training speaker, and adding a source to a build changes no other
+    source's draw. The row's language is used when the source has at least `min_speakers` speakers of it, reserved
+    or not, all splits (`speakers`, counted by the index and fixed by the source); a smaller language takes every
+    language of the source. Japanese and Mandarin take their own language only half the time. If the same-language
+    reserved clips of the split hold fewer speakers than are asked for, the rest come from every language. A draw is
+    a pure function of the rng and the sorted clips.
     """
 
-    def __init__(self, clips: Iterable[Clip], min_speakers: int) -> None:
+    def __init__(self, clips: Iterable[Clip], speakers: Mapping[tuple[str, str], int], min_speakers: int) -> None:
         self._min_speakers = min_speakers
-        self._in_split: dict[str, list[Clip]] = defaultdict(list)
-        self._in_language: dict[tuple[str, str], list[Clip]] = defaultdict(list)
+        self._speakers = dict(speakers)
+        self._in_split: dict[tuple[str, str], list[Clip]] = defaultdict(list)
+        self._in_language: dict[tuple[str, str, str], list[Clip]] = defaultdict(list)
         for clip in sorted(clips, key=lambda c: (c.source, c.clip_id)):
             if not clip.reserved or clip.offset_s != 0:
                 raise ValueError(
                     f"{clip.source}/{clip.clip_id} is not a reserved whole-file clip, so it cannot be a talker"
                 )
-            self._in_split[clip.split].append(clip)
-            self._in_language[clip.split, clip.language].append(clip)
-        self._speakers = {
-            k: len({c.speaker for c in cs if c.speaker is not None}) for k, cs in self._in_language.items()
-        }
+            self._in_split[clip.source, clip.split].append(clip)
+            self._in_language[clip.source, clip.split, clip.language].append(clip)
 
-    def draw(self, language: str, split: str, n: int, rng: np.random.Generator) -> list[Clip]:
-        """`n` clips of different speakers where the pool has them, else of different clips."""
+    def has(self, source: str, split: str) -> bool:
+        return bool(self._in_split.get((source, split)))
+
+    def draw(self, source: str, language: str, split: str, n: int, rng: np.random.Generator) -> list[Clip]:
+        """`n` clips of different speakers where the pool has them, else of clips not yet drawn, and only then a
+        repeated clip (a pool of fewer than `n` clips).
+        """
+        everyone = self._in_split.get((source, split), [])
+        if not everyone:
+            raise ValueError(f"no reserved talker of {source} in the {split} split")
         borrow = language in OPEN_LANGUAGES and rng.random() < OPEN_LANGUAGE_P
-        if borrow or self._speakers.get((split, language), 0) < self._min_speakers:
-            pool = self._in_split[split]
-        else:
-            pool = self._in_language[split, language]
-        if not pool:
-            raise ValueError(f"no reserved talker in the {split} split")
+        enough = self._speakers.get((source, language), 0) >= self._min_speakers
         picked: list[Clip] = []
-        for _ in range(20 * n):
-            clip = pool[int(rng.integers(len(pool)))]
-            if clip.speaker not in {c.speaker for c in picked}:
-                picked.append(clip)
-            if len(picked) == n:
-                return picked
-        while len(picked) < n:  # fewer than `n` speakers in the pool
-            picked.append(pool[int(rng.integers(len(pool)))])
+        if enough and not borrow:
+            _add_new_speakers(self._in_language.get((source, split, language), []), picked, n, rng)
+        _add_new_speakers(everyone, picked, n, rng)
+        _add_unpicked_clips(everyone, picked, n, rng)
+        while len(picked) < n:  # fewer clips than asked for
+            picked.append(everyone[int(rng.integers(len(everyone)))])
         return picked
+
+
+def _add_new_speakers(pool: list[Clip], picked: list[Clip], n: int, rng: np.random.Generator) -> None:
+    """Random clips of `pool` whose speaker is not in `picked`, until `picked` has `n` (a bounded number of tries)."""
+    for _ in range(20 * n):
+        if len(picked) == n or not pool:
+            return
+        clip = pool[int(rng.integers(len(pool)))]
+        if clip.speaker not in {c.speaker for c in picked}:
+            picked.append(clip)
+
+
+def _add_unpicked_clips(pool: list[Clip], picked: list[Clip], n: int, rng: np.random.Generator) -> None:
+    for _ in range(20 * n):
+        if len(picked) == n:
+            return
+        clip = pool[int(rng.integers(len(pool)))]
+        if clip not in picked:
+            picked.append(clip)
 
 
 def talker_offset(clip: Clip, span_n: int, rng: np.random.Generator) -> int:

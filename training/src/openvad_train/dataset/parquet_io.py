@@ -11,8 +11,11 @@ from pathlib import Path
 import polars as pl
 
 
-async def read_parquet(path: Path, columns: list[str] | None = None) -> pl.DataFrame:
+async def read_parquet(path: Path, columns: list[str] | None = None, where: pl.Expr | None = None) -> pl.DataFrame:
+    """`path` as a frame; `where` keeps the matching rows, filtered before they are collected."""
     lazy = pl.scan_parquet(path)
+    if where is not None:
+        lazy = lazy.filter(where)
     if columns is not None:
         lazy = lazy.select(columns)
     return await lazy.collect_async()

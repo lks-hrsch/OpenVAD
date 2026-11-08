@@ -525,3 +525,19 @@ def test_a_build_with_every_noise_kind_lists_every_set_and_talker_source_with_it
     train = frame(cfg, "train")
     assert {"city", "nature", "babble", "ssn", "competing"} <= set(train["condition"])
     assert all(len(r["transients"]) == 1 for r in train.iter_rows(named=True) if r["sample_id"] >= "swc/k")
+
+
+def test_a_fleurs_row_with_donor_talkers_lists_the_donor_source(data):
+    write_raw_manifest(data, "common-voice", licence="CC0")
+    cfg = dataclasses.replace(SLICE, name="fleurs-licence")
+    index = work_dir(cfg) / "index"
+    index.mkdir(parents=True)
+    donors = ["datasets/raw/common-voice/en/a.mp3", "datasets/raw/common-voice/en/b.mp3"]
+    asyncio.run(
+        parquet_io.write_parquet(
+            {index / "common-voice.parquet": pl.DataFrame({"path": donors, "licence": ["CC0", "CC0"]}).lazy()}
+        )
+    )
+    rows = licence_rows(("babble", donors, [], None)).with_columns(source=pl.lit("fleurs"))
+    assert _talker_paths(rows) == set(donors)
+    assert _talker_licences(work_dir(cfg), _talker_paths(rows)) == {"talkers/common-voice": ["CC0"]}

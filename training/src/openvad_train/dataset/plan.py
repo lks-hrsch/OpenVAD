@@ -220,7 +220,7 @@ def _draw_segments(
     # Sorted cuts through the free samples put k blocks in order with a gap (maybe none) before each.
     cuts = np.sort(rng.integers(0, total_n - cover + 1, k))
     starts = cuts + np.cumsum(lengths) - lengths
-    donors = talkers.draw(clip.language, clip.split, k, rng)
+    donors = talkers.draw(_donor_source(clip, cfg), clip.language, clip.split, k, rng)
     segments = [
         {
             "clip_id": f"{c.source}/{c.clip_id}",
@@ -237,6 +237,11 @@ def _draw_segments(
         for segment in segments:
             segment["rir_id"] = rirs.draw(clip.split, rng).file.relative_to(data_dir()).as_posix()
     return segments
+
+
+def _donor_source(clip: Clip, cfg: BuildConfig) -> str:
+    """The source whose reserved speakers are the talkers of `clip`: its own, or the declared donor (FLEURS)."""
+    return cfg.talker_donors.get(clip.source, clip.source)
 
 
 def _holds_a_segment(total_n: int, cfg: BuildConfig) -> bool:
@@ -382,7 +387,8 @@ def _draw_talkers(
             "tir_db": float(rng.uniform(*cfg.competing_tir_db)),
             "segments": _draw_segments(clip, total_n, cfg, talkers, rirs, rng),
         }
-    donors = talkers.draw(clip.language, clip.split, cfg.babble_talkers if condition == "babble" else 1, rng)
+    wanted = cfg.babble_talkers if condition == "babble" else 1
+    donors = talkers.draw(_donor_source(clip, cfg), clip.language, clip.split, wanted, rng)
     return {
         "noise_source_ids": [c.path for c in donors],
         "noise_offsets": [round(c.offset_s * SAMPLE_RATE) + talker_offset(c, total_n, rng) for c in donors],
@@ -631,20 +637,47 @@ def _plan_source(
     return frames, {"clips": index.height, **{k: counts[k] for k in kinds}}
 
 
+def _needs_talkers(cfg: BuildConfig) -> list[str]:
+    """The augmented sources of `cfg` that have a talker condition to draw."""
+    wanted = any(cfg.condition_shares.get(c, 0) > 0 for c in _TALKER_CONDITIONS)
+    return [name for name in cfg.sources if wanted and name in AUGMENTED_SOURCES]
+
+
+def _check_donors(cfg: BuildConfig) -> None:
+    """Refuse, before any source is planned, a donor source the config lacks."""
+    for name in _needs_talkers(cfg):
+        donor = cfg.talker_donors.get(name, name)
+        if donor not in cfg.sources:
+            raise ValueError(f"{cfg.name}: the talkers of {name} come from {donor}, which is not in its sources")
+
+
 def _talker_pool(cfg: BuildConfig) -> TalkerPool:
-    """The reserved clips of the augmented sources of `cfg`, from their index tables. As-is sources are left out:
-    AMI and VoxPopuli clips are spans of recordings with other speakers in them, CallHome audio is not a file, and
-    LibriVAD and VOiCES reserve no speaker.
+    """The reserved clips and language speaker counts of the donor sources of `cfg`, from their index tables. Only
+    augmented sources donate: AMI and VoxPopuli clips are spans of recordings with other speakers in them, CallHome
+    audio is not a file, and LibriVAD and VOiCES reserve no speaker. Every (source, split) with a planned row must
+    have a reserved clip to draw, checked here so a plan never stops half way.
     """
     fields = [f.name for f in dataclasses.fields(Clip)]
+    donors = sorted({cfg.talker_donors.get(name, name) for name in _needs_talkers(cfg)})
     clips: list[Clip] = []
-    for name in cfg.sources:
-        if name in AUGMENTED_SOURCES:
-            index = asyncio.run(read_parquet(work_dir(cfg) / "index" / f"{name}.parquet", fields))
-            clips += [Clip(**row) for row in index.filter(pl.col("reserved")).iter_rows(named=True)]
-    if not clips:
-        raise ValueError(f"{cfg.name}: babble, SSN or competing talkers need reserved clips and its sources have none")
-    return TalkerPool(clips, cfg.babble_min_speakers)
+    speakers: dict[tuple[str, str], int] = {}
+    for name in donors:
+        path = work_dir(cfg) / "index" / f"{name}.parquet"
+        people = asyncio.run(read_parquet(path, ["language", "speaker"], pl.col("speaker").is_not_null()))
+        speakers |= {(name, r[0]): r[1] for r in people.group_by("language").agg(pl.col("speaker").n_unique()).rows()}
+        clips += [
+            Clip(**row) for row in asyncio.run(read_parquet(path, fields, pl.col("reserved"))).iter_rows(named=True)
+        ]
+    pool = TalkerPool(clips, speakers, cfg.babble_min_speakers)
+    for name in _needs_talkers(cfg):
+        path = work_dir(cfg) / "index" / f"{name}.parquet"
+        planned = asyncio.run(read_parquet(path, ["split"], ~pl.col("reserved")))["split"].unique()
+        if lacking := [s for s in planned if not pool.has(cfg.talker_donors.get(name, name), s)]:
+            donor = cfg.talker_donors.get(name, name)
+            raise ValueError(
+                f"{cfg.name}: {name} has rows in {lacking[0]}, where {donor} has no reserved clip to draw talkers from"
+            )
+    return pool
 
 
 def _print_summary(df: pl.DataFrame, bytes_per_hour: float) -> list[dict]:
@@ -682,6 +715,7 @@ def run_plan(cfg: BuildConfig, limit: str | None = None) -> None:
     unknown = [name for name in cfg.sources if name not in SOURCES]
     if unknown:
         raise ValueError(f"no index adapter for source {unknown[0]!r}; have {sorted(SOURCES)}")
+    _check_donors(cfg)
 
     pool = NoisePool(*(raw_dir(n) if n in cfg.noise else None for n in ("demand", "wham", "musan")))
     rirs = RirPool(raw_dir("rirs")) if cfg.room_p > 0 else None
