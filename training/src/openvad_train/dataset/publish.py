@@ -22,6 +22,7 @@ from openvad_train.dataset.construct import PlanMismatch
 from openvad_train.dataset.labels import apply_gap_rule, rasterise
 from openvad_train.dataset.parquet_io import read_parquet, write_parquet
 from openvad_train.dataset.plan import PLAN_SCHEMA
+from openvad_train.dataset.sources.librivad import VAL_SOURCE
 from openvad_train.fetch.common import cache_dir, file_hash, raw_dir, read_manifest, take_share_lock, write_manifest
 
 
@@ -187,8 +188,8 @@ def _publish(cfg: BuildConfig) -> None:
 
     sources = set(rows["source"]) | set(cfg.noise)
     # `librivad` rows can read the validation split of `librivad-val`, whose own manifest would otherwise go unrecorded.
-    if rows["source_path"].str.starts_with("datasets/raw/librivad-val/").any():
-        sources.add("librivad-val")
+    if rows["source_path"].str.starts_with(f"datasets/raw/{VAL_SOURCE}/").any():
+        sources.add(VAL_SOURCE)
     sources = sorted(sources)
     manifest_paths = {name: raw_dir(name) / "manifest.json" for name in sources}
     if absent := [name for name, path in manifest_paths.items() if not path.exists()]:
