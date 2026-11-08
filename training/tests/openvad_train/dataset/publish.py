@@ -260,6 +260,19 @@ def test_manifest_records_the_rirs_hash_when_a_row_has_a_room(data):
     assert m["raw_sources"]["rirs"] == file_hash(data / "datasets/raw/rirs/manifest.json", "sha256")
 
 
+def test_a_row_with_a_room_lists_its_rir_set_and_licence(data):
+    m = read_manifest(dataset_root(build(data, room=True)))
+    assert m is not None
+    assert m["licences"] == {"rirs/but": ["CC BY 4.0"], "swc": ["CC0"]}
+
+
+def test_a_rir_set_without_a_recorded_licence_fails(data):
+    cfg = build(data, room=True)
+    (data / "datasets/raw/rirs/manifest.json").write_text('{"dataset": "rirs", "licences": {}}')
+    with pytest.raises(ValueError, match="no licence for but"):
+        run_publish(cfg)
+
+
 def test_a_missing_rirs_manifest_fails_when_a_row_has_a_room(data):
     cfg = build(data, room=True)
     (data / "datasets/raw/rirs/manifest.json").unlink()

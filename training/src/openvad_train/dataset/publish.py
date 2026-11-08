@@ -225,7 +225,8 @@ def _publish(cfg: BuildConfig) -> None:
             "delays": _delay_table(),
             "licences": {
                 s: sorted(rows.filter(pl.col("source") == s)["licence"].unique()) for s in sorted(set(rows["source"]))
-            },
+            }
+            | _rir_licences(rows),
             "raw_sources": {name: file_hash(path, "sha256") for name, path in manifest_paths.items()},
             "samples": {split: rows.filter(pl.col("split") == split).height for split in SPLITS},
             "planned_shards": len(planned),
@@ -235,6 +236,21 @@ def _publish(cfg: BuildConfig) -> None:
         },
     )
     log.info("published %d samples to %s (%s)", rows.height, root, "interim" if missing else "complete")
+
+
+def _rir_licences(rows: pl.DataFrame) -> dict[str, list[str]]:
+    """`rirs/<set>` to its licence, for every RIR set a room row reads (BUT ReverbDB is CC BY 4.0 and needs credit).
+
+    The set is the directory under `datasets/raw/rirs/` that `rir_id` points into; the licences are the fetcher's.
+    """
+    ids = rows["rir_id"].drop_nulls()
+    if ids.is_empty():
+        return {}
+    licences = (read_manifest(raw_dir("rirs")) or {}).get("licences", {})
+    sets = sorted({rir_id.split("/")[3] for rir_id in ids})
+    if absent := [s for s in sets if s not in licences]:
+        raise ValueError(f"the rirs manifest records no licence for {', '.join(absent)}")
+    return {f"rirs/{s}": [licences[s]] for s in sets}
 
 
 def set_small(root: Path, hours: float) -> None:

@@ -86,7 +86,7 @@ def make_build(
     if room:
         (root / RIR_FILE).parent.mkdir(parents=True)
         sf.write(root / RIR_FILE, synthetic_rir(), 16000, subtype="FLOAT")
-        (root / "datasets/raw/rirs/manifest.json").write_text('{"dataset": "rirs"}')
+        (root / "datasets/raw/rirs/manifest.json").write_text('{"dataset": "rirs", "licences": {"but": "CC BY 4.0"}}')
     rows = [
         _row(
             root, "swc", "c0", "train", "t1", 3.0, [(500, 2500)], **({"room": True, "rir_id": RIR_FILE} if room else {})
