@@ -22,6 +22,7 @@ from openvad_train.fetch.voxpopuli import VOXPOPULI_LANGS
 
 
 SOURCE = "voxpopuli"
+CUTTING = "split_over"
 MFA_ALIGNED = True
 REPORTS = True
 RAW_PREFIX = Path("datasets/raw/voxpopuli")

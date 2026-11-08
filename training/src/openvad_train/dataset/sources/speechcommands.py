@@ -21,6 +21,7 @@ from openvad_train.dataset.schema import Clip, Split, Timing
 
 
 SOURCE = "speech-commands"
+CUTTING = None
 MFA_ALIGNED = True
 ARCHIVE = "speech_commands_v0.02"
 RAW_PREFIX = Path("datasets/raw/speech-commands") / ARCHIVE

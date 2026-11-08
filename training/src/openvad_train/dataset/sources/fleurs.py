@@ -19,6 +19,7 @@ from openvad_train.fetch.fleurs import FLEURS_LANGS
 
 
 SOURCE = "fleurs"
+CUTTING = None
 MFA_ALIGNED = True
 REPORTS = True
 RAW_PREFIX = Path("datasets/raw/fleurs")

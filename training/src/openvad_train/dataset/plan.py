@@ -22,7 +22,7 @@ import polars as pl
 from openvad_train.dataset.align import WORDS_SCHEMA, _dropped_files
 from openvad_train.dataset.codecs import AMR_MODES_BPS
 from openvad_train.dataset.config import DEMAND_CATEGORIES, FULL, SLICE, BuildConfig, work_dir
-from openvad_train.dataset.cutting import Chunk, cut_long, rebase
+from openvad_train.dataset.cutting import Chunk, cut_long, rebase, split_over
 from openvad_train.dataset.index import SOURCES, apply_cap_rank
 from openvad_train.dataset.labels import apply_gap_rule, rasterise, speech_ratio
 from openvad_train.dataset.mix import padded_length
@@ -40,7 +40,6 @@ _CLIPS_PER_BATCH = 1024
 _ROWS_PER_FRAME = 50_000
 
 AUGMENTED_SOURCES = {"common-voice", "mls", "fleurs", "swc"}
-_CUT_SOURCES = {"mls", "swc"}
 # Competing talker, babble and SSN need reserved clips and city needs WHAM!, which a later task adds to the draws.
 _CONDITIONS_WITH_A_DRAW = {"clean", *DEMAND_CATEGORIES}
 
@@ -242,8 +241,8 @@ def draw_sample(
             "treatment": "as_is",
             "audio_filepath": clip.path,
             "audio_format": "file",
-            "offset": clip.offset_s,
-            "duration": clip.duration_s,
+            "offset": clip.offset_s + start_ms / 1000,
+            "duration": clip.duration_s if chunk is None else (end_ms - start_ms) / 1000,
             "speech_ratio": speech_ratio(speech_ms, end_ms - start_ms),
             "speech_offset_n": 0,
             "total_n": source_n,
@@ -298,6 +297,24 @@ def _has_speech_frame(timing: Timing, start_ms: int, end_ms: int) -> bool:
     return bool((rasterise(speech, mask, (end_ms - start_ms) * SAMPLES_PER_MS) == 1).any())
 
 
+def _cutting(source: str) -> str | None:
+    return getattr(SOURCES.get(source), "CUTTING", None)
+
+
+def _split_rows(clip: Clip, timing: Timing, cfg: BuildConfig, pool: NoisePool | None, duration_ms: int) -> list[dict]:
+    """An as-is clip above 30 s as samples of at most 30 s cut at word gaps (`split_over`), not padded. Trailing
+    audio after the last word joins the last sample. A clip without a word stays whole.
+    """
+    inside = dataclasses.replace(
+        timing, speech_ms=rebase(timing.speech_ms, 0, duration_ms), mask_ms=rebase(timing.mask_ms, 0, duration_ms)
+    )
+    chunks = split_over(inside)
+    if not chunks:
+        return [draw_sample(clip, timing, cfg, pool)]
+    ends = [c.end_ms for c in chunks[:-1]] + [duration_ms]
+    return [draw_sample(clip, inside, cfg, pool, Chunk(c.start_ms, end)) for c, end in zip(chunks, ends, strict=True)]
+
+
 def clip_rows(
     clip: Clip, timing: Timing, cfg: BuildConfig, pool: NoisePool | None = None, counts: Counter | None = None
 ) -> list[dict]:
@@ -308,10 +325,12 @@ def clip_rows(
     """
     if clip.reserved:
         return []
-    if clip.source not in AUGMENTED_SOURCES:
-        return [draw_sample(clip, timing, cfg, pool)]
     duration_ms = round(clip.duration_s * 1000)
-    if clip.source not in _CUT_SOURCES:
+    if clip.source not in AUGMENTED_SOURCES:
+        if _cutting(clip.source) == "split_over" and duration_ms > 30_000:
+            return _split_rows(clip, timing, cfg, pool, duration_ms)
+        return [draw_sample(clip, timing, cfg, pool)]
+    if _cutting(clip.source) != "cut_long":
         return [draw_sample(clip, timing, cfg, pool)] if _has_speech_frame(timing, 0, duration_ms) else []
     # Inside the clip: the adapter's timeline may round a millisecond past it.
     inside = dataclasses.replace(

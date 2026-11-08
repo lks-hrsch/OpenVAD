@@ -18,6 +18,7 @@ from openvad_train.dataset.sources import count_lines
 
 
 SOURCE = "mls"
+CUTTING = "cut_long"
 MFA_ALIGNED = True
 REPORTS = True
 RAW_PREFIX = Path("datasets/raw/mls")

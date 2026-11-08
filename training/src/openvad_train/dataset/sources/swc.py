@@ -30,6 +30,7 @@ from openvad_train.fetch.swc import audio_licence
 
 
 SOURCE = "swc"
+CUTTING = "cut_long"
 MFA_ALIGNED = False
 LANGUAGES = {"english": "en", "german": "de", "dutch": "nl"}
 # Pointers are relative to $OPENVAD_DATA_DIR; `raw` itself is only the place to read from.

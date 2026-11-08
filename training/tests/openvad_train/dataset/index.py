@@ -291,8 +291,14 @@ def test_every_adapter_is_registered_under_its_raw_folder_and_says_whether_mfa_l
     for name, module in index.SOURCES.items():
         assert name == module.SOURCE
         assert isinstance(module.MFA_ALIGNED, bool)
+        assert module.CUTTING in (None, "cut_long", "split_over")
         assert callable(module.clips)
         assert hasattr(module, "timings") == (not module.MFA_ALIGNED or name == "speech-commands")
+    assert {n: m.CUTTING for n, m in index.SOURCES.items() if m.CUTTING} == {
+        "swc": "cut_long",
+        "mls": "cut_long",
+        "voxpopuli": "split_over",
+    }
 
 
 def test_a_source_without_a_raw_manifest_yet_is_indexed_with_a_null_hash_and_a_warning(data_dir, monkeypatch, caplog):

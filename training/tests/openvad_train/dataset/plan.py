@@ -7,6 +7,7 @@ import asyncio
 import dataclasses
 import json
 from collections import Counter
+from itertools import pairwise
 from types import SimpleNamespace
 from typing import Literal
 
@@ -396,6 +397,30 @@ def test_frame_labels_are_used_as_they_are_so_their_gap_is_zero():
 
 def test_as_is_row_without_speech_stays():
     assert len(clip_rows(clip("a", "speech-commands"), timing("a", speech=[]), SLICE)) == 1
+
+
+def test_a_voxpopuli_clip_over_30_s_is_cut_at_gaps_into_samples_of_at_most_30_s():
+    c = clip("vp", "voxpopuli", duration_s=70.0, offset_s=100.0)
+    t = timing("vp", speech=words(80, length=500, gap=300, first=1000))  # words to 65 s, then 5 s of silence
+    rows = clip_rows(c, t, SLICE)
+    assert len(rows) >= 3
+    assert all(r["treatment"] == "as_is" and r["duration"] <= 30.0 for r in rows)
+    spans = sorted((r["offset"], r["offset"] + r["duration"]) for r in rows)
+    assert spans[0][0] == 100.0
+    assert spans[-1][1] == pytest.approx(170.0)
+    assert all(a[1] == pytest.approx(b[0]) for a, b in pairwise(spans))
+    # Every cut is in a gap: no word crosses a sample's edge.
+    for r in rows:
+        assert all(s >= 0 and e <= round(r["duration"] * 1000) for s, e in r["speech_ms"])
+    assert sum(len(r["speech_ms"]) for r in rows) == 80
+    assert len({r["sample_id"] for r in rows}) == len(rows)
+    assert all(r["source_offset_n"] == round(r["offset"] * 16000) for r in rows)
+    assert all(r["source_n"] == round(r["duration"] * 16000) for r in rows)
+
+
+def test_a_voxpopuli_clip_of_30_s_or_less_stays_one_sample():
+    rows = clip_rows(clip("vp", "voxpopuli", duration_s=29.0), timing("vp", speech=words(40)), SLICE)
+    assert [(r["offset"], r["duration"]) for r in rows] == [(0.0, 29.0)]
 
 
 def plan_frame(sources: list[str], n: int = 300) -> pl.DataFrame:

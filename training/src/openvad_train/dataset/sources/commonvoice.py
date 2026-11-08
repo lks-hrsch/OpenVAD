@@ -22,6 +22,7 @@ from openvad_train.fetch.commonvoice import CV_LOCALES, read_tsv
 log = logging.getLogger(__name__)
 
 SOURCE = "common-voice"
+CUTTING = None
 MFA_ALIGNED = True
 REPORTS = True
 RAW_PREFIX = Path("datasets/raw/common-voice")
