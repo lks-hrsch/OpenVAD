@@ -1,14 +1,14 @@
 language	acoustic	acoustic_version	dictionary	dictionary_version	g2p	g2p_version	note	status
-en	english_mfa	3.1.0	english_mfa	3.1.0	english_us_mfa	3.0.0	US G2P for out-of-vocabulary words; other dialects have their own G2P	listed
+en	english_mfa	3.1.0	english_mfa	3.1.0	english_us_mfa	3.0.0	aligned in the pilot (MFA 3.4.3, 200 Common Voice clips, 2026-11-08); versions read: acoustic 3.1.0, G2P 2.2.6.dev1+g6874b58.d20230320; US G2P for out-of-vocabulary words; other dialects have their own G2P	downloaded
 de	german_mfa	3.0.0	german_mfa	3.0.0	german_mfa	3.0.0	run through MFA 3.4.3 on synthetic speech (2026-11-07)	downloaded
 fr	french_mfa	3.0.0	french_mfa	3.0.0	french_mfa	3.0.0		listed
 es	spanish_mfa	3.3.0	spanish_spain_mfa	3.3.0	spanish_spain_mfa	3.3.0	dialect choice: no dictionary named spanish_mfa exists at 3.3.0; Spain or Latin America (spanish_latin_america_mfa) is for the owner	listed
-it	italian_cv	2.0.0	italian_cv	2.0.0			no G2P: out-of-vocabulary words become spn (owner, 2026-11-06); VoxCommunis model, MFA 3.4 compatibility not verified	listed
+it	italian_cv	2.0.0	italian_cv	2.0.0			aligned in the pilot (MFA 3.4.3, 200 Common Voice clips, 2026-11-08); version read: acoustic 2.0.0b9 (an MFA 2 model with meta.yaml); no G2P: out-of-vocabulary words become spn (owner, 2026-11-06); VoxCommunis model; drop share in docs/notes/forced-alignment.md	downloaded
 nl	dutch_cv	2.0.0	dutch_cv	2.0.0			no G2P: out-of-vocabulary words become spn (owner, 2026-11-06); VoxCommunis model, MFA 3.4 compatibility not verified	listed
 pl	polish_mfa	2.0.0a	polish_mfa	2.0.0a	polish_mfa	2.0.0a		listed
 pt	portuguese_mfa	2.0.0a	portuguese_mfa	2.0.0a	portuguese_brazil_mfa	2.0.0a	dialect choice: the G2P is Brazilian; portuguese_portugal_mfa is the other; for the owner	listed
-ja	japanese_mfa	3.0.0	japanese_mfa	3.0.0	japanese_katakana_mfa	3.0.0	needs the MFA tokeniser; not run here	listed
-zh	mandarin_mfa	3.0.0	mandarin_china_mfa	3.0.0	mandarin_china_mfa	3.0.0	needs the MFA tokeniser; not run here; Taiwan variants exist (mandarin_taiwan_mfa)	listed
+ja	japanese_mfa	3.0.0	japanese_mfa	3.0.0	japanese_katakana_mfa	3.0.0	aligned in the pilot (MFA 3.4.3, 200 Common Voice clips, 2026-11-08) with the sudachipy tokeniser of tools/mfa; versions read: acoustic 3.0, G2P 3.0.0a2.dev0+g940e907.d20230824	downloaded
+zh	mandarin_mfa	3.0.0	mandarin_china_mfa	3.0.0	mandarin_china_mfa	3.0.0	aligned in the pilot (MFA 3.4.3, 200 Common Voice clips, 2026-11-08) with the spacy-pkuseg tokeniser of tools/mfa; versions read: acoustic 3.0.0, G2P 3.0.0; Taiwan variants exist (mandarin_taiwan_mfa)	downloaded
 ru	russian_mfa	3.1.0	russian_mfa	3.1.0	russian_mfa	3.1.0		listed
 sv	swedish_mfa	3.0.0	swedish_mfa	3.0.0	swedish_mfa	3.0.0		listed
 tr	turkish_mfa	3.0.0	turkish_mfa	3.0.0	turkish_mfa	3.0.0		listed

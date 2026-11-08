@@ -39,7 +39,7 @@ def test_italian_and_dutch_have_no_g2p_and_others_do():
 def test_every_row_says_how_far_it_is_verified_and_open_choices_stay_open():
     models = load_models()
     assert {m.status for m in models.values()} <= {"downloaded", "listed", "open"}
-    assert {lang for lang, m in models.items() if m.status == "downloaded"} == {"de"}
+    assert {lang for lang, m in models.items() if m.status == "downloaded"} == {"de", "en", "it", "ja", "zh"}
     for language in ("cs", "bg", "uk", "ca"):
         assert models[language].status == "open"
         assert not models[language].acoustic
