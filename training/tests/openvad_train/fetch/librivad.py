@@ -4,6 +4,7 @@
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 import json
+import shutil
 import subprocess
 import sys
 import zipfile
@@ -300,11 +301,59 @@ def test_val_counts_are_recorded(fake_upstream):
 
 def test_val_replaces_what_a_killed_run_left(fake_upstream):
     out = common.raw_dir("librivad-val")
-    for stale in (out / "generated/old.wav", out / "labels/old.npy"):
+    for stale in (out / "generated/old.wav", out / "labels/old.npy", out / ".work/old.wav"):
         stale.parent.mkdir(parents=True, exist_ok=True)
         stale.touch()
     librivad.fetch_librivad_val()
     assert not list(out.rglob("old.*"))
+
+
+def test_val_works_in_a_local_temporary_directory_that_goes_even_on_failure(fake_upstream, monkeypatch):
+    # Symlinks cannot be read back on the SMB share, so the working copy must not be under the data directory.
+    cwds: list[Path] = []
+    run = subprocess.run
+
+    def recording_run(cmd, **kw):
+        cwds.append(kw["cwd"])
+        return run(cmd, **kw)
+
+    monkeypatch.setattr(librivad.subprocess, "run", recording_run)
+    librivad.fetch_librivad_val()
+    assert len(set(cwds)) == 1
+    work = cwds[0]
+    assert work.name.startswith("openvad-librivad-val-")
+    assert common.data_dir() not in work.parents
+    assert not work.exists()
+    (common.raw_dir("librivad-val") / "manifest.json").unlink()
+    monkeypatch.setenv(FAIL_PAIR_ENV, "1-2-0000")
+    with pytest.raises(subprocess.CalledProcessError):
+        librivad.fetch_librivad_val()
+    assert not cwds[-1].exists()
+
+
+def test_val_move_that_fails_leaves_no_manifest_and_the_next_run_cleans_up(fake_upstream, monkeypatch):
+    out = common.raw_dir("librivad-val")
+    move = shutil.move
+    moves = []
+
+    def failing_move(src, dst):
+        moves.append(dst)
+        if len(moves) == 2:
+            raise OSError("share gone")
+        return move(src, dst)
+
+    monkeypatch.setattr(librivad.shutil, "move", failing_move)
+    with pytest.raises(OSError, match="share gone"):
+        librivad.fetch_librivad_val()
+    assert common.read_manifest(out) is None
+    assert (out / "generated").is_dir()  # the partial result stays until the next run
+    monkeypatch.setattr(librivad.shutil, "move", move)
+    librivad.fetch_librivad_val()
+    assert common.is_complete(out)
+    assert (common.read_manifest(out) or {})["counts"] == {
+        "LibriSpeech/dev-clean": 24,
+        "LibriSpeechConcat/dev-clean": 12,
+    }
 
 
 def _fails_with(capfd, message: str) -> None:
