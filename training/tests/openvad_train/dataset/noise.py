@@ -398,3 +398,12 @@ def test_a_silent_foreground_has_no_tir_to_measure(tmp_path):
     speech, active = competing_setup(tmp_path)
     with pytest.raises(ValueError, match="no speech"):
         mix_competing(np.zeros_like(speech), active, [segment(0, 8000)], 5.0, tmp_path)
+
+
+def test_a_baseline_lowers_the_competing_talker_when_part_of_the_clip_is_its_own_noise(tmp_path):
+    speech, active = competing_setup(tmp_path)
+    segments = [segment(8000, 24000)]
+    plain = mix_competing(speech, active, segments, 10.0, tmp_path)
+    based = mix_competing(speech, active, segments, 10.0, tmp_path, baseline_snr_db=0.0)
+    assert measured_tir(plain, speech, active, segments) == pytest.approx(10.0, abs=0.5)
+    assert measured_tir(based, speech, active, segments) == pytest.approx(10.0 + 3.01, abs=0.5)

@@ -19,10 +19,27 @@ def rms(x: np.ndarray) -> float:
     return float(np.sqrt(np.mean(np.square(x, dtype=np.float64))))
 
 
-def mix_at_snr(speech: np.ndarray, noise: np.ndarray, active: np.ndarray, snr_db: float) -> np.ndarray:
+def speech_rms(speech: np.ndarray, active: np.ndarray, baseline_snr_db: float | None = None) -> float:
+    """RMS of `speech` over the `active` samples. A clip that carries noise of its own (Common Voice) has its SNR
+    estimated by WADA-SNR, `baseline_snr_db`, and only the speech share of that power counts.
+    """
+    level = rms(speech[active])
+    if baseline_snr_db is None:
+        return level
+    snr = 10 ** (baseline_snr_db / 10)
+    return level * float(np.sqrt(snr / (1 + snr)))
+
+
+def mix_at_snr(
+    speech: np.ndarray,
+    noise: np.ndarray,
+    active: np.ndarray,
+    snr_db: float,
+    baseline_snr_db: float | None = None,
+) -> np.ndarray:
     """Speech plus noise, the noise gain set so speech RMS over `active` samples
     is `snr_db` above noise RMS over the same samples. The gain applies to the
-    whole noise, including outside `active`.
+    whole noise, including outside `active`. `baseline_snr_db` is as in `speech_rms`.
     """
     if active.dtype != bool:  # integer labels would silently fancy-index
         raise TypeError(f"active must be a boolean mask, got {active.dtype}")
@@ -30,10 +47,10 @@ def mix_at_snr(speech: np.ndarray, noise: np.ndarray, active: np.ndarray, snr_db
         raise ValueError("speech, noise and active must have the same shape")
     if not active.any():
         raise ValueError("no active samples to measure the SNR on")
-    speech_rms, noise_rms = rms(speech[active]), rms(noise[active])
-    if speech_rms == 0 or noise_rms == 0:
+    speech_level, noise_level = speech_rms(speech, active, baseline_snr_db), rms(noise[active])
+    if speech_level == 0 or noise_level == 0:
         raise ValueError("speech or noise is silent over the active samples; the SNR is undefined")
-    gain = speech_rms / (noise_rms * 10 ** (snr_db / 20))
+    gain = speech_level / (noise_level * 10 ** (snr_db / 20))
     return (speech + gain * noise).astype(np.float32)
 
 

@@ -22,7 +22,7 @@ from scipy.linalg import solve_toeplitz
 
 from openvad_train.dataset.channel import apply_rir, load_rir
 from openvad_train.dataset.codecs import DecodeError
-from openvad_train.dataset.mix import SAMPLE_RATE, read_span, rms
+from openvad_train.dataset.mix import SAMPLE_RATE, read_span, rms, speech_rms
 from openvad_train.dataset.schema import Clip
 
 
@@ -262,13 +262,19 @@ class Segment(NamedTuple):
 
 
 def mix_competing(
-    speech: np.ndarray, active: np.ndarray, segments: list[Segment], tir_db: float, raw: Path
+    speech: np.ndarray,
+    active: np.ndarray,
+    segments: list[Segment],
+    tir_db: float,
+    raw: Path,
+    baseline_snr_db: float | None = None,
 ) -> np.ndarray:
     """`speech` plus the segments' talkers, each reverberated with its RIR and low-passed (ADR 0022), at `tir_db`.
 
     The TIR is the RMS of `speech` over the `active` samples against the RMS of the talkers over the samples the
     segments cover, which is how loud the competing talker is when it talks. Measured over `active` alone it would
     fall with the coverage and can be zero where the talker does not overlap a word. Segments must not overlap.
+    `baseline_snr_db` is as in `speech_rms`.
     `DecodeError` for a talker file that cannot be read.
     """
     if active.dtype != bool or active.shape != speech.shape:
@@ -288,5 +294,5 @@ def mix_competing(
         lowpass = signal.butter(4, seg.lowpass_hz, "lowpass", fs=SAMPLE_RATE, output="sos")
         track[seg.start_n : seg.end_n] = signal.sosfiltfilt(lowpass, talker)
         covered[seg.start_n : seg.end_n] = True
-    gain = rms(speech[active]) / (rms(track[covered]) * 10 ** (tir_db / 20))
+    gain = speech_rms(speech, active, baseline_snr_db) / (rms(track[covered]) * 10 ** (tir_db / 20))
     return (speech + gain * track).astype(np.float32)

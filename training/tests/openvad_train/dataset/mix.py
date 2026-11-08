@@ -21,6 +21,7 @@ from openvad_train.dataset.mix import (
     place,
     protect_peak,
     read_span,
+    speech_rms,
     synth_click,
     synth_dtmf,
     wada_snr,
@@ -249,3 +250,25 @@ def test_a_transient_at_0_db_can_double_the_peak_so_protect_peak_must_come_after
     out = add_transients(x, [{"kind": "click", "offset_n": 0, "peak_db": 0.0}], np.random.default_rng(0))
     assert np.abs(out).max() > 1.0
     assert np.abs(protect_peak(out)).max() <= 1.0
+
+
+def measured_snr(mixed, speech, active):
+    return 20 * np.log10(np.sqrt(np.mean(speech[active] ** 2)) / np.sqrt(np.mean((mixed - speech)[active] ** 2)))
+
+
+def test_a_baseline_counts_only_the_speech_share_of_the_clip_power():
+    x = sine(16000)
+    active = np.ones(16000, bool)
+    assert speech_rms(x, active) == pytest.approx(0.3 / np.sqrt(2))
+    assert speech_rms(x, active, 0.0) == pytest.approx(0.3 / np.sqrt(2) / np.sqrt(2))  # half the power is noise
+    assert speech_rms(x, active, 100.0) == pytest.approx(speech_rms(x, active), rel=1e-9)
+
+
+def test_mix_at_snr_with_a_baseline_sets_the_snr_against_the_estimated_speech_power():
+    speech, noise, active = sine(16000), white(16000), np.ones(16000, bool)
+    plain = mix_at_snr(speech, noise, active, 10.0)
+    assert measured_snr(plain, speech, active) == pytest.approx(10.0, abs=0.05)
+    # Half of the clip is its own noise, so the speech is 3 dB below the clip and the noise follows it down.
+    based = mix_at_snr(speech, noise, active, 10.0, baseline_snr_db=0.0)
+    assert measured_snr(based, speech, active) == pytest.approx(10.0 + 3.01, abs=0.05)
+    assert np.array_equal(mix_at_snr(speech, noise, active, 10.0, baseline_snr_db=None), plain)
