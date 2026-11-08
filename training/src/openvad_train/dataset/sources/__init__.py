@@ -6,6 +6,8 @@
 """One adapter per source, mirroring `openvad_train.fetch`."""
 
 import gzip
+import io
+import wave
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -22,7 +24,21 @@ def count_lines(path: Path) -> int:
         return sum(1 for _ in f)
 
 
+def _seconds(path: Path) -> float:
+    """Length from the header. A plain PCM WAV is read from its first 4 KB in one request, since libsndfile's many
+    small reads cost a round trip each over the share (7 times slower on LibriVAD's 252,396 wavs); anything else
+    is left to soundfile.
+    """
+    try:
+        with path.open("rb") as f:
+            head = f.read(4096)
+        with wave.open(io.BytesIO(head)) as w:
+            return w.getnframes() / w.getframerate()
+    except (wave.Error, EOFError):
+        return sf.info(path).duration
+
+
 def wav_durations(files: list[Path]) -> list[float]:
     """Seconds of each audio file from its header, read in parallel."""
     with ThreadPoolExecutor(_THREADS) as pool:
-        return list(pool.map(lambda f: sf.info(f).duration, files))
+        return list(pool.map(_seconds, files))
