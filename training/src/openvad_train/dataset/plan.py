@@ -20,7 +20,7 @@ import numpy as np
 import polars as pl
 
 from openvad_train.dataset.align import WORDS_SCHEMA, _dropped_files
-from openvad_train.dataset.channel import RirPool
+from openvad_train.dataset.channel import SUPPRESSION_METHODS, RirPool
 from openvad_train.dataset.codecs import AMR_MODES_BPS
 from openvad_train.dataset.config import DEMAND_CATEGORIES, FULL, SLICE, BuildConfig, work_dir
 from openvad_train.dataset.cutting import Chunk, cut_long, rebase, split_over
@@ -172,7 +172,7 @@ def _draw_mix_and_chain(cfg: BuildConfig, total_n: int, rng: np.random.Generator
         else None
     )
     clip_drive_db = float(rng.uniform(*cfg.clip_drive_db)) if rng.random() < cfg.clip_p else None
-    suppression = str(rng.choice(("wiener", "spectral_subtraction"))) if rng.random() < cfg.suppression_p else None
+    suppression = str(rng.choice(SUPPRESSION_METHODS)) if rng.random() < cfg.suppression_p else None
     codec = str(rng.choice(list(cfg.codec_shares), p=list(cfg.codec_shares.values())))
     return {
         "condition": condition,

@@ -156,24 +156,6 @@ def test_impulse_lands_at_table_delay(codec, bitrate):
     assert abs(np.argmax(np.abs(y)) / 16 - (500 + delay_ms(codec))) <= 10
 
 
-@needs_ffmpeg
-@pytest.mark.parametrize(
-    ("codec", "bitrate"),
-    [
-        ("g722", 64000),
-        ("opus", 12000),
-        ("opus", 32000),
-        ("amr_wb", 6600),
-        ("amr_wb", 23850),
-        ("amr_nb", 4750),
-        ("amr_nb", 12200),
-    ],
-)
-def test_committed_delay_matches_a_fresh_measurement(codec, bitrate):
-    require_encoders(encoder_of(codec))
-    assert measure_delay(codec, bitrate) == pytest.approx(delay_ms(codec), abs=0.1)
-
-
 def committed_measurements() -> list[tuple[str, int, float]]:
     table = json.loads(Path(codecs.__file__).with_name("codec_delays.json").read_text())["measured_ms"]
     return [(codec, int(bitrate), ms) for codec, by_bitrate in table.items() for bitrate, ms in by_bitrate.items()]
