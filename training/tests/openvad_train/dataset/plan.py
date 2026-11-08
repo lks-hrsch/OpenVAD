@@ -1303,7 +1303,6 @@ def test_only_reserved_clips_of_the_augmented_sources_become_talkers(as_is_data)
         name="openvad-slice",
         sources=("swc", "ami", "librivad"),
         condition_shares={"babble": 0.5, "competing": 0.5},
-        room_p=0.0,
     )
     run_index(cfg)
     index_dir = as_is_data / "datasets/processed/work/openvad-slice/index"
@@ -1419,7 +1418,7 @@ BABBLE_HALF = {"clean": 0.5, "babble": 0.5}
 def write_index(cfg, source: str, clips: list[Clip], reserved: set[str]) -> None:
     out = work_dir(cfg) / "index"
     out.mkdir(parents=True, exist_ok=True)
-    frame = index._frame(clips, {(c.split, c.language, c.speaker) for c in clips if c.clip_id in reserved})
+    frame = index._frame(clips, {(c.split, c.language, str(c.speaker)) for c in clips if c.clip_id in reserved})
     asyncio.run(write_parquet({out / f"{source}.parquet": frame}))
 
 
@@ -1444,3 +1443,11 @@ def test_a_split_with_rows_and_no_reserved_clip_to_draw_from_is_refused_before_p
     write_index(cfg, "mls", [dataclasses.replace(c, reserved=False) for c in clips], {"t0", "t1"})
     with pytest.raises(ValueError, match="rows in validation, where mls has no reserved clip"):
         plan_module._talker_pool(cfg)
+
+
+def test_a_competing_share_without_rooms_is_refused_before_any_work(data):
+    with pytest.raises(ValueError, match="needs room_p above 0"):
+        run_plan(dataclasses.replace(FULL, name="no-rooms", room_p=0.0))
+    no_competing = dataclasses.replace(CONFIG, room_p=0.0, condition_shares={"clean": 0.5, "office": 0.5})
+    run_index(no_competing)
+    run_plan(no_competing)  # the other conditions need no RIR

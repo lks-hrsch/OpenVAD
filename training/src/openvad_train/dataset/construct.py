@@ -33,7 +33,7 @@ from openvad_train.dataset.codecs import (
     stored_delay_ms,
     stored_roundtrip,
 )
-from openvad_train.dataset.config import DEMAND_CATEGORIES, FULL, SLICE, BuildConfig, dataset_root, work_dir
+from openvad_train.dataset.config import FULL, SLICE, BuildConfig, dataset_root, work_dir
 from openvad_train.dataset.cutting import rebase
 from openvad_train.dataset.labels import SAMPLES_PER_FRAME, SAMPLES_PER_MS, apply_gap_rule, rasterise
 from openvad_train.dataset.mix import (
@@ -49,7 +49,7 @@ from openvad_train.dataset.mix import (
 )
 from openvad_train.dataset.noise import Segment, build_babble, build_ssn, fit_lpc, mix_competing
 from openvad_train.dataset.parquet_io import read_parquet, write_parquet
-from openvad_train.dataset.plan import PLAN_SCHEMA
+from openvad_train.dataset.plan import NOISE_SET_OF, PLAN_SCHEMA
 from openvad_train.fetch.common import (
     cache_dir,
     data_dir,
@@ -67,8 +67,6 @@ _SPACE_MARGIN_BYTES = 50_000_000_000
 _MAX_FAILED_SHARE = 0.05
 # Words quieter than this are digital silence with labels on it: a real SWC "word" of 3.39 s sat at -83.6 dBFS.
 _MIN_WORD_DBFS = -70.0
-# The noise-file conditions; babble and SSN are built from reserved talkers, and a competing talker from segments.
-_FILE_CONDITIONS = {"city", *DEMAND_CATEGORIES}
 # Seeds of the construction streams next to the plan's (`default_rng([seed, n])`): dither, SSN and transients.
 _DITHER_STREAM, _SSN_STREAM, _TRANSIENT_STREAM = 1, 2, 3
 
@@ -114,7 +112,7 @@ def _noise_of(row: dict, raw: Path) -> np.ndarray:
                 raise ValueError(f"{row['sample_id']}: SSN is fitted to one talker, got {files}")
             lpc = fit_lpc(read_span(str(raw / files[0]), offsets[0], n))
             return build_ssn(lpc, n, np.random.default_rng([row["seed"], _SSN_STREAM]))
-        case c if c in _FILE_CONDITIONS:
+        case c if c in NOISE_SET_OF:  # a file of a pool; babble and SSN are made of talkers, competing of segments
             if len(files) != 1:
                 raise ValueError(f"{row['sample_id']}: a {c} row needs one noise, got {files} at {offsets}")
             file, _, channel = files[0].partition("#")

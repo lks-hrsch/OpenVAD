@@ -43,9 +43,9 @@ _ROWS_PER_FRAME = 50_000
 AUGMENTED_SOURCES = {"common-voice", "mls", "fleurs", "swc"}
 # The noise set a condition draws its file from (MUSAN only adds to the DEMAND categories), and the conditions whose
 # audio is reserved speakers.
-_NOISE_SET_OF = {"city": "wham"} | dict.fromkeys(DEMAND_CATEGORIES, "demand")
-_TALKER_CONDITIONS = ("babble", "ssn", "competing")
-_CONDITIONS = {"clean", *_NOISE_SET_OF, *_TALKER_CONDITIONS}
+NOISE_SET_OF = {"city": "wham"} | dict.fromkeys(DEMAND_CATEGORIES, "demand")
+TALKER_CONDITIONS = ("babble", "ssn", "competing")
+_CONDITIONS = {"clean", *NOISE_SET_OF, *TALKER_CONDITIONS}
 # The reserved talkers and the RIRs of competing segments draw from a stream of their own next to the main one
 # (`default_rng([seed, n])`), so a pool or a RIR tree that is absent never moves another draw.
 _TALKER_STREAM = 10
@@ -344,13 +344,13 @@ def draw_sample(
     if drawn["condition"] == "competing" and not _holds_a_segment(total_n, cfg):
         # Under 0.4 s at the default: no segment fits the coverage cap. The row already has its dither.
         drawn["condition"] = "clean"
-    if pool is not None and drawn["condition"] in _NOISE_SET_OF:
+    if pool is not None and drawn["condition"] in NOISE_SET_OF:
         noise = pool.draw(drawn["condition"], clip.split, rng)
         row["noise_source_ids"] = [noise.source_id(data_dir())]
         row["noise_offsets"] = [noise.offset_n]
     if rirs is not None and drawn["room"]:
         row["rir_id"] = rirs.draw(clip.split, rng).file.relative_to(data_dir()).as_posix()
-    if talkers is not None and drawn["condition"] in _TALKER_CONDITIONS:
+    if talkers is not None and drawn["condition"] in TALKER_CONDITIONS:
         row |= _draw_talkers(
             clip, drawn["condition"], total_n, cfg, talkers, rirs, np.random.default_rng([seed, _TALKER_STREAM])
         )
@@ -639,7 +639,7 @@ def _plan_source(
 
 def _needs_talkers(cfg: BuildConfig) -> list[str]:
     """The augmented sources of `cfg` that have a talker condition to draw."""
-    wanted = any(cfg.condition_shares.get(c, 0) > 0 for c in _TALKER_CONDITIONS)
+    wanted = any(cfg.condition_shares.get(c, 0) > 0 for c in TALKER_CONDITIONS)
     return [name for name in cfg.sources if wanted and name in AUGMENTED_SOURCES]
 
 
@@ -707,11 +707,11 @@ def run_plan(cfg: BuildConfig, limit: str | None = None) -> None:
     wanted = {c for c, share in cfg.condition_shares.items() if share > 0}
     if unknown_conditions := sorted(wanted - _CONDITIONS):
         raise ValueError(f"no draw for condition {unknown_conditions[0]!r}; have {sorted(_CONDITIONS)}")
-    for condition in sorted(wanted & _NOISE_SET_OF.keys()):
-        if _NOISE_SET_OF[condition] not in cfg.noise:
-            raise ValueError(
-                f"{cfg.name}: condition {condition!r} needs {_NOISE_SET_OF[condition]!r} in its noise sets"
-            )
+    for condition in sorted(wanted & NOISE_SET_OF.keys()):
+        if NOISE_SET_OF[condition] not in cfg.noise:
+            raise ValueError(f"{cfg.name}: condition {condition!r} needs {NOISE_SET_OF[condition]!r} in its noise sets")
+    if "competing" in wanted and cfg.room_p <= 0:
+        raise ValueError(f"{cfg.name}: a competing talker has an RIR of its own, which needs room_p above 0")
     unknown = [name for name in cfg.sources if name not in SOURCES]
     if unknown:
         raise ValueError(f"no index adapter for source {unknown[0]!r}; have {sorted(SOURCES)}")
@@ -719,7 +719,7 @@ def run_plan(cfg: BuildConfig, limit: str | None = None) -> None:
 
     pool = NoisePool(*(raw_dir(n) if n in cfg.noise else None for n in ("demand", "wham", "musan")))
     rirs = RirPool(raw_dir("rirs")) if cfg.room_p > 0 else None
-    talkers = _talker_pool(cfg) if wanted & set(_TALKER_CONDITIONS) else None
+    talkers = _talker_pool(cfg) if wanted & set(TALKER_CONDITIONS) else None
     frames: list[pl.DataFrame] = []
     per_source: dict[str, dict] = {}
     for name in cfg.sources:

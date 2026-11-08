@@ -1235,7 +1235,7 @@ def donor(name: str, seconds: float = 4.0, seed: int = 0, silent: bool = False) 
     return path.relative_to(data_dir()).as_posix()
 
 
-def snr_of(flac: bytes, row: dict, start: int = 0, stop: int | None = None) -> float:
+def snr_of(flac: bytes, row: dict) -> float:
     """Speech over (mixed - speech) in dB over the row's word union, with the foreground put back where it was."""
     speech, mixed = place_speech(row), stored(flac)
     active = np.zeros(row["total_n"], bool)
@@ -1254,9 +1254,6 @@ def test_city_noise_takes_the_channel_named_in_its_id(raw):
         flac, _ = construct_sample(row, raw)
         results[channel] = stored(flac) - place_speech(row)
         assert snr_of(flac, row) == pytest.approx(5.0, abs=0.3)
-    assert (
-        abs(np.corrcoef(results[0][1000:], two[1000 : len(results[0]), 0] if False else results[0][1000:])[0, 1]) == 1
-    )
     # The noise comes from the named channel: it correlates with that channel and not with the other.
     n = len(results[0]) - 1000
     for channel in (0, 1):

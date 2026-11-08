@@ -245,7 +245,7 @@ def _publish(cfg: BuildConfig) -> None:
 
 
 # The conditions whose `noise_source_ids` are speech from reserved speakers, not a noise file.
-_TALKER_CONDITIONS = ("babble", "ssn")
+_DONOR_NOISE_CONDITIONS = ("babble", "ssn")
 
 
 def _rir_ids(rows: pl.DataFrame) -> set[str]:
@@ -260,7 +260,7 @@ def _noise_licences(rows: pl.DataFrame) -> dict[str, list[str]]:
     The set is the directory under `datasets/raw/` that the path points into. DEMAND and WHAM! have one licence in
     their raw manifest; MUSAN's differ per file, so its licences are those of the files the rows use.
     """
-    ids = rows.filter(~pl.col("condition").is_in(_TALKER_CONDITIONS))["noise_source_ids"].explode().drop_nulls()
+    ids = rows.filter(~pl.col("condition").is_in(_DONOR_NOISE_CONDITIONS))["noise_source_ids"].explode().drop_nulls()
     paths = sorted({i.partition("#")[0] for i in ids})
     licences: dict[str, list[str]] = {}
     for name in sorted({path.split("/")[2] for path in paths}):
@@ -277,7 +277,7 @@ def _noise_licences(rows: pl.DataFrame) -> dict[str, list[str]]:
 
 def _talker_paths(rows: pl.DataFrame) -> set[str]:
     """The files of the reserved speakers that babble, speech-shaped noise and competing talkers read."""
-    noise = rows.filter(pl.col("condition").is_in(_TALKER_CONDITIONS))["noise_source_ids"].explode().drop_nulls()
+    noise = rows.filter(pl.col("condition").is_in(_DONOR_NOISE_CONDITIONS))["noise_source_ids"].explode().drop_nulls()
     segments = rows.filter(pl.col("segments").list.len() > 0)["segments"]
     return {*noise, *(s["source_path"] for segs in segments for s in segs)}
 
