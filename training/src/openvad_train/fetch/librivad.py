@@ -5,6 +5,8 @@
 
 """LibriVAD medium, generated locally by the upstream scripts at a pinned revision."""
 
+import os
+import shutil
 import subprocess
 import zipfile
 from pathlib import Path
@@ -23,7 +25,7 @@ from openvad_train.fetch.common import (
 LIBRIVAD_REPO = "LibriVAD/LibriVAD"
 LIBRIVAD_REV = "bc641946f7df3a9515eb87d4ea194374f03a2dd3"
 # Upstream converts only these two LibriSpeech splits to wav (Scripts/create_LibriSpeech_wav.py),
-# so the unmodified generator writes no val split from dev-clean at this revision.
+# so the unmodified generator writes no val split from dev-clean at this revision; `fetch_librivad_val` does.
 LIBRIVAD_SPLITS = ("train-clean-100", "test-clean")
 LIBRIVAD_ZIPS = ("Files/Noises.zip", "Files/Forced_alignments.zip")
 
@@ -154,3 +156,87 @@ def fetch_librivad_small() -> None:
     }
     write_manifest(out, info)
     (out / ".generate-done").unlink(missing_ok=True)
+
+
+# Upstream converts, concatenates and labels only train-clean-100 and test-clean (create_LibriSpeech_wav.py:81 lists
+# the splits, create_LibriSpeechConcat.py:204 has the dev-clean call commented out, and create_labels.py:132 sits in
+# the code that labels whatever is in its tree), so this calls its functions on dev-clean alone. Paths stay relative
+# to the working copy because upstream finds the label folder by the first `LibriSpeech` in a path.
+# The conversion and the pair writer print a failure and go on, so the counts are checked here.
+LIBRIVAD_VAL_SCRIPT = """
+import sys
+from pathlib import Path
+
+from Scripts import create_LibriSpeech_wav, create_LibriSpeechConcat, create_labels
+
+flac_root = Path(sys.argv[1])
+datasets = Path("Files/Datasets")
+flacs = sorted((flac_root / "dev-clean").rglob("*.flac"))
+create_LibriSpeech_wav.process_files_in_parallel(flacs, flac_root, datasets / "LibriSpeech")
+plain = sorted((datasets / "LibriSpeech/dev-clean").rglob("*.wav"))
+if len(plain) != len(flacs):
+    raise SystemExit(f"{len(plain)} wav files for {len(flacs)} flac files")
+silence = datasets / "LibriSpeech/train100_silence.wav"
+create_LibriSpeechConcat.create_LibriSpeechConcat([str(p) for p in plain], silence)
+for dataset in ("LibriSpeech", "LibriSpeechConcat"):
+    wavs = sorted((datasets / dataset / "dev-clean").rglob("*.wav"))
+    for wav in wavs:
+        create_labels.create_label_for_file(str(wav), "Files/Forced_alignments/librispeech_alignments")
+    labels = list(Path("Files/Labels", dataset, "dev-clean").rglob("*.npy"))
+    if not wavs or len(labels) != len(wavs):
+        raise SystemExit(f"{dataset}: {len(labels)} labels for {len(wavs)} wav files")
+"""
+
+
+def fetch_librivad_val() -> None:
+    """LibriVAD `medium` validation split from LibriSpeech `dev-clean`, which upstream does not ship.
+
+    Runs upstream's own steps in a working copy of its scripts inside our directory, so the `librivad` tree and its
+    manifest stay as they are (the noises, alignments and silence are linked, never written), then moves the
+    generated audio and the labels into `librivad-val/` in the layout of `generated/` and `Files/Labels` there.
+    """
+    medium, librispeech = raw_dir("librivad"), raw_dir("librispeech")
+    for name, root in (("librivad", medium), ("librispeech", librispeech)):
+        if read_manifest(root) is None:
+            raise RuntimeError(f"LibriVAD val reads the {name} fetch in {root}; run `just fetch {name}` first")
+    repo = medium / "repo"
+    silence = repo / "Files/Datasets/LibriSpeech/train100_silence.wav"
+    if not silence.exists():
+        raise RuntimeError(f"{silence} is missing: the librivad setup is incomplete")
+    out = raw_dir("librivad-val")
+    work = out / ".work"
+    # A kill between the two moves below leaves one of them without a manifest; regenerate rather than mix runs.
+    for stale in (work, out / "generated", out / "labels"):
+        shutil.rmtree(stale, ignore_errors=True)
+    work.mkdir(parents=True)
+    shutil.copytree(repo / "Scripts", work / "Scripts", ignore=shutil.ignore_patterns("__pycache__"))
+    for name in ("create_LibriVAD.py", "requirements.txt"):
+        shutil.copy2(repo / name, work / name)
+    (work / "Files/Datasets/LibriSpeech").mkdir(parents=True)
+    (work / "Files/Datasets/LibriSpeech/train100_silence.wav").symlink_to(silence)
+    for name in ("Noises", "Forced_alignments"):
+        (work / "Files" / name).symlink_to(repo / "Files" / name)
+    subprocess.run(librivad_uv_cmd("-c", LIBRIVAD_VAL_SCRIPT, str(librispeech / "LibriSpeech")), cwd=work, check=True)
+    # The unmodified generator also loops over train and test, which have no wav files in the working copy.
+    subprocess.run(librivad_uv_cmd("create_LibriVAD.py", "medium", "--save_dir", "generated"), cwd=work, check=True)
+    counts = librivad_counts(work / "generated")
+    bad = [k for k in ("LibriSpeech/dev-clean", "LibriSpeechConcat/dev-clean") if counts.get(k, 0) <= 0]
+    if bad:
+        raise RuntimeError(f"LibriVAD val: no wav files generated for {', '.join(bad)} under {work / 'generated'}")
+    os.replace(work / "generated", out / "generated")
+    os.replace(work / "Files/Labels", out / "labels")
+    shutil.rmtree(work)
+    dev_clean = [s for s in (read_manifest(librispeech) or {})["sources"] if s["url"].endswith("/dev-clean.tar.gz")]
+    info = {
+        "dataset": "librivad-val",
+        "licence": "CC BY-NC-SA 4.0",
+        "use": "validation only, never trained on (ADR 0023, ADR 0024); the train and test splits are in librivad",
+        "revision": LIBRIVAD_REV,
+        # Generated from the librivad setup's scripts, noises and alignments and the librispeech fetch's dev-clean.
+        "sources": [{"url": f"https://huggingface.co/datasets/{LIBRIVAD_REPO}/tree/{LIBRIVAD_REV}"}, *dev_clean],
+        "size": "medium",
+        "splits": ["dev-clean"],
+        "labels_dir": "labels",
+        "counts": counts,
+    }
+    write_manifest(out, info)

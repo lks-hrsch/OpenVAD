@@ -6,7 +6,7 @@ Code finds the data root through `OPENVAD_DATA_DIR` (default `./data`), so it ca
 
 ## Fetching
 
-`just fetch <dataset>` with `<dataset>` one of `librispeech`, `alignments`, `ava`, `librivad`, `demand`, `voices`, `callhome`, `swc`, `musan`, `librivad-small`, `picovoice`, `common-voice`, `simsamu`, `wham`, `mls`, `fleurs`, `voxpopuli`, `ami`, `speech-commands`.
+`just fetch <dataset>` with `<dataset>` one of `librispeech`, `alignments`, `ava`, `librivad`, `demand`, `voices`, `callhome`, `swc`, `musan`, `librivad-small`, `librivad-val`, `picovoice`, `common-voice`, `simsamu`, `wham`, `mls`, `fleurs`, `voxpopuli`, `ami`, `speech-commands`.
 Each run writes into `$OPENVAD_DATA_DIR/datasets/raw/<dataset>/` and ends with a `manifest.json` with the keys `dataset`, `licence`, `use`, `sources` (URL and message-digest algorithm 5 or SHA-256 per download), `files`, `bytes` and `retrieved`, plus fetcher-specific ones.
 A re-run skips a dataset whose manifest verifies (file count and bytes match) and stops with an error if the manifest exists but does not verify (delete `manifest.json` to refetch); `librivad` regenerates the whole set unless its generation finished (marker `.generate-done`), because the upstream generator cannot resume. A fetch holds a lock file `cache/<name>.fetching` in the data dir (and a local lock under `~/.cache/openvad`) so two machines on one share cannot fetch the same dataset; it is removed when the run ends. A run killed on another machine leaves the file behind: delete it by hand once no fetch is running there. The same machine recovers a stale lock on its own.
 
@@ -38,7 +38,8 @@ A re-run skips a dataset whose manifest verifies (file count and bytes match) an
 - `demand` takes only the 16 kHz zips; SCAFE exists only at 48 kHz and is listed in the manifest as `missing_16k`.
 - Our splits ([ADR 0023](../docs/project/adr/0023-dataset-composition.md)): official dev and test where a source has them, otherwise about 10% each by speaker, reader or call; at most 30 h per speaker in each dataset (applied by the generator). LibriSpeech is not trained on directly (LibriVAD covers `train-clean-100`).
 - `dev-clean` and `test-clean` are never read directly: LibriVAD builds its test split from `test-clean` and its validation split from `dev-clean`, and they reach validation and test through LibriVAD only.
-- LibriVAD at the pinned revision has no validation split: upstream converts only `train-clean-100` and `test-clean` to wav, so `generated/` holds those two; the manifest lists them as `splits`. `just fetch librivad-val` (not written yet) is to generate the `medium` val split from `dev-clean` into `datasets/raw/librivad-val/` with its own manifest, so the unmodified train and test build stays as it is.
+- LibriVAD at the pinned revision has no validation split: upstream converts only `train-clean-100` and `test-clean` to wav, so `generated/` holds those two; the manifest lists them as `splits`. `just fetch librivad-val` (run `librivad` and `librispeech` first) generates the `medium` val split from `dev-clean` into `datasets/raw/librivad-val/` with its own manifest, so the unmodified train and test build stays as it is: audio under `generated/{LibriSpeech,LibriSpeechConcat}/dev-clean/` and labels under `labels/<dataset>/dev-clean/<speaker>/<chapter>/`, where the label of a concatenated pair sits in the folder of its second utterance, as upstream writes it.
+  It calls upstream's own functions on `dev-clean` alone in a working copy of its scripts (`.work/` in that directory, removed at the end; the noises, alignments and silence are linked, never written), so the `librivad` tree and its manifest are not touched. Expected size: about 27.4 h non-concatenated and 35.2 h concatenated audio (the LibriVAD paper, Table 5), about 7 GB.
 - LibriVAD `medium` takes every 10th utterance of `train-clean-100` with 54 mixtures each, so about 10 h of unique speech appear 54 times by design.
 - `just fetch rirs` (not written yet) is to fetch the room impulse responses of BUT ReverbDB and OpenSLR 28 ([ADR 0021](../docs/project/adr/0021-telephone-channel-simulation.md)).
 
@@ -72,6 +73,7 @@ $OPENVAD_DATA_DIR/
     swc/                      english/, german/, dutch/   <article>/audio.ogg, aligned.swc, audiometa.txt, ...
     musan/                    musan/{music,noise,speech}/<source>/*.wav, LICENSE, ANNOTATIONS
     librivad-small/           generated/ (labels in librivad/)
+    librivad-val/             generated/{LibriSpeech,LibriSpeechConcat}/dev-clean/, labels/
     picovoice/                benchmark_speech.wav, benchmark_labels.txt, repo/
     common-voice/             <locale>/ (53 locales)   <release>/<locale>/{train,dev,test,validated,...}.tsv, clips/*.mp3
     simsamu/                  <recording>/<recording>.{m4a,rttm,srt,json}, metadata.csv

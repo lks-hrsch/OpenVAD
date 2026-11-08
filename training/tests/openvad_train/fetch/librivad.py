@@ -5,11 +5,14 @@
 
 import json
 import subprocess
+import sys
 import zipfile
 
 import pytest
 
 from fetch_support import assert_manifest_shape
+from librivad_support import make_upstream, tree_digest
+from openvad_train.dataset.sources import librivad as librivad_source
 from openvad_train.fetch import common, librivad
 
 
@@ -246,3 +249,82 @@ def test_fetch_librivad_raises_without_labels_before_generating(monkeypatch, tmp
     with pytest.raises(RuntimeError, match="Labels"):
         librivad.fetch_librivad()
     assert "create_LibriVAD.py" not in scripts
+
+
+@pytest.fixture
+def tmp_data_dir(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENVAD_DATA_DIR", str(tmp_path))
+    return tmp_path
+
+
+@pytest.fixture
+def fake_upstream(monkeypatch, tmp_data_dir):
+    """The fetched `librivad` and `librispeech` with stand-in upstream scripts, run by this Python instead of uv."""
+    make_upstream()
+    monkeypatch.setattr(librivad, "librivad_uv_cmd", lambda *args: [sys.executable, *args])
+
+
+@pytest.mark.parametrize("missing", ["librivad", "librispeech"])
+def test_val_refuses_without_the_fetches_it_reads(fake_upstream, missing):
+    (common.raw_dir(missing) / "manifest.json").unlink()
+    with pytest.raises(RuntimeError, match=f"just fetch {missing}"):
+        librivad.fetch_librivad_val()
+    assert not common.raw_dir("librivad-val").exists()
+
+
+def test_val_refuses_without_librivad_setup(tmp_data_dir):
+    with pytest.raises(RuntimeError, match="librivad"):
+        librivad.fetch_librivad_val()
+
+
+def test_val_never_touches_the_librivad_manifest_tree(fake_upstream):
+    names = ("librivad", "librispeech")
+    before = [tree_digest(common.raw_dir(name)) for name in names]
+    librivad.fetch_librivad_val()
+    assert [tree_digest(common.raw_dir(name)) for name in names] == before
+
+
+def test_val_counts_are_recorded(fake_upstream):
+    librivad.fetch_librivad_val()
+    m = common.read_manifest(common.raw_dir("librivad-val"))
+    assert m is not None
+    assert_manifest_shape(m)
+    assert m["counts"] == {"LibriSpeech/dev-clean": 6 * 4, "LibriSpeechConcat/dev-clean": 3 * 4}
+    assert m["splits"] == ["dev-clean"]
+    assert m["labels_dir"] == "labels"
+    assert [s["url"] for s in m["sources"]][1:] == ["https://openslr.example/dev-clean.tar.gz"]
+    assert common.is_complete(common.raw_dir("librivad-val"))
+    assert not list(common.raw_dir("librivad-val").glob(".*"))  # the working copy is gone
+
+
+def test_val_replaces_what_a_killed_run_left(fake_upstream):
+    out = common.raw_dir("librivad-val")
+    for stale in (out / "generated/old.wav", out / "labels/old.npy"):
+        stale.parent.mkdir(parents=True, exist_ok=True)
+        stale.touch()
+    librivad.fetch_librivad_val()
+    assert not list(out.rglob("old.*"))
+
+
+def test_val_stops_when_upstream_loses_a_conversion(fake_upstream, monkeypatch):
+    # Upstream prints a failed conversion and goes on, so the script compares the counts itself.
+    flac = next(common.raw_dir("librispeech").rglob("*.flac"))
+    flac.write_text("not a number")
+    with pytest.raises(subprocess.CalledProcessError):
+        librivad.fetch_librivad_val()
+    assert common.read_manifest(common.raw_dir("librivad-val")) is None
+
+
+def test_val_output_is_what_the_librivad_adapter_reads(fake_upstream):
+    librivad.fetch_librivad_val()
+    raw = common.raw_dir("librivad")
+    report: dict = {}
+    found = list(librivad_source.clips(raw, report=report))
+    wavs = sorted(common.raw_dir("librivad-val").glob("generated/*/dev-clean/*/*/*.wav"))
+    assert len(wavs) == 36
+    assert sorted(c.path for c in found) == sorted(w.relative_to(common.data_dir()).as_posix() for w in wavs)
+    assert {c.split for c in found} == {"validation"}
+    assert report["label_length_mismatch"] == {}
+    timings = list(librivad_source.timings(raw, found))
+    assert len(timings) == len(found)
+    assert all(t.kind == "frame" and t.speech_ms for t in timings)
