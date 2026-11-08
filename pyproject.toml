@@ -18,6 +18,8 @@ explicit = true
 
 [dependency-groups]
 dev = ["pytest", "ruff", "basedpyright"]
+# Rule-based lexicons for languages with an acoustic model and no lexicon (dataset/lexicon.py); not a default group.
+align = ["epitran"]
 
 [tool.ruff]
 line-length = 120
