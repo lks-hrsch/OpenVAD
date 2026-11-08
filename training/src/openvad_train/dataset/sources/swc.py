@@ -5,8 +5,8 @@
 
 """Spoken Wikipedia Corpora 2.0: one clip per audio file of an article, word timings from `aligned.swc`.
 
-Adapter contract: `clips(raw, languages)` (language codes, None for all; it reads nothing of the others) and,
-for sources that are not forced-aligned by MFA, `timings(raw, clips)`. `raw` is `datasets/raw/swc`.
+Adapter contract: `MFA_ALIGNED`, `clips(raw, languages)` (language codes, None for all; it reads nothing of the
+others) and, for sources that are not forced-aligned by MFA, `timings(raw, clips)`. `raw` is `datasets/raw/swc`.
 """
 
 import json
@@ -30,6 +30,7 @@ from openvad_train.fetch.swc import audio_licence
 
 
 SOURCE = "swc"
+MFA_ALIGNED = False
 LANGUAGES = {"english": "en", "german": "de", "dutch": "nl"}
 # Pointers are relative to $OPENVAD_DATA_DIR; `raw` itself is only the place to read from.
 RAW_PREFIX = Path("datasets/raw/swc")

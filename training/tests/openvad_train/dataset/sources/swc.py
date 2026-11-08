@@ -288,3 +288,7 @@ def test_ordinary_readers_keep_each_languages_shares_near_80_10_10():
         assert per_split["train"] / total == pytest.approx(0.8, abs=0.06)
         assert per_split["validation"] / total == pytest.approx(0.1, abs=0.05)
         assert per_split["test"] / total == pytest.approx(0.1, abs=0.05)
+
+
+def test_swc_labels_come_from_its_own_timings_not_from_mfa():
+    assert swc.MFA_ALIGNED is False

@@ -509,7 +509,7 @@ def test_batching_does_not_change_the_plan(data, monkeypatch):
 def test_timings_out_of_clip_order_are_refused(data, monkeypatch):
     run_index(CONFIG)
     real = plan_module.SOURCES["swc"]
-    backwards = SimpleNamespace(timings=lambda raw, clips: reversed(list(real.timings(raw, clips))))
+    backwards = SimpleNamespace(MFA_ALIGNED=False, timings=lambda raw, clips: reversed(list(real.timings(raw, clips))))
     monkeypatch.setitem(plan_module.SOURCES, "swc", backwards)
     with pytest.raises(ValueError, match="clip order"):
         run_plan(CONFIG)
@@ -608,7 +608,7 @@ def test_full_refuses_conditions_without_a_draw_before_any_work(data):
 
 def test_an_mfa_source_without_word_tables_names_them(data, monkeypatch):
     run_index(CONFIG)
-    monkeypatch.setitem(plan_module.SOURCES, "swc", SimpleNamespace())
+    monkeypatch.setitem(plan_module.SOURCES, "swc", SimpleNamespace(MFA_ALIGNED=True))
     with pytest.raises(FileNotFoundError, match="words/swc"):
         run_plan(CONFIG)
 

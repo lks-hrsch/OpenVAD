@@ -94,8 +94,9 @@ def apply_cap_rank(
     return (c for c in clips if c.speaker is None or c.clip_id in kept)
 
 
-# An adapter has `clips(raw, languages)`; one that is not forced-aligned by MFA also has `timings(raw, clips)`
-# and is capped here.
+# An adapter has `clips(raw, languages)` and the constant `MFA_ALIGNED`. One that is not forced-aligned by MFA also has
+# `timings(raw, clips)` and is capped here. An MFA adapter may have `timings` too, for its clips without a transcript
+# (Speech Commands background noise), whose labels are fixed.
 SOURCES: dict[str, ModuleType] = {"swc": swc}
 
 _SCHEMA = {
@@ -140,7 +141,7 @@ def _index_source(
         guard_path(c.path, c.split)
     speech_s = None
     dropped: dict[str, int] = {}
-    if hasattr(module, "timings"):
+    if not module.MFA_ALIGNED:
         # MFA sources get their cap in `align`, after the drop rules. Here a clip without speech yields no labels
         # and would only use up budget, and the cap counts speech seconds.
         speech_s = _speech_s(module.timings(raw, clips))

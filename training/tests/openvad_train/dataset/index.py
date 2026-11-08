@@ -170,7 +170,8 @@ def test_run_index_reserves_nothing_for_speakerless_clips_or_single_speaker_grou
 
 def test_run_index_rejects_a_forbidden_path(data_dir, monkeypatch):
     bad = SimpleNamespace(
-        clips=lambda _raw, _languages: iter([dataclasses.replace(clip(language="de"), path="raw/ava-speech/a.flac")])
+        MFA_ALIGNED=True,
+        clips=lambda _raw, _languages: iter([dataclasses.replace(clip(language="de"), path="raw/ava-speech/a.flac")]),
     )
     monkeypatch.setitem(index.SOURCES, "swc", bad)
     with pytest.raises(ForbiddenSource):
@@ -184,10 +185,11 @@ def test_run_index_caps_only_sources_without_mfa(data_dir, monkeypatch):
         for i in range(40)
     ]
     swc_like = SimpleNamespace(
+        MFA_ALIGNED=False,
         clips=lambda _raw, _languages: iter(many[:40]),
         timings=lambda _raw, clips: (Timing(c.clip_id, "word", [(0, 3_600_000)], [], None, "t") for c in clips),
     )
-    mfa_like = SimpleNamespace(clips=lambda _raw, _languages: iter(many[40:]))
+    mfa_like = SimpleNamespace(MFA_ALIGNED=True, clips=lambda _raw, _languages: iter(many[40:]))
     monkeypatch.setitem(index.SOURCES, "swc", swc_like)
     monkeypatch.setitem(index.SOURCES, "mfa", mfa_like)
     run_index(dataclasses.replace(SLICE, sources=("swc", "mfa"), languages=None))
@@ -203,7 +205,9 @@ def test_run_index_names_a_source_without_adapter(data_dir):
 def test_run_index_asks_the_adapter_for_the_configured_languages_only(data_dir, monkeypatch):
     asked = []
     monkeypatch.setitem(
-        index.SOURCES, "swc", SimpleNamespace(clips=lambda _raw, languages: asked.append(languages) or iter(()))
+        index.SOURCES,
+        "swc",
+        SimpleNamespace(MFA_ALIGNED=True, clips=lambda _raw, languages: asked.append(languages) or iter(())),
     )
     run_index(SLICE)
     run_index(dataclasses.replace(SLICE, languages=None))
@@ -222,6 +226,7 @@ def test_run_index_counts_speech_seconds_and_drops_clips_without_any(caplog):
         "c0": [(0, hour_ms)],
     }
     fake = SimpleNamespace(
+        MFA_ALIGNED=False,
         clips=lambda _raw, _languages: iter(clips),
         timings=lambda _raw, cs: (Timing(c.clip_id, "word", speech[c.clip_id], [], None, "t") for c in cs),
     )
@@ -241,7 +246,7 @@ def test_run_index_reserves_per_source_and_for_all_languages_of_a_split(data_dir
             for lang in ("en", "de")
             for i in range(20)
         ]
-        return SimpleNamespace(clips=lambda _raw, _languages: iter(clips))
+        return SimpleNamespace(MFA_ALIGNED=True, clips=lambda _raw, _languages: iter(clips))
 
     monkeypatch.setitem(index.SOURCES, "swc", source("swc"))
     monkeypatch.setitem(index.SOURCES, "other", source("other"))

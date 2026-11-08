@@ -42,7 +42,7 @@ def sampled(monkeypatch, tmp_path):
     """A config with 40 aligned German and 30 aligned English clips whose log-likelihoods run from -1 up."""
     monkeypatch.setenv("OPENVAD_DATA_DIR", str(tmp_path / "data"))
     cfg = dataclasses.replace(SLICE, name="handcheck-test", sources=("fake",), languages=None)
-    monkeypatch.setitem(index.SOURCES, "fake", SimpleNamespace(clips=lambda raw, languages: iter(())))
+    monkeypatch.setitem(index.SOURCES, "fake", SimpleNamespace(MFA_ALIGNED=True, clips=lambda raw, languages: iter(())))
     root = tmp_path / "data"
     clips, timings = [], {}
     for language, n in (("de", 40), ("en", 30)):

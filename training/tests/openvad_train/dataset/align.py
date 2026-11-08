@@ -455,7 +455,7 @@ def stage(monkeypatch, tmp_path):
     monkeypatch.setattr(align, "MIN_CALIBRATION_CLIPS", 1)
     fake = install(monkeypatch)
     cfg = dataclasses.replace(SLICE, name="align-test", sources=("fake",), languages=None)
-    monkeypatch.setitem(index.SOURCES, "fake", SimpleNamespace(clips=lambda raw, languages: iter(())))
+    monkeypatch.setitem(index.SOURCES, "fake", SimpleNamespace(MFA_ALIGNED=True, clips=lambda raw, languages: iter(())))
     return SimpleNamespace(root=root, cfg=cfg, tmp=tmp_path / "tmp", **vars(fake))
 
 
@@ -610,6 +610,21 @@ def test_a_failing_mfa_leaves_the_batch_unfinished_and_no_temp_copy(stage):
     assert len(list((work_dir(stage.cfg) / "words/fake/de").glob("*.parquet"))) == 2
 
 
+def test_clips_without_a_transcript_never_reach_mfa_and_are_counted(stage):
+    spoken = speakers_clips(stage, n=2)
+    noise = [dataclasses.replace(make_clip(stage.root, "noise/n0", None), transcript=None)]
+    write_index(stage, spoken + noise)
+    run_align(stage.cfg, ["de"])
+    t = tables(stage)
+    assert {r["clip_id"] for rows in t["words"].values() for r in rows} == {c.clip_id for c in spoken}
+    assert t["dropped"] == []
+    assert all("noise/n0" not in call for calls in stage.fake.calls for call in calls)
+    assert sum(len(call) for call in stage.fake.calls) == 2 * len(spoken)  # the calibration run and the batches
+    summary = json.loads((work_dir(stage.cfg) / "words/manifest.json").read_text())["per_source"]["fake"]["de"]
+    assert (summary["index_clips"], summary["kept"], summary["no_transcript_not_aligned"]) == (5, 4, 1)
+    assert summary["over_cap_not_aligned"] == 0
+
+
 def test_reserved_speakers_are_never_aligned(stage):
     clips = speakers_clips(stage, n=3)
     write_index(stage, clips, reserved={("train", "de", "s1")})
@@ -647,7 +662,7 @@ def test_an_unknown_or_open_language_fails_before_any_batch(stage):
 
 
 def test_a_source_labelled_without_mfa_is_left_alone(stage, monkeypatch):
-    monkeypatch.setitem(index.SOURCES, "fake", SimpleNamespace(clips=None, timings=None))
+    monkeypatch.setitem(index.SOURCES, "fake", SimpleNamespace(MFA_ALIGNED=False, clips=None, timings=None))
     run_align(stage.cfg, None)
     assert stage.fake.calls == []
 

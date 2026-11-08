@@ -372,7 +372,7 @@ def _lowest_ranks(frame: pl.DataFrame, samples: int | None, hours: float | None)
 
 
 def _timings(cfg: BuildConfig, name: str, module: ModuleType, clips: list[Clip]) -> Iterable[Timing]:
-    if hasattr(module, "timings"):
+    if not module.MFA_ALIGNED:
         return module.timings(raw_dir(name), clips)
     words = work_dir(cfg) / "words" / name
     if not words.is_dir():

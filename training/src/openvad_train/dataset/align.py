@@ -867,6 +867,10 @@ def _calibrate(
     return rules
 
 
+def _is_aligned(clip: Clip) -> bool:
+    return not clip.reserved and clip.transcript is not None
+
+
 def _align_language(
     cfg: BuildConfig,
     source: str,
@@ -878,9 +882,10 @@ def _align_language(
     base = work_dir(cfg)
     words_dir = base / "words" / source / language
     # Reserved speakers feed babble and competing talkers only and are never foreground (R-i), so they are not aligned.
+    # A clip without a transcript has fixed labels from its adapter (background noise) and never reaches MFA.
     by_speaker: dict[str | None, list[Clip]] = defaultdict(list)
     for c in clips:
-        if not c.reserved:
+        if _is_aligned(c):
             by_speaker[c.speaker].append(c)
     full = {speaker: _by_rank(group) for speaker, group in by_speaker.items()}
     first_round = [
@@ -934,7 +939,7 @@ def run_align(cfg: BuildConfig, languages: list[str] | None = None) -> None:
     base = work_dir(cfg)
     per_source: dict[str, dict[str, list[Clip]]] = {}
     for name in cfg.sources:
-        if hasattr(SOURCES[name], "timings"):
+        if not SOURCES[name].MFA_ALIGNED:
             continue  # its labels do not come from MFA
         by_language: dict[str, list[Clip]] = defaultdict(list)
         for c in _read_index(base, name):
@@ -974,11 +979,12 @@ def _write_manifest(
             calibration = rules.pop("calibration") if rules else None
             if rules is None and (words_dir / "calibration.json").is_file():
                 calibration = json.loads((words_dir / "calibration.json").read_text())
-            unaligned = sum(not c.reserved for c in clips) - words - mine.height
+            unaligned = sum(_is_aligned(c) for c in clips) - words - mine.height
             too_few = calibration is not None and calibration["outcome"] == "too_few_to_calibrate"
             summary.setdefault(source, {})[language] = {
                 "index_clips": len(clips),
                 "reserved_not_aligned": sum(c.reserved for c in clips),
+                "no_transcript_not_aligned": sum(not c.reserved and c.transcript is None for c in clips),
                 "kept": words,
                 "dropped": dict(mine.group_by("reason").len().sort("reason").iter_rows()),
                 "over_cap_not_aligned": 0 if too_few else unaligned,
