@@ -738,6 +738,21 @@ def test_clips_without_a_surviving_timing_are_skipped_and_counted_by_reason(mfa_
     assert (per["over_cap"], per["without_sample"]) == (0, 0)
 
 
+def test_a_drop_table_of_an_unfinished_batch_is_not_counted_as_a_drop(mfa_data):
+    clips = [fake_clip("kept", speaker="a"), fake_clip("cut_short", speaker="b")]
+    write_mfa_tables(MFA_CONFIG, "fake", clips, kept={"kept"})
+    unfinished = [align.Drop("cut_short", "low_loglik", None)]  # batch 00001 has a drop table and no words table
+    table = {
+        work_dir(MFA_CONFIG) / "words/fake/de/dropped/00001.parquet": align._drop_table(
+            "fake", "de", "00001", unfinished
+        )
+    }
+    asyncio.run(write_parquet(table))
+    run_plan(MFA_CONFIG)
+    per = json.loads((work_dir(MFA_CONFIG) / "plan/manifest.json").read_text())["per_source"]["fake"]
+    assert (per["dropped_by_align"], per["not_aligned"]) == (0, 1)
+
+
 def test_a_row_carries_the_timing_of_its_own_clip_whatever_the_language_order(mfa_data):
     clips = [
         fake_clip(f"{lang}{i}", speaker=f"{lang}{i}", language=lang) for i in range(3) for lang in ("en", "de", "en")

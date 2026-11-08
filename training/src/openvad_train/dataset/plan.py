@@ -19,7 +19,7 @@ from types import ModuleType
 import numpy as np
 import polars as pl
 
-from openvad_train.dataset.align import WORDS_SCHEMA
+from openvad_train.dataset.align import WORDS_SCHEMA, _dropped_files
 from openvad_train.dataset.codecs import AMR_MODES_BPS
 from openvad_train.dataset.config import DEMAND_CATEGORIES, FULL, SLICE, BuildConfig, work_dir
 from openvad_train.dataset.cutting import Chunk, cut_long, rebase
@@ -400,9 +400,11 @@ def _surviving_clips(cfg: BuildConfig, name: str, index: pl.DataFrame) -> tuple[
     if not words.is_dir():
         raise FileNotFoundError(f"{name} is labelled by MFA and {words} does not exist: run the align stage first")
     kept = _kept_ids(words)
+    # Only finished batches: a drop table whose words table is missing belongs to a batch a kill cut short.
     dropped = {
         clip_id
-        for path in words.glob("*/dropped/*.parquet")
+        for path in _dropped_files(work_dir(cfg))
+        if path.parents[2].name == name
         for clip_id in asyncio.run(read_parquet(path, ["clip_id"]))["clip_id"]
     }
     counts: Counter = Counter()
@@ -433,6 +435,8 @@ class _MfaTimings:
         self._table: dict[str, Timing] = {}
 
     def _load(self, language: str) -> None:
+        # shortcut: a whole language's timings are held at once, about 1 KB per clip; read the tables per batch of
+        # speakers if one language reaches millions of kept clips.
         paths = sorted((self._words / language).glob("*.parquet"))
         frame = _read_tables(paths) if paths else pl.DataFrame(schema=WORDS_SCHEMA)
         self._table = {
