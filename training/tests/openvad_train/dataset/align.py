@@ -1173,6 +1173,18 @@ def test_an_override_without_a_dictionary_aligns_with_a_lexicon_built_from_the_c
     assert manifest(pilot)["per_source"]["fake"]["ca"]["models"] == models
 
 
+def test_a_refused_rerun_leaves_the_lexicon_the_state_describes_unchanged(pilot):
+    clips = [make_clip(pilot.root, f"s{i}/c0", f"s{i}", t, language="ca") for i, t in enumerate(["ab", "ba", "aa"])]
+    write_index(pilot, clips[:2])
+    run_align(pilot.cfg, ["ca"], models={"ca": ("vx_model", "rev1")})
+    lexicon_file = work_dir(pilot.cfg) / "words/fake/ca/lexicon.dict"
+    before = lexicon_file.read_bytes()
+    write_index(pilot, clips)  # one more clip: other batches and another lexicon
+    with pytest.raises(StateMismatchError):
+        run_align(pilot.cfg, ["ca"], models={"ca": ("vx_model", "rev1")})
+    assert lexicon_file.read_bytes() == before
+
+
 def test_a_model_override_is_refused_outside_the_pilot_and_without_the_model_on_disk(pilot):
     write_index(pilot, [make_clip(pilot.root, "s0/c0", "s0", "ab", language="ca")])
     pilot.cfg = dataclasses.replace(pilot.cfg, name="openvad-v1")

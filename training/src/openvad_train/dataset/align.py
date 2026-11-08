@@ -831,13 +831,14 @@ def _limited(clips: list[Clip], max_clips: int | None) -> list[Clip]:
     return clips if max_clips is None else calibration_clips(clips, max_clips)
 
 
-def _with_lexicon(models: Models, clips: Iterable[Clip], language: str, words_dir: Path) -> Models:
+def _with_lexicon(models: Models, clips: Iterable[Clip], language: str, words_dir: Path) -> tuple[Models, str]:
     """`models` with a rule-based lexicon (`lexicon.build_lexicon`) for an acoustic model without a dictionary, built
     from the words of every clip given, as `prepare_transcript` sends them and lower-cased as MFA folds them, and
     limited to the model's phone inventory. A word with a hyphen or an apostrophe keeps that spelling: MFA looks a
     whole word up before it splits it at those marks, and its pronunciation drops them. It is written beside the
     words tables, since it is made from the transcripts (ADR 0024), and the same clips give the same file, so a
-    resumed run sees the same provenance.
+    resumed run sees the same provenance. Returns the models and the file's text; the caller writes it only once the
+    run's state is accepted, so a refused run never changes the file the state's hash describes.
     """
     words = sorted(
         {
@@ -849,17 +850,16 @@ def _with_lexicon(models: Models, clips: Iterable[Clip], language: str, words_di
     )
     left_out: list[str] = []
     entries = lexicon.build_lexicon(words, language, lexicon.model_phones(models.acoustic), left_out=left_out)
-    path = words_dir / "lexicon.dict"
-    _write_atomically(path, "".join(f"{w}\t{p}\n" for w, p in sorted(entries.items())))
+    text = "".join(f"{w}\t{p}\n" for w, p in sorted(entries.items()))
     info = {
         "name": f"epitran:{lexicon.EPITRAN_CODES[language]}",
         "release": lexicon.epitran_release(),
         "version": None,
-        "sha256": file_hash(path, "sha256"),
+        "sha256": hashlib.sha256(text.encode()).hexdigest(),
         "words": len(entries),
         "left_out": len(left_out),
     }
-    return models._replace(dictionary=path, info=models.info | {"dictionary": info})
+    return models._replace(dictionary=words_dir / "lexicon.dict", info=models.info | {"dictionary": info}), text
 
 
 def _align_language(
@@ -887,8 +887,9 @@ def _align_language(
     ]
     batches = list(make_batches(first_round, BATCH_HOURS))
     calibration = calibration_clips(c for group in full.values() for c in group)
+    lexicon_text = None
     if models.dictionary is None:
-        models = _with_lexicon(models, (c for group in full.values() for c in group), language, words_dir)
+        models, lexicon_text = _with_lexicon(models, (c for group in full.values() for c in group), language, words_dir)
     provenance = _provenance(tools, models)
     state = {
         "provenance": provenance,
@@ -907,6 +908,8 @@ def _align_language(
         raise StateMismatchError(
             f"{words_dir} was made with other batches or tools than this run: delete it to start over"
         )
+    if lexicon_text is not None and models.dictionary is not None:
+        _write_atomically(models.dictionary, lexicon_text)
     if batches and not state_path.is_file():
         _write_atomically(state_path, json.dumps(state, sort_keys=True) + "\n")
 
