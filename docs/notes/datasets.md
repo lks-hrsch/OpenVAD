@@ -169,6 +169,8 @@ Information only: there is no per-family headline, and there is no minimum share
   | Kazakh (`kk`) | 2.5 | 0.9 | 6 | 0.9 | 0 | 0.2 |
   | **Total, 27 locales** | **18,683.8** | **17,329.2** | **143,206** | **15,575.3** | **49** | |
 
+- Cantonese also has `zh-HK`, which the index maps to `yue` (`commonvoice.LANGUAGE`), extracted after this table: 109.0 h validated, 82.2 h in the train pool of 728 speakers, none over 30 h, the largest 5.5 h (measured 2026-11-08 by the same rule). So Cantonese has 313.1 h validated and 264.5 h in the train pool, over 200 h either way.
+
 ## Per-source facts
 
 Pins, URLs and checksums are in the fetchers (`training/src/openvad_train/fetch/`); licences and fetch details are also in [`data/README.md`](../../data/README.md).

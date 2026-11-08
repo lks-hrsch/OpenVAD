@@ -300,7 +300,7 @@ No language with a model is held out, so Korean, Vietnamese, Kazakh and Hausa ar
 - Italian and Dutch have no G2P model, so their out-of-vocabulary words become `spn` instead of getting generated pronunciations (owner, 2026-11-06). Other languages use `--use_g2p`.
 - The same VoxCommunis route covers the 10 languages without a model in mfa-models listed above (Catalan, Welsh, Bengali, Estonian, Finnish, Kabyle, Kinyarwanda, Luganda, Cantonese, Mongolian).
 - VoxCommunis models need G2P for out-of-vocabulary words: generate pronunciations with the same G2P system their lexicon used (Epitran or XPF) or train one with `mfa train_g2p` on the lexicon, so the phone set matches.
-- A language with an acoustic model and no lexicon file (Catalan, so far) gets a rule-based lexicon from Epitran (`dataset/lexicon.py`, `build_lexicon`; XPF only for a language Epitran lacks). A lexicon is only useful if its phones are ones the model knows, so `build_lexicon` takes the phone inventory in the model's `meta.json` and leaves out, and counts, every word with a phone outside it. No phone mapping is applied. The VoxCommunis models were trained on lexicons with their own segmentation (`ca_vxc_acoustic16` names a custom lexicon, `ca_lexicon-IPA`), so the inventory is checked per model. For Catalan, 135 of 293 common words written by hand (a hand-made list, not a corpus) have every Epitran `cat-Latn` phone in the inventory of `ca_vxc_acoustic16`, 46%. That is an upper bound: stress marks and vowel reduction were not checked (`català` is kept as `k a t a l a`, although the model has stressed vowels such as `ˈa`). The words lost are mostly those with `e` (Epitran writes `ɛ`, which the model lacks as a bare phone), a script `ɡ`, a tie-bar affricate or a length mark. On a corpus sample (5,000 Common Voice sentences, 11,549 word types) the share is lower: 31% of types and 45% of tokens, with `ɛ` alone missing from 9,059 of the words left out. The pilot ran this route and Catalan did not calibrate ([MFA pilot](#mfa-pilot-2026-11-08)).
+- A language with an acoustic model and no lexicon file (Catalan, so far) gets a rule-based lexicon from Epitran (`dataset/lexicon.py`, `build_lexicon`; XPF only for a language Epitran lacks). A lexicon is only useful if its phones are ones the model knows, so `build_lexicon` takes the phone inventory in the model's `meta.json` and leaves out, and counts, every word with a phone outside it. No phone mapping is applied. The VoxCommunis models were trained on lexicons with their own segmentation (`ca_vxc_acoustic16` names a custom lexicon, `ca_lexicon-IPA`), so the inventory is checked per model. For Catalan, 135 of 293 common words written by hand (a hand-made list, not a corpus) have every Epitran `cat-Latn` phone in the inventory of `ca_vxc_acoustic16`, 46%. That is an upper bound: stress marks and vowel reduction were not checked (`català` is kept as `k a t a l a`, although the model has stressed vowels such as `ˈa`). The words lost are mostly those with `e` (Epitran writes `ɛ`, which the model lacks as a bare phone), a script `ɡ`, a tie-bar affricate or a length mark. On a corpus sample (5,000 Common Voice sentences, 11,549 word types) the share is lower: 35% of types and 47% of tokens, with `ɛ` alone missing from 9,059 of the words left out. The pilot ran this route and Catalan did not calibrate ([MFA pilot](#mfa-pilot-2026-11-08)).
 - The remaining 8 (Persian, Urdu, Meadow Mari, Arabic, Laz, Kabardian, Adyghe, Puno Quechua) and the FLEURS languages without an MFA model are left out (0023). `MMS_FA` would cover them, with the costs below.
 - Re-align Common Voice 27.0 ourselves rather than reuse the VoxCommunis TextGrids, so that every clip has the same model version and logged metrics; use the shipped TextGrids as a cross-check where clips overlap.
 
@@ -360,10 +360,11 @@ The pilot set is every Common Voice locale extracted on the share (`.<locale>-ex
 | `ka` | 251.0 | open | feasibility row |
 | `ta` | 234.5 | open | feasibility row |
 | `ab` | 204.9 | open | feasibility row |
-| `yue` | 204.1 | open | feasibility row |
+| `yue` and `zh-HK` | 313.1 (204.1 and 109.0) | open | feasibility row |
 
 - Over 200 h with a `*_mfa` row, so not in the pilot: `es` (619.9 h), `fr` (1,095.3 h), `sw` (407.5 h), `ru` (254.4 h).
-- `ka`, `ta`, `ab` and `yue` are over 200 h validated but under 200 h in the train pool (193.2, 182.1, 157.4 and 182.3 h, [datasets](datasets.md)); under a pool reading they would leave the set.
+- The index maps `zh-HK` to Cantonese (`yue`), as it maps `zh-CN` to Mandarin, so the two Cantonese locales count together.
+- `ka`, `ta` and `ab` are over 200 h validated but under 200 h in the train pool (193.2, 182.1 and 157.4 h, [datasets](datasets.md)); under a pool reading they would leave the set. Cantonese would not: its train pool is 264.5 h (182.3 h `yue` and 82.2 h `zh-HK`).
 - Missing: no pilot language. The 19 locales not extracted yet (`cs`, `et`, `mn`, `sv-SE`, `ky`, `bn`, `tt`, `cv`, `hy-AM`, `ro`, `el`, `fi`, `bg`, `sr`, `gn`, `hsb`, `vi`, `ha`, `ko`) are all under 200 h in the release statistics of Common Voice 27.0 (an estimate, validated clips times the mean duration; the largest is `cs` with 81.6 h).
 
 ### Per-language table
@@ -380,8 +381,8 @@ Failure rate is `no_alignment` (MFA wrote no TextGrid or a blank analysis row) o
 | `ca` | `ca_vxc_acoustic16`, Epitran lexicon | 200 | 0 in calibration | 168 (84%) in calibration: beam 9, word 4, phone 155 | not fitted | 0 | 200, 143, 200, 32: `too_few_to_calibrate` |
 
 - Japanese and Mandarin aligned with MFA's tokenisers (sudachipy and spacy-pkuseg in `tools/mfa`): a median of 8 words per kept Mandarin clip and an out-of-vocabulary share of 0.4%. Without them MFA 3.4.3 stops with an `ImportError`, it does not fall back. `sudachipy` 0.7 breaks the Japanese tokeniser (`tools/README.md`).
-- Italian fails on length: in the dropped clips the longest phone other than `spn` has a median of 854 ms, so it is not out-of-vocabulary words (their share is 0) but phones of `italian_cv` stretching over pauses. VoxCommunis has a newer `it_vxc_acoustic17`, which the pilot did not try.
-- Catalan: the lexicon built from the 200 clips holds 363 of 975 word types; 612 are left out because Epitran gives them a phone outside the model's inventory, mostly `ɛ`. Their audio goes to `spn`, and 155 clips then have a phone over 500 ms. 32 clips pass the fixed rules, under the 50 the calibration needs.
+- Italian fails on length: in the dropped clips the longest phone other than `spn` has a median of 854 ms, so it is not out-of-vocabulary words (their share is 0) but phones of `italian_cv` stretching over pauses. VoxCommunis has a newer `it_vxc_acoustic17`, which the pilot did not try. Running it needs a dictionary route that is not built: `align --model` always builds an Epitran lexicon and cannot use the lexicon VoxCommunis ships for Italian (`lexicons/italian.dict`); that waits for the owner's model choice.
+- Catalan: the lexicon built from the 200 clips held 363 of 975 word types; 612 were left out, most because Epitran gives them a phone outside the model's inventory (`ɛ` above all), 90 only because Epitran passed a hyphen or apostrophe through as a phone. The pilot aligned with that lexicon. With the punctuation dropped (fixed after the pilot, without a new MFA run) the same clips give 401 of 975 types (574 left out) and 47.9% of the 1,960 tokens instead of 45.4%. With the 363-word lexicon the left-out words went to `spn`, 155 clips had a phone over 500 ms, and 32 clips passed the fixed rules, under the 50 the calibration needs; the 38 more words would not lift that over 50, but it is not measured.
 
 Throughput, M3 Pro over SMB (MFA's default `--num_jobs 3`, one process decoding):
 
@@ -401,24 +402,28 @@ Throughput, M3 Pro over SMB (MFA's default `--num_jobs 3`, one process decoding)
 
 ### Feasibility of the other open languages
 
-No MFA run, no model chosen and no row changed; the choice is the owner's. Every one of them has a VoxCommunis acoustic model and lexicon (`pacscilab/VoxCommunis` on Hugging Face, revision `54d61df1ca273798563e1a48ef9d781ad2a04bc9`); none has an MFA G2P model. The sample is 5,000 validated sentences of the locale, every k-th row, through `prepare_transcript` and lower-cased. Epitran coverage is the share of word types (and tokens) whose every Epitran phone is in the VoxCommunis model's inventory, as `build_lexicon` measures it; lexicon coverage is the share found in the VoxCommunis lexicon.
+No MFA run, no model chosen and no row changed; the choice is the owner's. Every one of them has a VoxCommunis acoustic model and lexicon (`pacscilab/VoxCommunis` on Hugging Face, revision `54d61df1ca273798563e1a48ef9d781ad2a04bc9`); none has an MFA G2P model.
 
-| Language | VoxCommunis model | `*_cv` in mfa-models | Epitran or XPF code | Epitran coverage, types (tokens) | VoxCommunis lexicon coverage, types (tokens) |
+How it was measured, so it can be repeated: the sample is 5,000 sentences of the locale's `validated.tsv`, every k-th row with k = rows // 5,000, through `prepare_transcript` and lower-cased (8,386 to 18,817 word types per language). G2P coverage is the share of those word types (and tokens) that `lexicon.build_lexicon(words, language, model_phones(<VoxCommunis acoustic zip>), transliterate=<g2p>)` keeps, after it drops punctuation (the fix after the pilot): `<g2p>` is `epitran.Epitran(<code>).trans_list` (Epitran 1.35.3) or `xpfcorpus.Transcriber(<code>).transcribe` (xpfcorpus 0.1.1, MIT, the Python interface of the XPF Corpus; run outside the project). Lexicon coverage is the share of the words found, lower-cased, in the VoxCommunis lexicon. The scripts were not committed: they would need a test against Common Voice text.
+
+| Language | VoxCommunis model | `*_cv` in mfa-models | Epitran or XPF code | G2P coverage, types (tokens) | VoxCommunis lexicon coverage, types (tokens) |
 | :-- | :-- | :-- | :-- | :-- | :-- |
-| `rw` | `rw_epi_acoustic17` | none | `kin-Latn` | 91% (96%) | 93% (97%) |
-| `be` | `be_xpf_acoustic17` | `belarusian_cv` | XPF (code not verified) | n/a | 99% (100%) |
-| `kab` | `kab_vxc_acoustic20` | none | `kab-Latn` | 5% (12%): the model lacks a bare `a`, `i`, `u` | 67% (84%) |
-| `eu` | `eu_xpf_acoustic17` | `basque_cv` | XPF (code not verified) | n/a | 93% (98%) |
-| `ug` | `ug_xpf_acoustic17` | `uyghur_cv` | `uig-Arab` | 18% (27%): the model lacks `a`, `ɛ` | 78% (91%) |
-| `lg` | `lg_vxc_acoustic20` | none | `lug-Latn` | 36% (48%): `ɡ`, `ɾ`, prenasals | 95% (98%) |
-| `ba` | `ba_xpf_acoustic16` | `bashkir_cv` | XPF (code not verified) | n/a | 78% (84%) |
-| `ka` | `ka_xpf_acoustic16` | `georgian_cv` | `kat-Geor` | 33% (39%): `r`, `χ`, affricates | 93% (96%) |
-| `ta` | `ta_epi_acoustic17` | `tamil_cv` | `tam-Taml` | 99% (100%) | 99% (100%) |
-| `ab` | `ab_xpf_acoustic16` | `abkhaz_cv` | XPF (code not verified) | n/a | 28% (43%) |
-| `yue` | `yue_epi_acoustic19` (and a toned `yue_vxc_acoustic21_toned`) | none | `yue-Latn` takes Jyutping, not Han characters | not measurable: the text has no spaces and needs a segmenter | not measurable |
+| `rw` | `rw_epi_acoustic17` | none | Epitran `kin-Latn` | 99.8% (99.9%) | 93% (97%) |
+| `be` | `be_xpf_acoustic17` | `belarusian_cv` | XPF `be` | 93% (96%): the model lacks a separate length mark `ː` | 99% (100%) |
+| `kab` | `kab_vxc_acoustic20` | none | Epitran `kab-Latn` | 7% (12%): the model lacks a bare `a`, `i`, `u` | 67% (84%) |
+| `eu` | `eu_xpf_acoustic17` | `basque_cv` | XPF `eu` | 100% (100%) | 93% (98%) |
+| `ug` | `ug_xpf_acoustic17` | `uyghur_cv` | Epitran `uig-Arab` | 19% (27%): the model lacks `a`, `ɛ` | 78% (91%) |
+| `lg` | `lg_vxc_acoustic20` | none | Epitran `lug-Latn` | 38% (49%): `ɡ`, `ɾ`, prenasals | 95% (98%) |
+| `ba` | `ba_xpf_acoustic16` | `bashkir_cv` | XPF `ba` | 80% (85%): the model lacks `ð`, `θ` | 78% (84%) |
+| `ka` | `ka_xpf_acoustic16` | `georgian_cv` | Epitran `kat-Geor` | 34% (39%): `r`, `χ`, affricates | 93% (96%) |
+| `ta` | `ta_epi_acoustic17` | `tamil_cv` | Epitran `tam-Taml` | 99.5% (99.7%) | 99% (100%) |
+| `ab` | `ab_xpf_acoustic16` | `abkhaz_cv` | XPF `ab` | 48% (56%): `p`, labialised consonants | 28% (43%) |
+| `yue` | `yue_epi_acoustic19` (and a toned `yue_vxc_acoustic21_toned`) | none | none for Han script | no word-level G2P for Han script; coverage not measurable | not measured: the text has no spaces and needs a segmenter |
 
-- The middle part of a VoxCommunis file name names the G2P system of its lexicon (dataset card): `epi` Epitran, `xpf` the XPF Corpus, `vxc` a custom dictionary. The card gives no per-language XPF code, and Epitran has no map for Belarusian, Basque, Bashkir or Abkhaz.
-- Where a lexicon exists, the Epitran route is only a fallback for its out-of-vocabulary words; Epitran's segmentation matches the `epi` models (Kinyarwanda, Tamil) and not the `xpf` and `vxc` ones.
+- Where the codes were found: Epitran's codes are the map files of the installed package (`epitran/data/map/<code>.csv`), which has none for Belarusian, Basque, Bashkir or Abkhaz. XPF's are the rule files of the XPF Corpus (`CohenPr-XPF/XPF`, commit `bcc13228ab6a114a9917df25d2b844bd920ce28b`: `Data/be_Belarusan/be.rules`, `Data/eu_Basque/eu.rules`, `Data/ba_Bashkir/ba.rules`, `Data/ab_Abkhaz/ab.rules`), the same codes `xpfcorpus` 0.1.1 takes. XPF's Uyghur is Cyrillic only, while Common Voice writes Uyghur in Arabic script, so `ug` stays on Epitran.
+- Han script: Epitran 1.35.3 has `yue-Latn` and `cmn-Latn`, which take romanisations (Jyutping, pinyin), not characters; `xpfcorpus` 0.1.1 has no Cantonese or Mandarin (its only Chinese language is `nan`). So no G2P route for Cantonese characters was found.
+- The middle part of a VoxCommunis file name names the G2P system of its lexicon (dataset card): `epi` Epitran, `xpf` the XPF Corpus, `vxc` a custom dictionary.
+- Where a lexicon exists, a G2P route is only a fallback for its out-of-vocabulary words. Epitran's segmentation matches the `epi` models (Kinyarwanda, Tamil) and not the `xpf` and `vxc` ones; XPF's matches the Basque model fully and the Belarusian and Bashkir ones mostly.
 - The Abkhaz lexicon covers few of the corpus words; whether that is spelling (apostrophes, case) or vocabulary is not checked.
 
 ### Threshold proposal
