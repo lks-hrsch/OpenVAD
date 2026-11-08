@@ -42,6 +42,7 @@ PLAN_ONLY = (
     "split",
 )
 INDEX_COLUMNS = ["sample_id", "split", "in_small", "source", "treatment", "audio_filepath"]
+_LABEL_ROWS = 10_000
 # LibriVAD `medium` stays out of Small (ADR 0017).
 _NOT_IN_SMALL = "librivad"
 
@@ -85,17 +86,23 @@ def _git_state(repo: Path) -> tuple[str | None, bool | None]:
 
 def _as_is_with_labels(rows: pl.DataFrame) -> pl.DataFrame:
     """Labels of the as-is rows, which `construct` never sees: the plan's intervals at its G, from the start of the
-    source with no shift.
+    source with no shift. They are built `_LABEL_ROWS` rows at a time: the Python lists they pass through take about
+    8 bytes a label against the 1 byte the column holds, which at hundreds of thousands of rows would be tens of GB.
     """
-    labels = [
-        rasterise(
-            apply_gap_rule([(s, e) for s, e in r["speech_ms"]], r["gap_ms"]),
-            [(s, e) for s, e in r["mask_ms"]],
-            r["total_n"],
-        ).tolist()
-        for r in rows.iter_rows(named=True)
-    ]
-    return rows.with_columns(labels=pl.Series(labels, dtype=PLAN_SCHEMA["labels"]))
+    chunks = []
+    for start in range(0, rows.height, _LABEL_ROWS):
+        labels = [
+            rasterise(
+                apply_gap_rule([(s, e) for s, e in r["speech_ms"]], r["gap_ms"]),
+                [(s, e) for s, e in r["mask_ms"]],
+                r["total_n"],
+            ).tolist()
+            for r in rows.slice(start, _LABEL_ROWS).iter_rows(named=True)
+        ]
+        chunks.append(pl.Series("labels", labels, dtype=PLAN_SCHEMA["labels"]))
+    return rows.with_columns(
+        labels=pl.concat(chunks) if chunks else pl.Series("labels", [], dtype=PLAN_SCHEMA["labels"])
+    )
 
 
 async def _read_all(paths: list[Path]) -> list[pl.DataFrame]:

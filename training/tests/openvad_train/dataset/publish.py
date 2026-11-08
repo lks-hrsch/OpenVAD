@@ -16,14 +16,15 @@ import pytest
 from datasets import load_dataset
 
 from build_support import free_space, make_build  # noqa: F401 (free_space is a fixture)
-from openvad_train.dataset import parquet_io
+from openvad_train.dataset import parquet_io, publish
 from openvad_train.dataset.audio import load_audio
-from openvad_train.dataset.config import BuildConfig, dataset_root, work_dir
+from openvad_train.dataset.config import SLICE, BuildConfig, dataset_root, work_dir
 from openvad_train.dataset.construct import PlanMismatch, run_construct
 from openvad_train.dataset.labels import rasterise
 from openvad_train.dataset.parquet_io import read_parquet
-from openvad_train.dataset.plan import PLAN_SCHEMA
+from openvad_train.dataset.plan import PLAN_SCHEMA, draw_sample
 from openvad_train.dataset.publish import PLAN_ONLY, _git_state, run_publish, set_small
+from openvad_train.dataset.schema import Clip, Timing
 from openvad_train.design_resampler import coefficients
 from openvad_train.fetch.common import file_hash, read_manifest
 
@@ -94,6 +95,20 @@ def test_frame_labels_keep_a_gap_under_g_after_publish(built_with_as_is):
     assert row["gap_ms"] == 0
     assert row["labels"][100:110] == [0] * 10
     assert row["labels"] == rasterise([(300, 1000), (1100, 2700)], [], 3 * 16000).tolist()
+
+
+def test_as_is_labels_built_in_chunks_are_those_built_at_once(monkeypatch):
+    clips = [
+        Clip(f"a{i}", "ami", "en", "s", "train", "datasets/raw/ami/a.wav", 0.0, 1.0 + i, "x", None) for i in range(5)
+    ]
+    timings = [Timing(c.clip_id, "word", [(100 * i, 100 * i + 300)], [], None, "t") for i, c in enumerate(clips)]
+    rows = pl.DataFrame([draw_sample(c, t, SLICE) for c, t in zip(clips, timings, strict=True)], schema=PLAN_SCHEMA)
+    at_once = publish._as_is_with_labels(rows)
+    monkeypatch.setattr(publish, "_LABEL_ROWS", 2)
+    in_chunks = publish._as_is_with_labels(rows)
+    assert in_chunks.equals(at_once)
+    assert in_chunks.schema["labels"] == PLAN_SCHEMA["labels"]
+    assert publish._as_is_with_labels(rows.head(0)).schema == rows.schema
 
 
 def test_plan_only_columns_are_dropped_and_dither_stays(built_with_as_is):
