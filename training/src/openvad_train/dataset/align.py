@@ -202,9 +202,11 @@ def _model_version(path: Path) -> str | None:
         names = z.namelist()
         if meta := next((n for n in names if n.endswith("meta.json")), None):
             return json.loads(z.read(meta))["version"]
-        meta = next(n for n in names if n.endswith("meta.yaml"))
+        meta = next((n for n in names if n.endswith("meta.yaml")), None)
+        if meta is None:
+            raise ValueError(f"{path} has neither meta.json nor meta.yaml: not an MFA model")
         # The one top-level scalar needed, without a YAML parser the training package does not depend on.
-        version = re.search(r"^version: *['\"]?([^'\"\n]+?)['\"]?$", z.read(meta).decode(), re.M)
+        version = re.search(r"^version: *['\"]?([^'\"\r\n]+?)['\"]?\r?$", z.read(meta).decode(), re.M)
         if version is None:
             raise ValueError(f"{path}: {meta} has no version")
         return version.group(1)

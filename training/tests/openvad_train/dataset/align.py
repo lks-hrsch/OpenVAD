@@ -1233,3 +1233,18 @@ def test_a_model_of_mfa_2_reads_its_version_from_meta_yaml(tmp_path):
             "acoustic_model/meta.yaml", "architecture: gmm-hmm\nphones:\n- a\ntrain_date: '2021'\nversion: 2.0.0b9\n"
         )
     assert align._model_version(model) == "2.0.0b9"
+
+
+def test_a_meta_yaml_with_windows_line_ends_gives_the_bare_version(tmp_path):
+    model = tmp_path / "crlf.zip"
+    with zipfile.ZipFile(model, "w") as z:
+        z.writestr("acoustic_model/meta.yaml", "architecture: gmm-hmm\r\nversion: 2.0.0b9\r\n")
+    assert align._model_version(model) == "2.0.0b9"
+
+
+def test_a_zip_without_either_meta_file_is_a_named_error(tmp_path):
+    model = tmp_path / "not_a_model.zip"
+    with zipfile.ZipFile(model, "w") as z:
+        z.writestr("readme.txt", "no meta")
+    with pytest.raises(ValueError, match=r"not_a_model\.zip has neither meta\.json nor meta\.yaml"):
+        align._model_version(model)
