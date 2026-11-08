@@ -1108,23 +1108,34 @@ def test_a_clip_limit_is_refused_outside_the_pilot_and_below_one(stage):
     assert stage.fake.calls == []
 
 
-def test_the_clip_limit_takes_the_calibration_selection_and_is_part_of_the_state(stage, monkeypatch):
+def limit_corpus(stage) -> list[Clip]:
+    """Speaker `a` with 12 clips, `b` with 3 and one clip without a speaker. In rank order they are a/c02, a/c07,
+    b/c0, a/c01, a/c00, a/c06, a/c09, a/c08, a/c04, a/c03, a/c10, n/c0, b/c2, a/c11, b/c1, a/c05.
+    """
+    ids = [(f"a/c{i:02d}", "a") for i in range(12)] + [(f"b/c{i}", "b") for i in range(3)] + [("n/c0", None)]
+    return [make_clip(stage.root, clip_id, speaker) for clip_id, speaker in ids]
+
+
+def test_the_clip_limit_takes_clips_in_rank_order_at_most_ten_per_speaker_up_to_the_limit(stage):
     stage.cfg = dataclasses.replace(PILOT, sources=("fake",))
-    monkeypatch.setattr(align, "CALIBRATION_PER_SPEAKER", 2)
-    clips = speakers_clips(stage, n=4, per=3)
-    write_index(stage, clips)
-    run_align(stage.cfg, ["de"], max_clips=5)
-    taken = align.calibration_clips(clips, 5)
-    assert len(taken) == 5
-    assert max(Counter(c.speaker for c in taken).values()) == 2
+    write_index(stage, limit_corpus(stage))
+    run_align(stage.cfg, ["de"], max_clips=13)
     done = {r["clip_id"] for rows in tables(stage)["words"].values() for r in rows}
-    assert done == {c.clip_id for c in taken}
+    # a/c11 is a's 11th clip and is skipped; b/c1 would be the 14th.
+    assert done == {
+        "a/c02", "a/c07", "b/c0", "a/c01", "a/c00", "a/c06", "a/c09", "a/c08", "a/c04", "a/c03", "a/c10", "n/c0", "b/c2"
+    }  # fmt: skip
     summary = manifest(stage)["per_source"]["fake"]["de"]
-    assert (summary["over_clip_limit_not_aligned"], summary["over_cap_not_aligned"]) == (7, 0)
-    assert manifest(stage)["max_clips"] == 5
-    for other in (6, None):
-        with pytest.raises(StateMismatchError):
-            run_align(stage.cfg, ["de"], max_clips=other)
+    assert (summary["over_clip_limit_not_aligned"], summary["over_cap_not_aligned"]) == (3, 0)
+    assert manifest(stage)["max_clips"] == 13
+
+
+def test_a_rerun_with_another_clip_limit_is_refused_even_when_it_takes_the_same_clips(stage):
+    stage.cfg = dataclasses.replace(PILOT, sources=("fake",))
+    write_index(stage, limit_corpus(stage))
+    run_align(stage.cfg, ["de"], max_clips=100)  # 14 clips: a's ten, b's three and n/c0
+    with pytest.raises(StateMismatchError):
+        run_align(stage.cfg, ["de"], max_clips=200)  # the same 14 clips and batches; only the limit differs
 
 
 def fake_epitran(word: str) -> list[str]:
