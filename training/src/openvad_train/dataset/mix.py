@@ -7,13 +7,15 @@
 
 import numpy as np
 
+from openvad_train.dataset.codecs import DecodeError, decode_16k
+
 
 SAMPLE_RATE = 16_000
 _DTMF_ROWS = (697, 770, 852, 941)
 _DTMF_COLUMNS = (1209, 1336, 1477, 1633)
 
 
-def _rms(x: np.ndarray) -> float:
+def rms(x: np.ndarray) -> float:
     return float(np.sqrt(np.mean(np.square(x, dtype=np.float64))))
 
 
@@ -28,7 +30,7 @@ def mix_at_snr(speech: np.ndarray, noise: np.ndarray, active: np.ndarray, snr_db
         raise ValueError("speech, noise and active must have the same shape")
     if not active.any():
         raise ValueError("no active samples to measure the SNR on")
-    speech_rms, noise_rms = _rms(speech[active]), _rms(noise[active])
+    speech_rms, noise_rms = rms(speech[active]), rms(noise[active])
     if speech_rms == 0 or noise_rms == 0:
         raise ValueError("speech or noise is silent over the active samples; the SNR is undefined")
     gain = speech_rms / (noise_rms * 10 ** (snr_db / 20))
@@ -51,6 +53,23 @@ def loop_slice(noise: np.ndarray, offset_n: int, n: int) -> np.ndarray:
     if n < 0:
         raise ValueError(f"cannot take {n} samples")
     return np.take(noise, np.arange(offset_n, offset_n + n), mode="wrap")
+
+
+def read_span(path: str, offset_n: int, n: int) -> np.ndarray:
+    """`n` samples of the speech file at `path` from sample `offset_n`, repeating what the file holds after the offset
+    when it ends first.
+
+    The file is the whole clip (a talker is never a span of a longer recording), and the plan starts a read at 0
+    when the clip is shorter than the span, so a repeat is of the whole clip.
+    `DecodeError` for a file that is damaged, empty after the offset or digital silence, none of which can mix.
+    """
+    audio = decode_16k(path, offset_n / SAMPLE_RATE, n / SAMPLE_RATE)
+    if len(audio) == 0:
+        raise DecodeError(f"{path}: no audio after sample {offset_n}")
+    audio = loop_slice(audio, 0, n)
+    if not audio.any():
+        raise DecodeError(f"{path}: digital silence from sample {offset_n}")
+    return audio
 
 
 def dither(n: int, dbfs: float, rng: np.random.Generator) -> np.ndarray:

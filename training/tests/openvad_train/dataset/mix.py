@@ -5,8 +5,10 @@
 
 import numpy as np
 import pytest
+import soundfile as sf
 from scipy.special import digamma
 
+from openvad_train.dataset.codecs import DecodeError
 from openvad_train.dataset.mix import (
     _WADA_DB,
     _WADA_G,
@@ -17,6 +19,7 @@ from openvad_train.dataset.mix import (
     padded_length,
     place,
     protect_peak,
+    read_span,
     synth_click,
     synth_dtmf,
     wada_snr,
@@ -199,3 +202,20 @@ def test_wada_table_spans_minus_20_to_100_between_the_analytic_limits():
 
 def test_wada_snr_clamps_at_100_for_clean_speech():
     assert wada_snr(speech_like()) == 100.0
+
+
+def test_read_span_reads_from_the_offset_and_repeats_what_is_left_when_the_file_ends(tmp_path):
+    x = np.arange(1, 801, dtype=np.float32) / 1000
+    sf.write(tmp_path / "a.wav", x, 16000, subtype="FLOAT")
+    assert np.array_equal(read_span(str(tmp_path / "a.wav"), 100, 300), x[100:400])
+    wrapped = read_span(str(tmp_path / "a.wav"), 600, 500)
+    assert np.array_equal(wrapped, np.tile(x[600:], 3)[:500])
+
+
+def test_read_span_refuses_silence_and_an_offset_past_the_end(tmp_path):
+    sf.write(tmp_path / "zero.wav", np.zeros(800, np.float32), 16000, subtype="FLOAT")
+    sf.write(tmp_path / "a.wav", np.ones(800, np.float32) / 2, 16000, subtype="FLOAT")
+    with pytest.raises(DecodeError, match="silence"):
+        read_span(str(tmp_path / "zero.wav"), 0, 100)
+    with pytest.raises(DecodeError, match="no audio"):
+        read_span(str(tmp_path / "a.wav"), 900, 100)
