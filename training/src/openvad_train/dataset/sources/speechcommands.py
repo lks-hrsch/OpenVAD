@@ -11,13 +11,11 @@ the separate 4,890-clip test set is never used.
 """
 
 from collections.abc import Iterable, Iterator
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-
-import soundfile as sf
 
 from openvad_train.dataset.models import indexed_languages
 from openvad_train.dataset.schema import Clip, Split, Timing
+from openvad_train.dataset.sources import wav_durations
 
 
 SOURCE = "speech-commands"
@@ -29,13 +27,6 @@ LICENCE = "CC BY 4.0"
 LANGUAGE = "en"
 LISTS: dict[str, Split] = {"validation_list.txt": "validation", "testing_list.txt": "test"}
 NOISE_FOLDER = "_background_noise_"
-# Header reads over the share take about 30 ms each; this many at once hide the latency.
-_THREADS = 16
-
-
-def _durations(files: list[Path]) -> list[float]:
-    with ThreadPoolExecutor(_THREADS) as pool:
-        return list(pool.map(lambda f: sf.info(f).duration, files))
 
 
 def clips(raw: Path, languages: set[str] | None = None) -> Iterator[Clip]:
@@ -49,7 +40,7 @@ def clips(raw: Path, languages: set[str] | None = None) -> Iterator[Clip]:
     for listing, split in LISTS.items():
         named |= dict.fromkeys((root / listing).read_text().split(), split)
     files = sorted(root.glob("*/*.wav"))
-    for file, duration in zip(files, _durations(files), strict=True):
+    for file, duration in zip(files, wav_durations(files), strict=True):
         word = file.parent.name
         relative = f"{word}/{file.name}"
         noise = word == NOISE_FOLDER
