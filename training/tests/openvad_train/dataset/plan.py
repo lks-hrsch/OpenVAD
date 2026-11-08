@@ -660,11 +660,11 @@ def fake_clip(clip_id, speaker="x", language="de", hours=1.0, **kw) -> Clip:
     )  # fmt: skip
 
 
-def hour_of_speech(clip_id) -> Timing:
-    return Timing(clip_id, "word", [(0, 3_600_000)], [], {"n_words": 1}, "mfa")
+def hour_of_speech(clip_id, speech_ms=3_600_000) -> Timing:
+    return Timing(clip_id, "word", [(0, speech_ms)], [], {"n_words": 1}, "mfa")
 
 
-def write_mfa_tables(cfg, source, clips, kept, dropped=(), reserved=()):
+def write_mfa_tables(cfg, source, clips, kept, dropped=(), reserved=(), speech_ms=3_600_000):
     """The index of `clips` and, per language, one words table of the clip IDs in `kept` and one drop table."""
     out = work_dir(cfg) / "index"
     out.mkdir(parents=True, exist_ok=True)
@@ -673,7 +673,7 @@ def write_mfa_tables(cfg, source, clips, kept, dropped=(), reserved=()):
     for language in sorted({c.language for c in clips}):
         folder = words / language
         (folder / "dropped").mkdir(parents=True, exist_ok=True)
-        mine = [hour_of_speech(c.clip_id) for c in clips if c.language == language and c.clip_id in kept]
+        mine = [hour_of_speech(c.clip_id, speech_ms) for c in clips if c.language == language and c.clip_id in kept]
         drops = [
             align.Drop(c.clip_id, "low_loglik", None) for c in clips if c.clip_id in dropped and c.language == language
         ]
@@ -701,6 +701,17 @@ def test_a_speaker_with_25_h_in_each_of_two_languages_keeps_30_h_in_plan(mfa_dat
     assert df.filter(pl.col("speaker") == "y").height == 2
     manifest = json.loads((work_dir(MFA_CONFIG) / "plan/manifest.json").read_text())
     assert manifest["per_source"]["fake"]["over_cap"] == 20
+
+
+def test_the_cap_counts_audio_seconds_as_align_does_not_speech_seconds(mfa_data):
+    # Each 1 h clip holds 30 min of speech: 50 of them are 25 h of speech but 50 h of audio, and align's cap of
+    # 30 h of audio would have stopped at 30 clips, so plan must not keep more.
+    clips = [fake_clip(f"{lang}{i}", language=lang) for lang in ("de", "en") for i in range(25)]
+    write_mfa_tables(MFA_CONFIG, "fake", clips, kept={c.clip_id for c in clips}, speech_ms=1_800_000)
+    run_plan(MFA_CONFIG)
+    df = asyncio.run(read_parquet(work_dir(MFA_CONFIG) / "plan/plan.parquet"))
+    assert df.height == 30
+    assert df["speech_ms"].list.first().list.get(1).unique().to_list() == [1_800_000]
 
 
 def test_clips_without_a_surviving_timing_are_skipped_and_counted_by_reason(mfa_data):

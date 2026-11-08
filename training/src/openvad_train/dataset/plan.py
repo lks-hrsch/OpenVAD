@@ -11,7 +11,7 @@ import dataclasses
 import json
 import logging
 import math
-from collections import Counter, defaultdict
+from collections import Counter
 from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 from types import ModuleType
@@ -381,30 +381,25 @@ def _read_tables(paths: list[Path], columns: list[str] | None = None) -> pl.Data
     return pl.concat(asyncio.run(go()))
 
 
-def _speech_seconds(words: Path) -> dict[str, float]:
-    """Seconds of speech of every clip `align` kept. MFA's words do not overlap, so their union is their sum."""
+def _kept_ids(words: Path) -> set[str]:
+    """The clips `align` kept a timing for."""
     paths = sorted(words.glob("*/*.parquet"))
-    if not paths:
-        return {}
-    length = pl.element().struct.field("end") - pl.element().struct.field("start")
-    frame = _read_tables(paths, ["clip_id", "speech_ms"]).select(
-        "clip_id", seconds=pl.col("speech_ms").list.eval(length).list.sum() / 1000
-    )
-    return dict(frame.iter_rows())
+    return set(_read_tables(paths, ["clip_id"])["clip_id"]) if paths else set()
 
 
 def _surviving_clips(cfg: BuildConfig, name: str, index: pl.DataFrame) -> tuple[list[Clip], Counter]:
     """The clips of an MFA source that have a timing, in language order, and how many were left out and why.
 
     `align` caps each speaker per language, which is an upper bound. The cap that counts is `apply_cap_rank` keyed
-    (source, speaker) over the clips that kept a timing, in rank order, counting speech seconds as for SWC. A clip
+    (source, speaker) over the clips that kept a timing, in rank order. Both stages count audio seconds
+    (`duration_s`), because `align` decides before any alignment exists; only SWC counts speech seconds. A clip
     without a transcript has fixed labels from the adapter and needs no table. Reserved clips are counted here:
     they are never foreground.
     """
     words = work_dir(cfg) / "words" / name
     if not words.is_dir():
         raise FileNotFoundError(f"{name} is labelled by MFA and {words} does not exist: run the align stage first")
-    speech_s = _speech_seconds(words)
+    kept = _kept_ids(words)
     dropped = {
         clip_id
         for path in words.glob("*/dropped/*.parquet")
@@ -418,11 +413,11 @@ def _surviving_clips(cfg: BuildConfig, name: str, index: pl.DataFrame) -> tuple[
         clip = Clip(**row)
         if clip.reserved:
             counts["reserved"] += 1
-        elif clip.transcript is None or clip.clip_id in speech_s:
+        elif clip.transcript is None or clip.clip_id in kept:
             labelled.append(clip)
         else:
             counts["dropped_by_align" if clip.clip_id in dropped else "not_aligned"] += 1
-    capped = list(apply_cap_rank(labelled, speech_s=defaultdict(float, speech_s)))
+    capped = list(apply_cap_rank(labelled))
     counts["over_cap"] = len(labelled) - len(capped)
     return sorted(capped, key=lambda c: c.language), counts
 
