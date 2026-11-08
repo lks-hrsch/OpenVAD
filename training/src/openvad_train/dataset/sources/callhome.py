@@ -98,6 +98,7 @@ def clips(raw: Path, languages: set[str] | None = None) -> Iterator[Clip]:
 
 def timings(raw: Path, clips: Iterable[Clip]) -> Iterator[Timing]:
     for clip in clips:
-        assert clip.row_in_file is not None, clip.clip_id
+        if clip.row_in_file is None:
+            raise ValueError(f"{clip.clip_id}: a CallHome clip names the row of its call, got none")
         call = _shard(raw / Path(clip.path).relative_to(RAW_PREFIX))[clip.row_in_file]
         yield _call_timing(call, clip.clip_id)

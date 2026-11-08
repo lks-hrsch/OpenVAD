@@ -3,6 +3,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+import dataclasses
 from collections import Counter
 
 import numpy as np
@@ -84,3 +85,9 @@ def test_the_row_a_clip_names_holds_that_calls_audio(callhome_tree):
     audio = load_audio(row | {"offset": 0.5, "duration": 1.0}, callhome_tree.parents[2])
     assert audio.shape == (16000,)
     assert np.allclose(audio, expected[8000:24000], atol=1e-4)  # the WAV holds 16-bit samples
+
+
+def test_a_clip_without_a_row_is_a_value_error(callhome_tree):
+    clip = dataclasses.replace(next(iter(callhome.clips(callhome_tree))), row_in_file=None)
+    with pytest.raises(ValueError, match="names the row of its call"):
+        list(callhome.timings(callhome_tree, [clip]))
