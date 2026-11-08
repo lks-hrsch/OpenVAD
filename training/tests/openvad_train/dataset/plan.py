@@ -21,6 +21,7 @@ from mfa_source_support import make_sc_tree
 from openvad_train.dataset import __main__ as cli
 from openvad_train.dataset import align, index
 from openvad_train.dataset import plan as plan_module
+from openvad_train.dataset.channel import RirPool
 from openvad_train.dataset.config import DEMAND_CATEGORIES, FULL, SLICE, work_dir
 from openvad_train.dataset.cutting import Chunk
 from openvad_train.dataset.index import run_index
@@ -29,6 +30,8 @@ from openvad_train.dataset.noise import NoisePool, demand_channels
 from openvad_train.dataset.parquet_io import read_parquet, write_parquet
 from openvad_train.dataset.plan import assign_shards, clip_rows, draw_sample, run_plan
 from openvad_train.dataset.schema import Clip, Timing, rank, sample_seed
+from openvad_train.fetch.common import data_dir
+from rir_support import make_rir_tree
 from swc_support import make_swc_tree
 
 
@@ -298,6 +301,54 @@ def test_noise_comes_from_the_split_channels_as_a_relative_path(pool, split):
     assert all(r["noise_source_ids"] == [] for r in rows if r["condition"] == "clean")
 
 
+@pytest.fixture
+def rirs(tmp_path, monkeypatch) -> RirPool:
+    monkeypatch.setenv("OPENVAD_DATA_DIR", str(tmp_path))
+    return RirPool(make_rir_tree(tmp_path / "datasets/raw/rirs"))
+
+
+@pytest.mark.parametrize("split", ["train", "validation", "test"])
+def test_a_room_row_carries_a_rir_of_its_split_as_a_relative_path(rirs, split):
+    rows = [draw_sample(clip(f"c{i}", split=split), timing(f"c{i}"), FULL, rirs=rirs) for i in range(300)]
+    assert {r["rir_id"] is not None for r in rows if r["room"]} == {True}
+    assert all(r["rir_id"] is None for r in rows if not r["room"])
+    for r in rows:
+        if r["room"]:
+            assert r["rir_id"].startswith("datasets/raw/rirs/")
+            assert rirs.room_of(data_dir() / r["rir_id"]) in rirs.rooms(split)
+
+
+def test_rooms_are_disjoint_between_splits_in_the_plan(rirs):
+    rooms = {
+        split: {
+            rirs.room_of(data_dir() / r["rir_id"])
+            for i in range(300)
+            if (r := draw_sample(clip(f"c{i}", split=split), timing(f"c{i}"), FULL, rirs=rirs))["room"]
+        }
+        for split in ("train", "validation", "test")
+    }
+    assert rooms["train"].isdisjoint(rooms["test"])
+    assert rooms["train"].isdisjoint(rooms["validation"])
+    assert rooms["validation"].isdisjoint(rooms["test"])
+    assert all(rooms.values())
+
+
+def test_the_rir_draw_does_not_move_the_other_draws(rirs):
+    with_rirs = draw_sample(clip(), timing(), FULL, rirs=rirs)
+    without = draw_sample(clip(), timing(), FULL)
+    assert with_rirs | {"rir_id": None} == without
+
+
+def test_a_row_without_a_room_draws_no_rir(rirs):
+    cfg = dataclasses.replace(FULL, room_p=0.0)
+    assert {draw_sample(clip(f"c{i}"), timing(f"c{i}"), cfg, rirs=rirs)["rir_id"] for i in range(100)} == {None}
+
+
+def test_as_is_rows_skip_the_rooms(rirs):
+    row = draw_sample(clip("a", "voxpopuli"), timing("a"), FULL, rirs=rirs)
+    assert (row["room"], row["rir_id"], row["codec"]) == (False, None, "none")
+
+
 def test_a_row_with_the_pool_repeats_itself(pool):
     assert draw_sample(clip(), timing(), SLICE, pool) == draw_sample(clip(), timing(), SLICE, pool)
 
@@ -353,10 +404,13 @@ def test_an_amr_range_without_a_mode_is_an_error_not_a_uniform_draw():
         plan_module._draw_bitrate("amr_nb", cfg, np.random.default_rng(0))
 
 
-def test_slice_draws_only_its_codecs_and_conditions():
+def test_slice_draws_every_codec_and_the_chain_but_only_its_conditions():
     rows = rows_of(SLICE, 500)
-    assert {r["codec"] for r in rows} == {"none", "g722"}
+    assert {r["codec"] for r in rows} == set(FULL.codec_shares)
     assert {r["condition"] for r in rows} == {"clean", *DEMAND_CATEGORIES}
+    assert share(rows, "room", True) == pytest.approx(0.5, abs=0.06)
+    assert share_set(rows, "handset") == pytest.approx(0.7, abs=0.06)
+    assert not any(r["transients"] for r in rows)
 
 
 def test_transients_share_and_ranges():
@@ -483,6 +537,7 @@ def data(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENVAD_DATA_DIR", str(tmp_path))
     make_swc_tree(tmp_path / "datasets/raw/swc")
     make_demand_tree(tmp_path / "datasets/raw/demand")
+    make_rir_tree(tmp_path / "datasets/raw/rirs")
     return tmp_path
 
 
@@ -657,7 +712,7 @@ def test_a_source_without_adapter_is_named(data):
 def test_a_repeated_sample_id_is_refused(data, monkeypatch):
     run_index(CONFIG)
     monkeypatch.setattr(
-        plan_module, "clip_rows", lambda c, t, cfg, pool, counts: [draw_sample(c, t, cfg, pool, Chunk(0, 1))] * 2
+        plan_module, "clip_rows", lambda c, t, cfg, pool, counts, rirs: [draw_sample(c, t, cfg, pool, Chunk(0, 1))] * 2
     )
     with pytest.raises(ValueError, match="repeated"):
         run_plan(CONFIG)

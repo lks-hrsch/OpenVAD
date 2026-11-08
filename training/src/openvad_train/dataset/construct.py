@@ -24,7 +24,15 @@ import polars as pl
 import soundfile as sf
 
 from openvad_train.dataset.audio import load_audio
-from openvad_train.dataset.codecs import DecodeError, decode_16k, delay_ms, encoder_of, preflight, roundtrip
+from openvad_train.dataset.channel import agc, apply_rir, handset, load_rir, soft_clip, suppress
+from openvad_train.dataset.codecs import (
+    DecodeError,
+    decode_16k,
+    encoder_of,
+    preflight,
+    stored_delay_ms,
+    stored_roundtrip,
+)
 from openvad_train.dataset.config import DEMAND_CATEGORIES, FULL, SLICE, BuildConfig, dataset_root, work_dir
 from openvad_train.dataset.cutting import rebase
 from openvad_train.dataset.labels import SAMPLES_PER_FRAME, SAMPLES_PER_MS, apply_gap_rule, rasterise
@@ -49,7 +57,6 @@ _MAX_FAILED_SHARE = 0.05
 # Words quieter than this are digital silence with labels on it: a real SWC "word" of 3.39 s sat at -83.6 dBFS.
 _MIN_WORD_DBFS = -70.0
 _CONDITIONS_BUILT = {"clean", *DEMAND_CATEGORIES}
-_CODECS_BUILT = {"none", "g722"}
 
 
 class OutOfSpace(Exception):  # noqa: N818 (the name is the plan's interface)
@@ -61,18 +68,12 @@ class PlanMismatch(Exception):  # noqa: N818 (the name is the plan's interface)
 
 
 def _legs_not_built(row: dict) -> list[str]:
-    """The fields of `row` that ask for a leg construction does not have yet: Task 18 and Task 19 add them."""
+    """The fields of `row` that ask for a leg construction does not have yet: Task 18 adds them."""
     asked = {
         "baseline_snr_db": row["source"] == "common-voice",  # WADA-SNR on each clip, spec "Common Voice baseline"
-        "room": row["room"],
-        "handset": row["handset"] is not None,
-        "agc": row["agc"] is not None,
-        "clip_drive_db": row["clip_drive_db"] is not None,
-        "suppression": row["suppression"] is not None,
         "transients": bool(row["transients"]),
         "segments": bool(row["segments"]),
-        "band": row["band"] != "wide",
-        "codec": row["codec"] not in _CODECS_BUILT,
+        "band": row["band"] not in ("wide", "narrow_leg"),
         "condition": row["condition"] not in _CONDITIONS_BUILT,
     }
     return [field for field, wanted in asked.items() if wanted]
@@ -96,9 +97,29 @@ def _noise_of(row: dict, raw: Path) -> np.ndarray:
     return _read_noise(raw / files[0], offsets[0], row["total_n"])
 
 
+def _channel(x: np.ndarray, row: dict, raw: Path) -> np.ndarray:
+    """The steps of the stored chain that the row asks for, in the order of ADR 0021; none shifts the labels."""
+    if row["room"]:
+        if row["rir_id"] is None:
+            raise ValueError(f"{row['sample_id']}: a room row without a rir_id")
+        x = apply_rir(x, load_rir(raw / row["rir_id"]))
+    if row["handset"] is not None:
+        x = handset(x, row["handset"])
+    if row["agc"] is not None:
+        x = agc(x, row["agc"])
+    if row["clip_drive_db"] is not None:
+        x = soft_clip(x, row["clip_drive_db"])
+    if row["suppression"] is not None:
+        x = suppress(x, row["suppression"])
+    return x
+
+
 def codec_delay_ms(row: dict) -> int:
-    """The whole milliseconds by which the row's stored audio lags its input, which its labels are shifted by."""
-    return 0 if row["codec"] == "none" else round(delay_ms(row["codec"]))
+    """The whole milliseconds by which the row's stored audio lags its input, which its labels are shifted by.
+
+    AMR-NB counts its resampler round trip too: 5.0 + 4.125 ms rounds to 9.
+    """
+    return 0 if row["codec"] == "none" else round(stored_delay_ms(row["codec"]))
 
 
 def construct_sample(row: dict, raw: Path) -> tuple[bytes, np.ndarray]:
@@ -106,7 +127,8 @@ def construct_sample(row: dict, raw: Path) -> tuple[bytes, np.ndarray]:
 
     `raw` is the root the row's paths are relative to, `$OPENVAD_DATA_DIR` in a build. The only draw made here is
     the dither of a clean row: its `total_n` normals from `default_rng([row["seed"], 1])`, a stream apart from the
-    one the plan drew from. Bytes then depend only on the row, its source files and the ffmpeg version.
+    one the plan drew from. The chain and the codec leg draw nothing: their parameters are in the row. Bytes then
+    depend only on the row, its source files (the RIR included) and the ffmpeg version.
 
     Labels come from the audio produced, never from file metadata. `DecodeError` means this clip cannot be built: a
     damaged file, a decode further than one 10 ms frame from `source_n`, or words under -70 dBFS RMS. A decode can
@@ -142,9 +164,10 @@ def construct_sample(row: dict, raw: Path) -> tuple[bytes, np.ndarray]:
         if not noise[active].any():
             raise DecodeError(f"{row['noise_source_ids'][0]}: silent under the words of {row['sample_id']}")
         x = mix_at_snr(x, noise, active, row["snr_db"])
-    x = protect_peak(x)
+    x = _channel(x, row, raw)
+    x = protect_peak(x)  # after the chain, which may raise the peak; before the codec, which takes [-1, 1]
     if row["codec"] != "none":
-        x = roundtrip(x, row["codec"], round(row["bitrate"] * 1000))  # the plan's bitrates are in kbit/s
+        x = stored_roundtrip(x, row["codec"], round(row["bitrate"] * 1000))  # the plan's bitrates are in kbit/s
 
     shift_ms = offset_n // SAMPLES_PER_MS + codec_delay_ms(row)
     labels = rasterise(apply_gap_rule(speech_ms, row["gap_ms"]), mask_ms, len(x), shift_ms)

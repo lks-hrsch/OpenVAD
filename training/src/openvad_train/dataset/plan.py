@@ -20,6 +20,7 @@ import numpy as np
 import polars as pl
 
 from openvad_train.dataset.align import WORDS_SCHEMA, _dropped_files
+from openvad_train.dataset.channel import RirPool
 from openvad_train.dataset.codecs import AMR_MODES_BPS
 from openvad_train.dataset.config import DEMAND_CATEGORIES, FULL, SLICE, BuildConfig, work_dir
 from openvad_train.dataset.cutting import Chunk, cut_long, rebase, split_over
@@ -190,14 +191,20 @@ def _draw_mix_and_chain(cfg: BuildConfig, total_n: int, rng: np.random.Generator
 
 
 def draw_sample(
-    clip: Clip, timing: Timing, cfg: BuildConfig, pool: NoisePool | None = None, chunk: Chunk | None = None
+    clip: Clip,
+    timing: Timing,
+    cfg: BuildConfig,
+    pool: NoisePool | None = None,
+    chunk: Chunk | None = None,
+    rirs: RirPool | None = None,
 ) -> dict:
     """The plan row of `clip`, or of its `chunk`; its draws come only from the seed of its sample id.
 
     The row's columns are the spec's split columns plus what construction reads: `source_path`, `source_offset_n`
     and `source_n` say which audio is the foreground, `speech_offset_n` where it goes inside `total_n`, and
     `speech_ms` and `mask_ms` hold the intervals counted from the foreground's start.
-    Without `pool` a noise condition is named but has no noise source, for tests that look only at the draws.
+    Without `pool` a noise condition is named but has no noise source, and without `rirs` a room has no `rir_id`,
+    for tests that look only at the draws. The RIR is drawn from the rooms of the clip's split, after the noise.
     """
     sample_id = f"{clip.source}/{clip.clip_id}" + ("" if chunk is None else f"@{chunk.start_ms}")
     seed = sample_seed(cfg.global_seed, cfg.plan_version, sample_id)
@@ -276,6 +283,8 @@ def draw_sample(
         noise = pool.draw(drawn["condition"], clip.split, rng)
         row["noise_source_ids"] = [noise.file.relative_to(data_dir()).as_posix()]
         row["noise_offsets"] = [noise.offset_n]
+    if rirs is not None and drawn["room"]:
+        row["rir_id"] = rirs.draw(clip.split, rng).file.relative_to(data_dir()).as_posix()
     return (
         row
         | {
@@ -315,7 +324,12 @@ def _split_rows(clip: Clip, timing: Timing, cfg: BuildConfig, pool: NoisePool | 
 
 
 def clip_rows(
-    clip: Clip, timing: Timing, cfg: BuildConfig, pool: NoisePool | None = None, counts: Counter | None = None
+    clip: Clip,
+    timing: Timing,
+    cfg: BuildConfig,
+    pool: NoisePool | None = None,
+    counts: Counter | None = None,
+    rirs: RirPool | None = None,
 ) -> list[dict]:
     """The rows of one clip: none if it is reserved, and an augmented sample only if a frame of it is speech.
 
@@ -330,7 +344,7 @@ def clip_rows(
             return _split_rows(clip, timing, cfg, pool, duration_ms)
         return [draw_sample(clip, timing, cfg, pool)]
     if _cutting(clip.source) != "cut_long":
-        return [draw_sample(clip, timing, cfg, pool)] if _has_speech_frame(timing, 0, duration_ms) else []
+        return [draw_sample(clip, timing, cfg, pool, rirs=rirs)] if _has_speech_frame(timing, 0, duration_ms) else []
     # Inside the clip: the adapter's timeline may round a millisecond past it.
     inside = dataclasses.replace(
         timing, speech_ms=rebase(timing.speech_ms, 0, duration_ms), mask_ms=rebase(timing.mask_ms, 0, duration_ms)
@@ -346,7 +360,7 @@ def clip_rows(
         elif not _has_speech_frame(inside, *chunk):
             counts["masked_chunks"] += 1
         else:
-            rows.append(draw_sample(clip, inside, cfg, pool, chunk))
+            rows.append(draw_sample(clip, inside, cfg, pool, chunk, rirs))
     return rows
 
 
@@ -484,7 +498,7 @@ class _MfaTimings:
             yield self._table[clip.clip_id]
 
 
-def _plan_source(cfg: BuildConfig, name: str, pool: NoisePool) -> tuple[list[pl.DataFrame], dict]:
+def _plan_source(cfg: BuildConfig, name: str, pool: NoisePool, rirs: RirPool | None) -> tuple[list[pl.DataFrame], dict]:
     """The rows of one source as frames, and its counts. Clips, timings and row dicts stay in memory only per batch:
     a dict is about 4 KB, which at 15 M rows would cost over 60 GB.
     """
@@ -511,7 +525,7 @@ def _plan_source(cfg: BuildConfig, name: str, pool: NoisePool) -> tuple[list[pl.
         for clip, timing in zip(clips, timings(clips), strict=True):
             if timing.clip_id != clip.clip_id:
                 raise ValueError(f"{name}: timings out of clip order at {clip.clip_id!r}, got {timing.clip_id!r}")
-            sample_rows = clip_rows(clip, timing, cfg, pool, counts)
+            sample_rows = clip_rows(clip, timing, cfg, pool, counts, rirs)
             rows += sample_rows
             counts["reserved"] += clip.reserved
             counts["without_sample"] += not sample_rows and not clip.reserved
@@ -554,10 +568,11 @@ def run_plan(cfg: BuildConfig, limit: str | None = None) -> None:
         raise ValueError(f"no index adapter for source {unknown[0]!r}; have {sorted(SOURCES)}")
 
     pool = NoisePool(raw_dir("demand"))
+    rirs = RirPool(raw_dir("rirs")) if cfg.room_p > 0 else None
     frames: list[pl.DataFrame] = []
     per_source: dict[str, dict] = {}
     for name in cfg.sources:
-        source_frames, per_source[name] = _plan_source(cfg, name, pool)
+        source_frames, per_source[name] = _plan_source(cfg, name, pool, rirs)
         frames += source_frames
         log.info("%s: %s", name, per_source[name])
 

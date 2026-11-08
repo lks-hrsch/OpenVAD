@@ -111,15 +111,8 @@ SLICE = BuildConfig(
     noise=("demand",),
     languages=("de",),
     condition_shares=_slice_shares(),
-    codec_shares={"none": 0.5, "g722": 0.5},
-    codec_bitrate_kbps={"g722": (64.0, 64.0)},
     max_samples=500,
-    # The room, handset, AGC, clip, suppression and transient legs arrive with Tasks 18 and 19.
-    room_p=0.0,
-    handset_p=0.0,
-    agc_p=0.0,
-    clip_p=0.0,
-    suppression_p=0.0,
+    # The transient leg arrives with Task 18.
     transient_p=0.0,
 )
 

@@ -30,16 +30,17 @@ def test_full_spec_scalars():
     assert FULL.dither_dbfs == (-90.0, -70.0)
 
 
-def test_slice_is_swc_german_demand_with_two_codecs():
+def test_slice_is_swc_german_demand_with_every_codec():
     assert (SLICE.sources, SLICE.noise, SLICE.languages) == (("swc",), ("demand",), ("de",))
-    assert set(SLICE.codec_shares) == {"none", "g722"}
-    assert sum(SLICE.codec_shares.values()) == pytest.approx(1.0)
+    assert SLICE.codec_shares == FULL.codec_shares
+    assert SLICE.codec_bitrate_kbps == FULL.codec_bitrate_kbps
     assert sum(SLICE.condition_shares.values()) == pytest.approx(1.0)
 
 
-def test_slice_draws_no_leg_of_the_chain_that_is_not_built():
-    legs = (SLICE.room_p, SLICE.handset_p, SLICE.agc_p, SLICE.clip_p, SLICE.suppression_p, SLICE.transient_p)
-    assert set(legs) == {0.0}
+def test_slice_has_the_full_chain_except_for_the_transients_that_are_not_built():
+    chain = ("room_p", "handset_p", "agc_p", "clip_p", "suppression_p")
+    assert [getattr(SLICE, p) for p in chain] == [getattr(FULL, p) for p in chain]
+    assert SLICE.transient_p == 0.0
 
 
 def test_dataset_root_follows_data_dir(monkeypatch, tmp_path):

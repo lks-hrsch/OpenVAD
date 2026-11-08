@@ -22,6 +22,7 @@ import numpy as np
 import polars as pl
 import pytest
 import soundfile as sf
+from scipy import signal
 
 from openvad_train.dataset import codecs, construct
 from openvad_train.dataset.audio import load_audio
@@ -29,14 +30,17 @@ from openvad_train.dataset.codecs import DecodeError, MissingCodec
 from openvad_train.dataset.config import SLICE, BuildConfig, dataset_root, work_dir
 from openvad_train.dataset.construct import OutOfSpace, PlanMismatch, construct_sample, run_construct, write_shard
 from openvad_train.dataset.cutting import Chunk
+from openvad_train.dataset.labels import apply_gap_rule, rasterise
 from openvad_train.dataset.mix import dither, loop_slice
 from openvad_train.dataset.parquet_io import read_parquet, write_parquet
 from openvad_train.dataset.plan import PLAN_SCHEMA, draw_sample
 from openvad_train.dataset.schema import Clip, Timing
 from openvad_train.fetch.common import cache_dir, data_dir, take_share_lock, write_manifest
+from rir_support import synthetic_rir
 
 
 GB = 1_000_000_000
+needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg is not installed")
 CHAIN_OFF = {"room": False, "handset": None, "agc": None, "clip_drive_db": None, "suppression": None, "transients": []}
 CLEAN = {"condition": "clean", "snr_db": None, "noise_source_ids": [], "noise_offsets": [], "dither_dbfs": -80.0}
 NO_CODEC = {"codec": "none", "bitrate": None, "band": "wide"}
@@ -170,6 +174,128 @@ def test_labels_shift_by_padding_offset_then_codec_delay(raw, codec, first_frame
     assert y[299] == 0
     assert y[301:399].tolist() == [1] * 98
     assert y[401:].tolist() == [0] * (len(y) - 401)
+
+
+def chirp(n: int, f1: float = 3500.0) -> np.ndarray:
+    t = np.arange(n) / 16000
+    return (0.5 * signal.chirp(t, 100, n / 16000, f1)).astype(np.float32)
+
+
+def need_encoder(codec: str) -> None:
+    try:
+        codecs.preflight({codecs.encoder_of(codec)})
+    except MissingCodec as e:
+        pytest.skip(str(e))
+
+
+STORED = {
+    "opus": [("opus", 12.0), ("opus", 32.0)],
+    "amr_wb": [("amr_wb", 6.6), ("amr_wb", 23.85)],
+    "amr_nb": [("amr_nb", 4.75), ("amr_nb", 12.2)],
+}
+CODEC_CASES = [pytest.param(c, b, id=f"{c}-{b}") for pairs in STORED.values() for c, b in pairs] + [
+    pytest.param("g722", 64.0, id="g722-64.0")
+]
+
+
+def codec_overrides(codec: str, bitrate: float) -> dict:
+    return {"codec": codec, "bitrate": bitrate, "band": "narrow_leg" if codec == "amr_nb" else "wide"}
+
+
+@pytest.mark.parametrize(
+    ("codec", "ms"), [("none", 0), ("g722", 1), ("opus", 0), ("amr_wb", 6), ("amr_nb", 9)], ids=lambda v: str(v)
+)
+def test_the_label_shift_of_each_codec_in_whole_milliseconds(codec, ms):
+    # AMR-NB: 5.0 ms for the codec and 4.125 ms for the resampler round trip, which rounds to 9.
+    assert construct.codec_delay_ms({"codec": codec}) == ms
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize(("codec", "bitrate"), CODEC_CASES)
+def test_each_stored_codec_keeps_length_and_lags_by_its_delay(raw, codec, bitrate):
+    need_encoder(codec)
+    x = chirp(3 * 16000)
+    plain = stored(construct_sample(make_row(x, speech=[(0, 3000)]), raw)[0])
+    coded = stored(construct_sample(make_row(x, speech=[(0, 3000)], **codec_overrides(codec, bitrate)), raw)[0])
+    assert len(coded) == len(plain)
+    lag_ms = (np.argmax(signal.correlate(coded, plain, mode="full", method="fft")) - (len(plain) - 1)) / 16
+    assert lag_ms == pytest.approx(codecs.stored_delay_ms(codec), abs=0.5)
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize("codec", ["g722", "opus", "amr_wb"])
+def test_an_impulse_survives_padding_and_each_wideband_codec(raw, codec):
+    need_encoder(codec)
+    bitrate = 64.0 if codec == "g722" else 32.0 if codec == "opus" else 23.85
+    flac, y = construct_sample(impulse_row(**codec_overrides(codec, bitrate)), raw)
+    assert abs(np.argmax(np.abs(stored(flac))) // 160 - (np.argmax(y == 1) + 10)) <= 1
+
+
+@needs_ffmpeg
+def test_the_amr_nb_leg_shifts_the_labels_by_nine_milliseconds(raw):
+    need_encoder("amr_nb")
+    row = make_row(chirp(3 * 16000, 3000), speech=[(500, 2500)], total_n=6 * 16000, speech_offset_n=2 * 16000)
+    row = row | codec_overrides("amr_nb", 12.2)
+    flac, y = construct_sample(row, raw)
+    expected = rasterise(apply_gap_rule(row["speech_ms"], row["gap_ms"]), row["mask_ms"], row["total_n"], 2000 + 9)
+    assert y.tolist() == expected.tolist()
+    audio = stored(flac)
+    assert rms(audio[: 2 * 16000]) < 0.01 < rms(audio[2 * 16000 + 4000 : 2 * 16000 + 8000])
+
+
+CHAIN_LEGS = {
+    "handset": {"highpass_hz": 300.0, "lowpass_hz": 3400.0, "peaks": [{"freq_hz": 1000.0, "gain_db": 6.0}] * 2},
+    "agc": {"target_dbfs": -20.0, "attack_ms": 10.0, "release_ms": 200.0},
+    "clip_drive_db": 12.0,
+    "suppression": "wiener",
+}
+
+
+@pytest.mark.parametrize("leg", sorted(CHAIN_LEGS))
+def test_each_chain_leg_changes_the_audio_and_leaves_the_labels(raw, leg):
+    plain_flac, plain_labels = construct_sample(make_row(**noisy()), raw)
+    flac, labels = construct_sample(make_row(**noisy(), **{leg: CHAIN_LEGS[leg]}), raw)
+    assert len(stored(flac)) == len(stored(plain_flac))
+    assert not np.array_equal(stored(flac), stored(plain_flac))
+    assert labels.tolist() == plain_labels.tolist()
+    assert construct_sample(make_row(**noisy(), **{leg: CHAIN_LEGS[leg]}), raw)[0] == flac
+
+
+def test_the_whole_chain_stays_inside_full_scale_and_builds(raw):
+    row = make_row(tone(3 * 16000, 0.9), **noisy(0.0), **CHAIN_LEGS)
+    audio = stored(construct_sample(row, raw)[0])
+    assert np.abs(audio).max() <= 1.0
+    assert np.isfinite(audio).all()
+
+
+def room_row(rir: np.ndarray, **overrides) -> dict:
+    path = data_dir() / "datasets/raw/rirs/but/room/rir.wav"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    sf.write(path, rir, 16000, subtype="FLOAT")
+    return impulse_row(room=True, rir_id=path.relative_to(data_dir()).as_posix(), **overrides)
+
+
+def test_a_room_does_not_shift_the_onset(raw):
+    plain = impulse_row()
+    room = room_row(synthetic_rir(predelay_n=800))
+    assert np.argmax(np.abs(stored(construct_sample(room, raw)[0]))) == np.argmax(
+        np.abs(stored(construct_sample(plain, raw)[0]))
+    )
+
+
+def test_the_reverb_tail_is_non_speech(raw):
+    row = room_row(synthetic_rir(n=12000))
+    flac, labels = construct_sample(row, raw)
+    audio = stored(flac)
+    speech_end = row["speech_offset_n"] + round(1.6 * 16000)  # the impulse sits at 1.5 s, its word ends at 1.6 s
+    assert np.abs(audio[speech_end : speech_end + 4000]).max() > 1e-3  # the tail is in the audio
+    assert (labels[speech_end // 160 + 21 :] == 0).all()  # G = 200 ms closes no gap after the last word
+    assert labels.tolist() == construct_sample(impulse_row(), raw)[1].tolist()
+
+
+def test_a_room_row_without_a_rir_is_refused(raw):
+    with pytest.raises(ValueError, match="rir_id"):
+        construct_sample(make_row(room=True, rir_id=None), raw)
 
 
 @pytest.mark.parametrize(("rate", "tolerance_n"), [(16000, 0), (44100, 1)])
@@ -348,17 +474,9 @@ def test_a_damaged_source_is_a_decode_error(raw):
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("room", True),
-        ("handset", {"highpass_hz": 100.0, "lowpass_hz": 3400.0, "peaks": []}),
-        ("agc", {"target_dbfs": -20.0, "attack_ms": 5.0, "release_ms": 100.0}),
-        ("clip_drive_db", 3.0),
-        ("suppression", "wiener"),
         ("transients", [{"kind": "click", "offset_n": 0, "peak_db": 0.0}]),
         ("segments", [{"clip_id": "x", "start_n": 0, "end_n": 1, "rir_id": None, "lowpass_hz": 1000.0}]),
-        ("band", "narrow_leg"),
-        ("codec", "amr_nb"),
-        ("codec", "amr_wb"),
-        ("codec", "opus"),
+        ("band", "narrow_native"),
         ("condition", "competing"),
         ("condition", "babble"),
         ("condition", "ssn"),
@@ -384,9 +502,10 @@ def test_every_slice_row_is_buildable():
         assert construct._legs_not_built(row) == []
 
 
-def test_a_clip_drive_of_zero_still_asks_for_the_leg(raw):
-    with pytest.raises(NotImplementedError, match="clip_drive_db"):
-        construct_sample(make_row(clip_drive_db=0.0), raw)
+def test_a_clip_drive_of_zero_is_still_applied(raw):
+    plain = stored(construct_sample(make_row(), raw)[0])
+    clipped = stored(construct_sample(make_row(clip_drive_db=0.0), raw)[0])
+    assert not np.array_equal(plain, clipped)
 
 
 def test_a_noise_row_without_exactly_one_noise_is_refused(raw):
@@ -918,8 +1037,10 @@ def test_a_failed_shard_leaves_a_hole_and_a_rerun_fills_only_it(cfg, monkeypatch
 
 
 def test_a_row_asking_for_an_unbuilt_leg_aborts_through_the_workers(cfg, planned_rows):
-    write_plan(cfg, [planned_rows[0] | {"room": True}, *planned_rows[1:]])
-    with pytest.raises(NotImplementedError, match="room"):
+    write_plan(
+        cfg, [planned_rows[0] | {"transients": [{"kind": "click", "offset_n": 0, "peak_db": 0.0}]}, *planned_rows[1:]]
+    )
+    with pytest.raises(NotImplementedError, match="transients"):
         run_construct(cfg, workers=1)
     assert not (work_dir(cfg) / "fragments/train/00000.parquet").exists()
 

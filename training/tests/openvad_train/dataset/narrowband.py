@@ -10,9 +10,11 @@ from typing import cast
 
 import numpy as np
 import pytest
+from scipy import signal
 
 from openvad_rs import GROUP_DELAY_16K, decimate_2x, interpolate_2x
-from openvad_train.dataset.codecs import delay_ms
+from openvad_train.dataset.codecs import MissingCodec, delay_ms, narrow_roundtrip, preflight
+from openvad_train.dataset.construct import codec_delay_ms
 from openvad_train.dataset.g711 import alaw_roundtrip, mulaw_roundtrip
 from openvad_train.dataset.narrowband import (
     apply_narrowband,
@@ -159,6 +161,23 @@ def test_narrow_leg_residual_lag_stays_under_one_frame():
     labelled_ms = round(stored_ms)
     residual_ms = (stored_ms - labelled_ms) + resampler_ms
     assert residual_ms == pytest.approx(4.25)
+    assert residual_ms < 10
+
+
+def test_narrow_leg_residual_lag_measured_end_to_end():
+    # The stored AMR-NB leg and the train-time transform, with the shift construction really uses.
+    try:
+        preflight({"libopencore_amrnb"})
+    except MissingCodec as e:
+        pytest.skip(str(e))
+    n = 2 * 16000
+    x = (0.5 * signal.chirp(np.arange(n) / 16000, 100, 2.0, 3500)).astype(np.float32)
+    x[:2000] = 0
+    out = telephone(narrow_roundtrip(x, "amr_nb", 12200), rng())
+    lag_ms = (np.argmax(signal.correlate(out, x, mode="full", method="fft")) - (n - 1)) / 16
+    assert lag_ms == pytest.approx(13.25, abs=0.25)  # 5.0 codec + 4.125 resampler in the leg + 4.125 in the transform
+    residual_ms = lag_ms - codec_delay_ms({"codec": "amr_nb"})
+    assert residual_ms == pytest.approx(4.25, abs=0.25)
     assert residual_ms < 10
 
 
