@@ -26,6 +26,8 @@ from openvad_train.dataset.schema import Clip, Split, Timing
 SOURCE = "librivad"
 CUTTING = None
 MFA_ALIGNED = False
+# The spec keeps every file of this source, so none of its speakers is reserved for babble.
+RESERVES_SPEAKERS = False
 LICENCE = "CC BY-NC-SA 4.0"
 LANGUAGE = "en"
 SAMPLE_RATE = 16000

@@ -34,6 +34,8 @@ from openvad_train.dataset.textgrid import parse_textgrid
 SOURCE = "voices"
 CUTTING = None
 MFA_ALIGNED = False
+# The spec keeps every file of this source, so none of its speakers is reserved for babble.
+RESERVES_SPEAKERS = False
 RAW_PREFIX = Path("datasets/raw/voices")
 LICENCE = "CC BY 4.0"
 LANGUAGE = "en"

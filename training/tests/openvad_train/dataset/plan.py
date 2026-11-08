@@ -902,3 +902,21 @@ def test_a_slice_of_languages_gives_every_callhome_clip_the_same_split_in_the_in
     assert set(german["language"]) == {"de"}
     splits = dict(zip(first["clip_id"], first["split"], strict=True))
     assert all(splits[c] == s for c, s in zip(german["clip_id"], german["split"], strict=True))
+
+
+def test_librivad_and_voices_reserve_no_speaker_and_plan_keeps_every_clip(as_is_data):
+    cfg = dataclasses.replace(AS_IS_CONFIG, sources=("voices", "librivad"))
+    run_index(cfg)
+    run_plan(cfg)
+    for source in cfg.sources:
+        indexed = asyncio.run(read_parquet(work_dir(cfg) / f"index/{source}.parquet"))
+        assert indexed.height > 0
+        assert not indexed["reserved"].any()
+        assert indexed["speaker"].null_count() == 0
+    df = asyncio.run(read_parquet(work_dir(cfg) / "plan/plan.parquet"))
+    assert df.filter(pl.col("source") == "voices").height == 34  # the 36 recordings but the 2 of dev-clean
+    assert df.filter(pl.col("source") == "librivad").height == 5 * 4 * 3
+
+
+def test_ami_keeps_the_default_of_reserving_speakers():
+    assert getattr(index.SOURCES["ami"], "RESERVES_SPEAKERS", True) is True

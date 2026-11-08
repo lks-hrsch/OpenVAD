@@ -120,7 +120,8 @@ def apply_cap_rank(
 # `timings(raw, clips)` and is capped here. An MFA adapter may have `timings` too, for its clips without a transcript
 # (Speech Commands background noise), whose labels are fixed. An adapter with `REPORTS = True` takes a third argument,
 # a dict it fills with what it left out and why (duplicates, held-out speakers, skipped languages), which the index
-# manifest records under `adapter`.
+# manifest records under `adapter`. An adapter with `RESERVES_SPEAKERS = False` (LibriVAD and VOiCES, whose spec rows
+# keep every file) has no reserved speakers: `run_index` skips `reserve_speakers` for it, and its speaker IDs stay.
 SOURCES: dict[str, ModuleType] = {
     m.SOURCE: m for m in (swc, commonvoice, mls, fleurs, voxpopuli, speechcommands, ami, callhome, voices, librivad)
 }
@@ -228,7 +229,12 @@ def run_index(cfg: BuildConfig) -> None:
     out = work_dir(cfg) / "index"
     out.mkdir(parents=True, exist_ok=True)
     frames = {
-        out / f"{name}.parquet": _frame(parts[0], reserve_speakers(parts[0], cfg.reserved_share))
+        out / f"{name}.parquet": _frame(
+            parts[0],
+            reserve_speakers(parts[0], cfg.reserved_share)
+            if getattr(SOURCES[name], "RESERVES_SPEAKERS", True)
+            else set(),
+        )
         for name, parts in indexed.items()
     }
     asyncio.run(write_parquet(frames))
