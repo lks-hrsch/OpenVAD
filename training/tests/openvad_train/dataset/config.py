@@ -5,7 +5,7 @@
 
 import pytest
 
-from openvad_train.dataset.config import FULL, SLICE, dataset_root, work_dir
+from openvad_train.dataset.config import FULL, PILOT, SLICE, dataset_root, work_dir
 
 
 def test_full_condition_shares_sum_to_one():
@@ -51,3 +51,10 @@ def test_work_dir_is_per_configuration(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENVAD_DATA_DIR", str(tmp_path))
     assert work_dir(FULL) == tmp_path / "datasets/processed/work/openvad-v1"
     assert work_dir(SLICE) == tmp_path / "datasets/processed/work/openvad-slice"
+
+
+def test_the_pilot_is_common_voice_alone_in_its_own_work_dir(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENVAD_DATA_DIR", str(tmp_path))
+    assert (PILOT.name, PILOT.sources) == ("openvad-pilot", ("common-voice",))
+    assert set(PILOT.languages or ()) >= {"en", "de", "it", "ca"}  # the hand check's four
+    assert work_dir(PILOT) == tmp_path / "datasets/processed/work/openvad-pilot"

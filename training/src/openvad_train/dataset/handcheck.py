@@ -29,7 +29,7 @@ import soundfile as sf
 
 from openvad_train.dataset.align import WORDS_SCHEMA, _read_index, _read_tables, _tier, parse_textgrid
 from openvad_train.dataset.codecs import decode_16k
-from openvad_train.dataset.config import FULL, SLICE, BuildConfig, work_dir
+from openvad_train.dataset.config import CONFIGS, BuildConfig, work_dir
 from openvad_train.dataset.labels import apply_gap_rule, rasterise
 from openvad_train.dataset.schema import rank
 from openvad_train.fetch.common import data_dir
@@ -312,20 +312,20 @@ def score_handcheck(path: Path) -> dict:
 
 def main_sample(args: list[str]) -> None:
     parser = argparse.ArgumentParser(prog="dataset handcheck-sample", description=__doc__)
-    parser.add_argument("--config", choices=("slice", "full"), required=True)
+    parser.add_argument("--config", choices=tuple(CONFIGS), required=True)
     parser.add_argument("--per-language", type=int, default=PER_LANGUAGE)
     parser.add_argument("--languages", default=",".join(HANDCHECK_LANGUAGES), help="comma-separated language codes")
     ns = parser.parse_args(args)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    out = sample_handcheck({"slice": SLICE, "full": FULL}[ns.config], ns.per_language, tuple(ns.languages.split(",")))
+    out = sample_handcheck(CONFIGS[ns.config], ns.per_language, tuple(ns.languages.split(",")))
     print(f"hand over: {out / 'clips'}")
 
 
 def main_score(args: list[str]) -> None:
     parser = argparse.ArgumentParser(prog="dataset handcheck-score", description=__doc__)
     where = parser.add_mutually_exclusive_group(required=True)
-    where.add_argument("--config", choices=("slice", "full"))
+    where.add_argument("--config", choices=tuple(CONFIGS))
     where.add_argument("--path", type=Path, help="the sample directory, if it was moved")
     ns = parser.parse_args(args)
-    path = ns.path or handcheck_dir({"slice": SLICE, "full": FULL}[ns.config])
+    path = ns.path or handcheck_dir(CONFIGS[ns.config])
     print(json.dumps(score_handcheck(path), indent=1, sort_keys=True))

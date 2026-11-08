@@ -6,8 +6,8 @@
 import pytest
 
 from openvad_train.dataset import __main__ as cli
-from openvad_train.dataset import align, construct, handcheck, publish, verify
-from openvad_train.dataset.config import SLICE
+from openvad_train.dataset import align, construct, handcheck, index, publish, verify
+from openvad_train.dataset.config import PILOT, SLICE
 
 
 def test_unimplemented_stage_is_an_error():
@@ -49,10 +49,29 @@ def test_verify_is_registered():
 
 def test_align_is_registered_and_takes_a_config_and_languages(monkeypatch):
     seen = []
-    monkeypatch.setattr(align, "run_align", lambda c, languages: seen.append((c.name, languages)))
+    monkeypatch.setattr(align, "run_align", lambda c, languages, **kw: seen.append((c.name, languages, kw)))
     cli.main(["align", "--config", "slice", "--languages", "de,fr"])
     cli.main(["align", "--config", "full"])
-    assert seen == [(SLICE.name, ["de", "fr"]), ("openvad-v1", None)]
+    none = {"max_clips": None}
+    assert seen == [(SLICE.name, ["de", "fr"], none), ("openvad-v1", None, none)]
+
+
+def test_align_takes_the_pilot_with_a_clip_limit(monkeypatch):
+    seen = []
+    monkeypatch.setattr(align, "run_align", lambda c, languages, **kw: seen.append((c, languages, kw)))
+    cli.main(["align", "--config", "pilot", "--languages", "ca", "--max-clips", "200"])
+    assert seen == [(PILOT, ["ca"], {"max_clips": 200})]
+
+
+def test_index_and_the_hand_check_take_the_pilot(monkeypatch, tmp_path):
+    seen = []
+    monkeypatch.setattr(index, "run_index", seen.append)
+    monkeypatch.setattr(handcheck, "sample_handcheck", lambda c, n, languages: seen.append(c) or tmp_path)
+    monkeypatch.setattr(handcheck, "score_handcheck", lambda path: seen.append(path) or {})
+    cli.main(["index", "--config", "pilot"])
+    cli.main(["handcheck-sample", "--config", "pilot"])
+    cli.main(["handcheck-score", "--config", "pilot"])
+    assert seen == [PILOT, PILOT, handcheck.handcheck_dir(PILOT)]
 
 
 def test_the_hand_check_stages_are_registered():

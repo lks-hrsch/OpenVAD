@@ -17,7 +17,7 @@ from types import ModuleType
 
 import polars as pl
 
-from openvad_train.dataset.config import FULL, SLICE, SPEAKER_CAP_HOURS, BuildConfig, work_dir
+from openvad_train.dataset.config import CONFIGS, SPEAKER_CAP_HOURS, BuildConfig, work_dir
 from openvad_train.dataset.labels import apply_gap_rule
 from openvad_train.dataset.parquet_io import write_parquet
 from openvad_train.dataset.schema import Clip, Timing, rank
@@ -252,7 +252,7 @@ def run_index(cfg: BuildConfig) -> None:
 
 def main(args: list[str]) -> None:
     parser = argparse.ArgumentParser(prog="dataset index", description=__doc__)
-    parser.add_argument("--config", choices=("slice", "full"), required=True)
+    parser.add_argument("--config", choices=tuple(CONFIGS), required=True)
     ns = parser.parse_args(args)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    run_index({"slice": SLICE, "full": FULL}[ns.config])
+    run_index(CONFIGS[ns.config])

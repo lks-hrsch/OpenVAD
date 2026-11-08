@@ -1077,3 +1077,28 @@ def test_models_are_downloaded_by_version_once_and_their_versions_are_read_from_
     align.fetch_models(tools, spec)
     assert len(downloads) == 3
     assert "g2p" not in align.fetch_models(tools, load_models()["it"]).info
+
+
+# ---------------------------------------------------------------------------------------------------- the pilot
+
+
+def manifest(stage) -> dict:
+    return json.loads((work_dir(stage.cfg) / "words/manifest.json").read_text())
+
+
+def test_the_clip_limit_takes_the_calibration_selection_and_is_part_of_the_state(stage, monkeypatch):
+    monkeypatch.setattr(align, "CALIBRATION_PER_SPEAKER", 2)
+    clips = speakers_clips(stage, n=4, per=3)
+    write_index(stage, clips)
+    run_align(stage.cfg, ["de"], max_clips=5)
+    taken = align.calibration_clips(clips, 5)
+    assert len(taken) == 5
+    assert max(Counter(c.speaker for c in taken).values()) == 2
+    done = {r["clip_id"] for rows in tables(stage)["words"].values() for r in rows}
+    assert done == {c.clip_id for c in taken}
+    summary = manifest(stage)["per_source"]["fake"]["de"]
+    assert (summary["over_clip_limit_not_aligned"], summary["over_cap_not_aligned"]) == (7, 0)
+    assert manifest(stage)["max_clips"] == 5
+    for other in (6, None):
+        with pytest.raises(StateMismatchError):
+            run_align(stage.cfg, ["de"], max_clips=other)

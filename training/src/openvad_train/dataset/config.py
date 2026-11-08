@@ -123,6 +123,18 @@ SLICE = BuildConfig(
     transient_p=0.0,
 )
 
+# The MFA pilot that sets the quality bar (spec section "Quality bar"): Common Voice alone, in the languages it aligns.
+# Nothing past `align` and the hand check reads it.
+PILOT = BuildConfig(
+    name="openvad-pilot",
+    sources=("common-voice",),
+    noise=(),
+    languages=("en", "de", "it", "ja", "zh", "ca"),
+)
+
+# The configurations a stage's `--config` names; plan, construct, publish and verify take only `slice` and `full`.
+CONFIGS = {"slice": SLICE, "full": FULL, "pilot": PILOT}
+
 
 def dataset_root(cfg: BuildConfig) -> Path:
     return data_dir() / "datasets/processed" / cfg.name

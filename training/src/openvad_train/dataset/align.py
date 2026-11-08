@@ -44,7 +44,7 @@ import polars as pl
 import soundfile as sf
 
 from openvad_train.dataset.codecs import DecodeError, decode_16k
-from openvad_train.dataset.config import FULL, SLICE, SPEAKER_CAP_HOURS, BuildConfig, work_dir
+from openvad_train.dataset.config import CONFIGS, SPEAKER_CAP_HOURS, BuildConfig, work_dir
 from openvad_train.dataset.index import SOURCES
 from openvad_train.dataset.labels import SAMPLES_PER_FRAME, apply_gap_rule, speech_ratio
 from openvad_train.dataset.models import MODELS_TSV, ModelSpec, load_models, spec_for
@@ -412,11 +412,13 @@ def _leading(clips: list[Clip], budget_s: float) -> int:
     return len(clips)
 
 
-def calibration_clips(clips: Iterable[Clip]) -> list[Clip]:
+def calibration_clips(clips: Iterable[Clip], max_clips: int | None = None) -> list[Clip]:
     """The calibration batch: clips in rank order, at most `CALIBRATION_PER_SPEAKER` per speaker, stopping at
-    `CALIBRATION_MAX_CLIPS`. A clip without a speaker counts as a speaker of its own. Because the first speakers in
-    rank order are the most prolific, a batch of whole speakers would be one voice; this one is many.
+    `max_clips` (default `CALIBRATION_MAX_CLIPS`). A clip without a speaker counts as a speaker of its own. Because the
+    first speakers in rank order are the most prolific, a batch of whole speakers would be one voice; this one is
+    many. The pilot's clip limit takes its clips the same way.
     """
+    max_clips = CALIBRATION_MAX_CLIPS if max_clips is None else max_clips
     taken: Counter[str] = Counter()
     chosen: list[Clip] = []
     for c in _by_rank(clips):
@@ -425,7 +427,7 @@ def calibration_clips(clips: Iterable[Clip]) -> list[Clip]:
         if c.speaker is not None:
             taken[c.speaker] += 1
         chosen.append(c)
-        if len(chosen) >= CALIBRATION_MAX_CLIPS:
+        if len(chosen) >= max_clips:
             break
     return chosen
 
@@ -814,6 +816,11 @@ def _is_aligned(clip: Clip) -> bool:
     return not clip.reserved and clip.transcript is not None
 
 
+def _limited(clips: list[Clip], max_clips: int | None) -> list[Clip]:
+    """The clips a language aligns under the pilot's clip limit: the calibration selection of that size."""
+    return clips if max_clips is None else calibration_clips(clips, max_clips)
+
+
 def _align_language(
     cfg: BuildConfig,
     source: str,
@@ -821,15 +828,15 @@ def _align_language(
     clips: list[Clip],
     tools: Tools,
     models: Models,
+    max_clips: int | None = None,
 ) -> None:
     base = work_dir(cfg)
     words_dir = base / "words" / source / language
     # Reserved speakers feed babble and competing talkers only and are never foreground (R-i), so they are not aligned.
     # A clip without a transcript has fixed labels from its adapter (background noise) and never reaches MFA.
     by_speaker: dict[str | None, list[Clip]] = defaultdict(list)
-    for c in clips:
-        if _is_aligned(c):
-            by_speaker[c.speaker].append(c)
+    for c in _limited([c for c in clips if _is_aligned(c)], max_clips):
+        by_speaker[c.speaker].append(c)
     full = {speaker: _by_rank(group) for speaker, group in by_speaker.items()}
     first_round = [
         c
@@ -841,6 +848,7 @@ def _align_language(
     provenance = _provenance(tools, models)
     state = {
         "provenance": provenance,
+        "max_clips": max_clips,
         "batch_hours": BATCH_HOURS,
         "batches": [_digest(c.clip_id for c in b) for b in batches],
         "calibration": [
@@ -872,8 +880,11 @@ def _align_language(
         _align_batch(batch, full, name, source, language, words_dir, rules, run)
 
 
-def run_align(cfg: BuildConfig, languages: list[str] | None = None) -> None:
-    """Align the MFA sources of `cfg`, one MFA run per batch, resumable per batch; see the module docstring."""
+def run_align(cfg: BuildConfig, languages: list[str] | None = None, max_clips: int | None = None) -> None:
+    """Align the MFA sources of `cfg`, one MFA run per batch, resumable per batch; see the module docstring.
+
+    `max_clips` limits every language to that many clips, taken as the calibration batch takes them, for the pilot.
+    """
     tools = check_tools()
     table = load_models()
     unknown = [n for n in cfg.sources if n not in SOURCES]
@@ -899,14 +910,18 @@ def run_align(cfg: BuildConfig, languages: list[str] | None = None) -> None:
             for language in sorted(by_language):
                 if language not in fetched:
                     fetched[language] = fetch_models(tools, specs[language])
-                _align_language(cfg, name, language, by_language[language], tools, fetched[language])
+                _align_language(cfg, name, language, by_language[language], tools, fetched[language], max_clips)
     finally:
         _build_dropped(base)
-    _write_manifest(cfg, tools, per_source, fetched)
+    _write_manifest(cfg, tools, per_source, fetched, max_clips)
 
 
 def _write_manifest(
-    cfg: BuildConfig, tools: Tools, per_source: dict[str, dict[str, list[Clip]]], fetched: dict[str, Models]
+    cfg: BuildConfig,
+    tools: Tools,
+    per_source: dict[str, dict[str, list[Clip]]],
+    fetched: dict[str, Models],
+    max_clips: int | None,
 ) -> None:
     base = work_dir(cfg)
     dropped = _read_tables(_dropped_files(base), DROPPED_SCHEMA)
@@ -922,7 +937,9 @@ def _write_manifest(
             calibration = rules.pop("calibration") if rules else None
             if rules is None and (words_dir / "calibration.json").is_file():
                 calibration = json.loads((words_dir / "calibration.json").read_text())
-            unaligned = sum(_is_aligned(c) for c in clips) - words - mine.height
+            eligible = [c for c in clips if _is_aligned(c)]
+            taken = len(_limited(eligible, max_clips))
+            unaligned = taken - words - mine.height
             too_few = calibration is not None and calibration["outcome"] == "too_few_to_calibrate"
             summary.setdefault(source, {})[language] = {
                 "index_clips": len(clips),
@@ -930,6 +947,7 @@ def _write_manifest(
                 "no_transcript_not_aligned": sum(not c.reserved and c.transcript is None for c in clips),
                 "kept": words,
                 "dropped": dict(mine.group_by("reason").len().sort("reason").iter_rows()),
+                "over_clip_limit_not_aligned": len(eligible) - taken,
                 "over_cap_not_aligned": 0 if too_few else unaligned,
                 "not_aligned_too_few_to_calibrate": unaligned if too_few else 0,
                 "calibration": calibration,
@@ -944,6 +962,7 @@ def _write_manifest(
             "stage": "align",
             "config": cfg.name,
             "aligner": {"mfa": tools.version, "commit": tools.commit},
+            "max_clips": max_clips,
             "per_source": summary,
         },
     )
@@ -951,12 +970,17 @@ def _write_manifest(
 
 def main(args: list[str]) -> None:
     parser = argparse.ArgumentParser(prog="dataset align", description=__doc__)
-    parser.add_argument("--config", choices=("slice", "full"), required=True)
+    parser.add_argument("--config", choices=tuple(CONFIGS), required=True)
     parser.add_argument(
         "--languages",
         help="comma-separated language codes; default: every language of the index, which stops at a language whose "
         "row in mfa_models.tsv is `open` until the owner decides, so name the others here",
     )
+    parser.add_argument("--max-clips", type=int, help="per language, taken as the calibration batch takes them")
     ns = parser.parse_args(args)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    run_align({"slice": SLICE, "full": FULL}[ns.config], ns.languages.split(",") if ns.languages else None)
+    run_align(
+        CONFIGS[ns.config],
+        ns.languages.split(",") if ns.languages else None,
+        max_clips=ns.max_clips,
+    )
