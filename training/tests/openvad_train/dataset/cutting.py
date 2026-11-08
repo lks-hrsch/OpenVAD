@@ -185,3 +185,40 @@ def test_split_over_runs_on_to_the_next_gap_when_none_lies_within_the_limit():
 def test_split_over_leaves_a_single_long_word_whole_and_a_timing_without_speech_empty():
     assert split_over(timing([(1000, 50_000)])) == [Chunk(0, 50_000)]
     assert split_over(timing([], [(0, 5000)])) == []
+
+
+def test_split_over_cuts_inside_a_pause_longer_than_the_limit():
+    t = timing([(0, 1000), (100_000, 101_000)])
+    chunks = split_over(t)
+    assert all(c.end_ms - c.start_ms <= 30_000 for c in chunks)
+    assert chunks[0].start_ms == 0
+    assert chunks[-1].end_ms == 101_000
+    assert all(left.end_ms == right.start_ms for left, right in pairwise(chunks))
+    assert sum(c.start_ms <= 1000 <= c.end_ms for c in chunks) == 1  # the first word is whole in one chunk
+    assert sum(c.start_ms <= 100_000 and c.end_ms >= 101_000 for c in chunks) == 1
+
+
+def test_split_over_cuts_the_silence_before_the_first_word_and_after_the_last_to_end_ms():
+    t = timing([(80_000, 81_000), (82_000, 83_000)])
+    chunks = split_over(t, end_ms=200_000)
+    assert chunks[0].start_ms == 0
+    assert chunks[-1].end_ms == 200_000
+    assert all(c.end_ms - c.start_ms <= 30_000 for c in chunks)
+    assert all(left.end_ms == right.start_ms for left, right in pairwise(chunks))
+    # Without an end the timeline stops at the last word, as before.
+    assert split_over(t)[-1].end_ms == 83_000
+
+
+def test_split_over_keeps_a_short_silence_at_the_ends_in_the_chunk_beside_it():
+    t = timing([(1000, 40_000)])
+    assert split_over(t, end_ms=41_000) == [Chunk(0, 41_000)]
+
+
+def test_split_over_prefers_a_gap_to_the_inside_of_a_pause():
+    t = timing([(0, 10_000), (12_000, 20_000), (21_000, 25_000), (80_000, 81_000)])
+    assert split_over(t)[0] == Chunk(0, 20_500)  # the longest gap in the late half, not 30 s into the pause
+
+
+def test_split_over_takes_at_most_half_a_second_of_a_long_pause_after_a_word_over_the_limit():
+    t = timing([(0, 30_500), (90_000, 91_000)])
+    assert split_over(t)[0] == Chunk(0, 31_000)  # the word crosses 30 s, so the cut is 500 ms into the pause after it

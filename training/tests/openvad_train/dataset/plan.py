@@ -418,6 +418,14 @@ def test_a_voxpopuli_clip_over_30_s_is_cut_at_gaps_into_samples_of_at_most_30_s(
     assert all(r["source_n"] == round(r["duration"] * 16000) for r in rows)
 
 
+def test_a_long_silence_in_a_cut_clip_is_cut_too_so_no_sample_passes_30_s():
+    c = clip("m", "voxpopuli", duration_s=400.0)
+    rows = clip_rows(c, timing("m", speech=[(100_000, 101_000), (250_000, 251_000)]), SLICE)
+    assert all(r["duration"] <= 30.0 for r in rows)
+    assert sum(r["duration"] for r in rows) == pytest.approx(400.0)
+    assert sum(len(r["speech_ms"]) for r in rows) == 2
+
+
 def test_a_voxpopuli_clip_of_30_s_or_less_stays_one_sample():
     rows = clip_rows(clip("vp", "voxpopuli", duration_s=29.0), timing("vp", speech=words(40)), SLICE)
     assert [(r["offset"], r["duration"]) for r in rows] == [(0.0, 29.0)]

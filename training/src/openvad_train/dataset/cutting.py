@@ -13,6 +13,7 @@ from openvad_train.dataset.schema import Timing
 
 
 _MIN_LAST_PIECE_MS = 1000
+_PAUSE_KEPT_MS = 500
 
 
 class Chunk(NamedTuple):
@@ -83,29 +84,37 @@ def cut_long(timing: Timing, max_speech_s: float = 6.6, gap_ms: int = 200, max_s
     return chunks
 
 
-def split_over(timing: Timing, max_s: float = 30.0) -> list[Chunk]:
-    """Chunks of at most `max_s` that tile the timeline from 0 to the end of the last word, for sources that are
-    kept as they are (no padding, so no audio is left out). Each cut is the midpoint of a gap between two words.
+def split_over(timing: Timing, max_s: float = 30.0, end_ms: int | None = None) -> list[Chunk]:
+    """Chunks of at most `max_s` that tile the timeline from 0 to `end_ms` (the end of the last word if not given),
+    for sources that are kept as they are (no padding, so no audio is left out). Each cut is the midpoint of a gap
+    between two words, or `max_s` after the chunk's start inside a longer stretch with no word.
 
     A cut goes to the longest gap in the second half of the `max_s` after a chunk's start, or in the first half if
-    the second has none. If no gap lies within `max_s`, the chunk runs on to the next gap, and with no gap at all
-    it stays whole. The first chunk starts at 0 and the last ends at the last word; the caller extends it to the
-    clip's end. A timing without speech has no chunks.
+    the second has none. If no gap has its midpoint within `max_s`, the cut is `max_s` after the start when that
+    point is inside a stretch with no word (a long pause, or the silence before the first word or after the last),
+    so a meeting channel that is quiet for minutes still gives chunks within the limit. Otherwise a word crosses
+    that point and the chunk runs on to the next gap, taking at most `_PAUSE_KEPT_MS` of it; with no gap at all it
+    stays whole. The last chunk ends at `end_ms`, or at the last word if that is not given. A timing without
+    speech has no chunks.
     """
     words = apply_gap_rule(timing.speech_ms, 0)
     if not words:
         return []
+    end = words[-1][1] if end_ms is None else max(end_ms, words[-1][1])
     max_ms = round(max_s * 1000)
-    gaps = [((right[0] - left[1]), (left[1] + right[0]) // 2) for left, right in pairwise(words)]
+    stretches = [(0, words[0][0]), *((left[1], right[0]) for left, right in pairwise(words)), (words[-1][1], end)]
+    gaps = [(right[0] - left[1], (left[1] + right[0]) // 2, left[1]) for left, right in pairwise(words)]
     chunks: list[Chunk] = []
     start = 0
-    while words[-1][1] - start > max_ms:
-        within = [(length, cut) for length, cut in gaps if start < cut <= start + max_ms]
+    while end - start > max_ms:
+        limit = start + max_ms
+        within = [(length, cut) for length, cut, _ in gaps if start < cut <= limit]
         late = [g for g in within if g[1] > start + max_ms // 2] or within
-        after = [cut for _, cut in gaps if cut > start + max_ms]
-        if not (late or after):
+        inside = any(a < limit < b for a, b in stretches)
+        after = [min(cut, a + _PAUSE_KEPT_MS) for _, cut, a in gaps if cut > limit]
+        if not (late or inside or after):
             break
-        cut = max(late)[1] if late else after[0]
+        cut = max(late)[1] if late else limit if inside else after[0]
         chunks.append(Chunk(start, cut))
         start = cut
-    return [*chunks, Chunk(start, words[-1][1])]
+    return [*chunks, Chunk(start, end)]

@@ -302,17 +302,16 @@ def _cutting(source: str) -> str | None:
 
 
 def _split_rows(clip: Clip, timing: Timing, cfg: BuildConfig, pool: NoisePool | None, duration_ms: int) -> list[dict]:
-    """An as-is clip above 30 s as samples of at most 30 s cut at word gaps (`split_over`), not padded. Trailing
-    audio after the last word joins the last sample. A clip without a word stays whole.
+    """An as-is clip above 30 s as samples of at most 30 s cut at word gaps (`split_over`), not padded; the silence
+    before the first word and after the last is cut like any other stretch. A clip without a word stays whole.
     """
     inside = dataclasses.replace(
         timing, speech_ms=rebase(timing.speech_ms, 0, duration_ms), mask_ms=rebase(timing.mask_ms, 0, duration_ms)
     )
-    chunks = split_over(inside)
+    chunks = split_over(inside, end_ms=duration_ms)
     if not chunks:
         return [draw_sample(clip, timing, cfg, pool)]
-    ends = [c.end_ms for c in chunks[:-1]] + [duration_ms]
-    return [draw_sample(clip, inside, cfg, pool, Chunk(c.start_ms, end)) for c, end in zip(chunks, ends, strict=True)]
+    return [draw_sample(clip, inside, cfg, pool, c) for c in chunks]
 
 
 def clip_rows(
