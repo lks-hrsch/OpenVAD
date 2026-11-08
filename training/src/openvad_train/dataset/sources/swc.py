@@ -5,8 +5,8 @@
 
 """Spoken Wikipedia Corpora 2.0: one clip per audio file of an article, word timings from `aligned.swc`.
 
-Adapter contract: `MFA_ALIGNED`, `clips(raw, languages)` (language codes, None for all; it reads nothing of the
-others) and, for sources that are not forced-aligned by MFA, `timings(raw, clips)`. `raw` is `datasets/raw/swc`.
+Adapter contract: `MFA_ALIGNED`, `clips(raw, languages)` (language codes, None for all)
+and, for sources that are not forced-aligned by MFA, `timings(raw, clips)`. `raw` is `datasets/raw/swc`.
 """
 
 import json
@@ -160,11 +160,13 @@ def _durations(folder: Path) -> tuple[float, ...]:
 
 
 def clips(raw: Path, languages: set[str] | None = None) -> Iterator[Clip]:
-    """One clip per audio file; an article in several parts gives `<language>/<article>#<part>` per part."""
+    """One clip per audio file; an article in several parts gives `<language>/<article>#<part>` per part.
+
+    The splits come from the readers' hours in every language on disk and only then are narrowed to `languages`,
+    so a slice and the full build give a reader the same split.
+    """
     articles = []
     for language_dir, language in LANGUAGES.items():
-        if languages is not None and language not in languages:
-            continue
         for article in sorted((raw / language_dir).glob("*/aligned.swc")):
             folder = article.parent
             names = article_readers(json.loads((folder / "info.json").read_text()))
@@ -177,6 +179,8 @@ def clips(raw: Path, languages: set[str] | None = None) -> Iterator[Clip]:
             hours[canonical[min(names)]][language] += sum(e - s for s, e in speech) / 3_600_000
     splits = assign_splits(hours)
     for language_dir, language, folder, names in articles:
+        if languages is not None and language not in languages:
+            continue
         reader = canonical[min(names)] if names else None
         split = splits[reader] if reader else "train"
         parts = _parts(folder)

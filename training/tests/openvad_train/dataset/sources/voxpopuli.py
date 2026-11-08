@@ -32,6 +32,11 @@ def test_vp_split_by_speaker(vp_tree):
     assert {next(iter(s)) for s in by.values()} == {"train", "validation", "test"}
 
 
+def test_a_slice_and_the_full_build_give_every_speaker_the_same_split(vp_tree):
+    full = {c.clip_id: c.split for c in voxpopuli.clips(vp_tree) if c.language == "de"}
+    assert {c.clip_id: c.split for c in voxpopuli.clips(vp_tree, {"de"})} == full
+
+
 def test_vp_clip_fields(vp_tree):
     c = next(c for c in voxpopuli.clips(vp_tree) if c.clip_id == "de_s3_2")
     assert (c.source, c.language, c.speaker, c.licence, c.offset_s, c.duration_s) == (
@@ -48,6 +53,7 @@ def test_vp_clip_fields(vp_tree):
 
 def test_vp_reads_only_the_asked_languages(vp_tree):
     assert {c.language for c in voxpopuli.clips(vp_tree)} == {"de", "fi"}
+    assert {c.language for c in voxpopuli.clips(vp_tree, {"fi"})} == {"fi"}
     assert list(voxpopuli.clips(vp_tree, {"fr"})) == []
 
 

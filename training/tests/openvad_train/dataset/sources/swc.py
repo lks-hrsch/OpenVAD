@@ -5,6 +5,7 @@
 
 import shutil
 from collections import defaultdict
+from random import Random
 
 import pytest
 import soundfile as sf
@@ -217,13 +218,18 @@ def test_a_clip_of_only_over_long_words_is_masked_whole(tmp_path):
     assert (t.speech_ms, t.mask_ms) == ([], [(0, 30000)])
 
 
-def test_languages_filter_before_any_article_is_read(tmp_path):
-    add_article(tmp_path, "german", "Fine", "Alice")
-    add_article(tmp_path, "english", "Broken", "Bob")
-    (tmp_path / "english/Broken/info.json").write_text("not json")
-    assert [c.clip_id for c in swc.clips(tmp_path, {"de"})] == ["german/Fine"]
-    with pytest.raises(ValueError, match="Expecting value"):
-        list(swc.clips(tmp_path))
+def test_a_slice_and_the_full_build_give_every_reader_the_same_split(tmp_path):
+    # Hours that differ per language: split on the German hours alone, 10 of these 30 readers would move.
+    random = Random(0)
+    for i in range(30):
+        for language in ("german", "english"):
+            words = [(0, round(random.uniform(1, 10) * 1000))]
+            add_article(tmp_path, language, f"{language[:2]}{i}", f"reader{i}", words=words, seconds=20.0)
+    full = {c.clip_id: (c.speaker, c.split) for c in swc.clips(tmp_path)}
+    sliced = {c.clip_id: (c.speaker, c.split) for c in swc.clips(tmp_path, {"de"})}
+    assert sliced
+    assert {k: v for k, v in full.items() if k.startswith("german/")} == sliced
+    assert {c.language for c in swc.clips(tmp_path, {"de"})} == {"de"}
 
 
 def test_a_multi_part_article_gives_one_clip_per_part_with_rebased_words(tmp_path):

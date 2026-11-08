@@ -162,7 +162,12 @@ def make_vp_tree(raw: Path) -> Path:
     ]
     rows += [(f"de_none_{i}", "None", 10.0 * i, 10.0 * i + 5.0, "dev" if i == 0 else "train") for i in range(3)]
     add_vp_table(raw, "de", rows)
-    add_vp_table(raw, "fi", [("fi_1", "1", 0.0, 5.0, "train")])
+    # The same speakers in Finnish with the hours the other way round, so the split needs both languages' hours.
+    add_vp_table(
+        raw,
+        "fi",
+        [(f"fi_s{s}_{i}", str(s), 100.0 * i, 100.0 * i + 60.0, "train") for s in range(1, 31) for i in range(31 - s)],
+    )
     return raw
 
 

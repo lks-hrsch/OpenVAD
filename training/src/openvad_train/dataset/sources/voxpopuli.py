@@ -54,32 +54,37 @@ def _unique(rows: Iterable[dict[str, str]]) -> tuple[list[dict[str, str]], int]:
 def clips(raw: Path, languages: set[str] | None = None, report: dict | None = None) -> Iterator[Clip]:
     """The official splits share speakers, so a speaker goes to train, validation or test as a whole: 80/10/10 by
     hours (the SWC rule, which gives a speaker heard in several languages one split). A row without a speaker ID
-    cannot be split and is train only (ADR 0023). A speaker's split depends on the languages asked for, as for SWC.
+    cannot be split and is train only (ADR 0023). The hours of every language on disk count, so the split does not
+    depend on the languages asked for.
     The text is `normed_text`, which writes numbers out but drops letters outside the language's alphabet in about
     0.3 to 1.6% of rows.
     """
     wanted = indexed_languages(languages)
     table = indexed_languages(None)
+    tables = {
+        language: path
+        for language in VOXPOPULI_LANGS
+        if (path := raw / "annotations" / f"asr_{language}.tsv.gz").is_file()
+    }
     if report is not None:
         report["skipped"] = {
-            language: {
-                "reason": "no row in mfa_models.tsv",
-                "clips": count_lines(raw / "annotations" / f"asr_{language}.tsv.gz") - 1,
-            }
-            for language in VOXPOPULI_LANGS
-            if language not in table and (raw / "annotations" / f"asr_{language}.tsv.gz").is_file()
+            language: {"reason": "no row in mfa_models.tsv", "clips": count_lines(path) - 1}
+            for language, path in tables.items()
+            if language not in table
         }
+    # Hours of every table on disk, whatever `languages` asks for or the models table lists, so a speaker's split
+    # does not move with the request.
     rows: dict[str, list[dict[str, str]]] = {}
     hours: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
-    for language in VOXPOPULI_LANGS:
-        table = raw / "annotations" / f"asr_{language}.tsv.gz"
-        if language in wanted and table.is_file():
-            rows[language], removed = _unique(_rows(table))
-            if report is not None:
-                report["duplicate_ids_removed"] = report.get("duplicate_ids_removed", 0) + removed
-            for r in rows[language]:
-                if r["speaker_id"] != "None":
-                    hours[r["speaker_id"]][language] += (float(r["end_time"]) - float(r["start_time"])) / 3600
+    for language, path in tables.items():
+        language_rows, removed = _unique(_rows(path))
+        if report is not None:
+            report["duplicate_ids_removed"] = report.get("duplicate_ids_removed", 0) + removed
+        if language in wanted:
+            rows[language] = language_rows
+        for r in language_rows:
+            if r["speaker_id"] != "None":
+                hours[r["speaker_id"]][language] += (float(r["end_time"]) - float(r["start_time"])) / 3600
     splits = assign_splits(hours)
     for language, language_rows in rows.items():
         for r in language_rows:
