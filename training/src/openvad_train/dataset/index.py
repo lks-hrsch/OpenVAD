@@ -21,7 +21,18 @@ from openvad_train.dataset.config import FULL, SLICE, SPEAKER_CAP_HOURS, BuildCo
 from openvad_train.dataset.labels import apply_gap_rule
 from openvad_train.dataset.parquet_io import write_parquet
 from openvad_train.dataset.schema import Clip, Timing, rank
-from openvad_train.dataset.sources import commonvoice, fleurs, mls, speechcommands, swc, voxpopuli
+from openvad_train.dataset.sources import (
+    ami,
+    callhome,
+    commonvoice,
+    fleurs,
+    librivad,
+    mls,
+    speechcommands,
+    swc,
+    voices,
+    voxpopuli,
+)
 from openvad_train.fetch.common import MANIFEST, file_hash, raw_dir, write_manifest
 
 
@@ -107,7 +118,9 @@ def apply_cap_rank(
 # (Speech Commands background noise), whose labels are fixed. An adapter with `REPORTS = True` takes a third argument,
 # a dict it fills with what it left out and why (duplicates, held-out speakers, skipped languages), which the index
 # manifest records under `adapter`.
-SOURCES: dict[str, ModuleType] = {m.SOURCE: m for m in (swc, commonvoice, mls, fleurs, voxpopuli, speechcommands)}
+SOURCES: dict[str, ModuleType] = {
+    m.SOURCE: m for m in (swc, commonvoice, mls, fleurs, voxpopuli, speechcommands, ami, callhome, voices, librivad)
+}
 
 _SCHEMA = {
     "clip_id": pl.String,
@@ -121,6 +134,7 @@ _SCHEMA = {
     "licence": pl.String,
     "transcript": pl.String,
     "reserved": pl.Boolean,
+    "row_in_file": pl.Int64,
     "clip_rank": pl.UInt64,
 }
 

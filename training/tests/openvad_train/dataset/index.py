@@ -245,8 +245,8 @@ def test_run_index_caps_only_sources_without_mfa(data_dir, monkeypatch):
 
 
 def test_run_index_names_a_source_without_adapter(data_dir):
-    with pytest.raises(ValueError, match="no index adapter for source 'ami'"):
-        run_index(dataclasses.replace(SLICE, sources=("ami",)))
+    with pytest.raises(ValueError, match="no index adapter for source 'simsamu'"):
+        run_index(dataclasses.replace(SLICE, sources=("simsamu",)))
 
 
 def test_run_index_asks_the_adapter_for_the_configured_languages_only(data_dir, monkeypatch):
@@ -334,7 +334,18 @@ def test_the_stage_runs_a_named_configuration_and_requires_one(data_dir):
 
 
 def test_every_adapter_is_registered_under_its_raw_folder_and_says_whether_mfa_labels_it():
-    assert set(index.SOURCES) == {"swc", "common-voice", "mls", "fleurs", "voxpopuli", "speech-commands"}
+    assert set(index.SOURCES) == {
+        "swc",
+        "common-voice",
+        "mls",
+        "fleurs",
+        "voxpopuli",
+        "speech-commands",
+        "ami",
+        "callhome",
+        "voices",
+        "librivad",
+    }
     for name, module in index.SOURCES.items():
         assert name == module.SOURCE
         assert isinstance(module.MFA_ALIGNED, bool)
@@ -345,6 +356,8 @@ def test_every_adapter_is_registered_under_its_raw_folder_and_says_whether_mfa_l
         "swc": "cut_long",
         "mls": "cut_long",
         "voxpopuli": "split_over",
+        "ami": "split_over",
+        "callhome": "split_over",
     }
 
 

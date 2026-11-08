@@ -41,6 +41,8 @@ class Clip:
     licence: str
     transcript: str | None
     reserved: bool = False
+    # The row of the Parquet file that holds the audio (CallHome embeds a call's audio in the shard); else None.
+    row_in_file: int | None = None
 
 
 @dataclass(frozen=True)

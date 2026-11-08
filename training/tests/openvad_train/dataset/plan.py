@@ -15,6 +15,7 @@ import numpy as np
 import polars as pl
 import pytest
 
+from as_is_support import make_ami_tree, make_callhome_tree, make_librivad_tree, make_voices_tree
 from demand_support import make_demand_tree
 from mfa_source_support import make_sc_tree
 from openvad_train.dataset import __main__ as cli
@@ -649,8 +650,8 @@ def test_an_mfa_source_without_word_tables_names_them(data, monkeypatch):
 
 
 def test_a_source_without_adapter_is_named(data):
-    with pytest.raises(ValueError, match="no index adapter for source 'ami'"):
-        run_plan(dataclasses.replace(SLICE, sources=("ami",)))
+    with pytest.raises(ValueError, match="no index adapter for source 'simsamu'"):
+        run_plan(dataclasses.replace(SLICE, sources=("simsamu",)))
 
 
 def test_a_repeated_sample_id_is_refused(data, monkeypatch):
@@ -826,3 +827,78 @@ def test_background_noise_comes_out_of_plan_as_non_speech_and_has_no_words_row(d
     assert not any(c.reserved for c in clips if c.transcript is None)  # it feeds no babble
     assert df.height == sum(not c.reserved for c in clips)
     assert df.filter(pl.col("clip_id") != noise["clip_id"][0])["speech_ms"].list.len().min() == 1
+
+
+# ---------------------------------------------------------------------------------------------------- as-is sources
+
+
+def test_ami_and_callhome_clips_over_30_s_are_cut_at_gaps_like_voxpopuli():
+    for source in ("ami", "callhome"):
+        c = clip("m", source, duration_s=70.0)
+        rows = clip_rows(c, timing("m", speech=words(80, length=500, gap=300, first=1000)), SLICE)
+        assert len(rows) >= 3
+        assert all(r["treatment"] == "as_is" and r["duration"] <= 30.0 for r in rows)
+        assert sum(len(r["speech_ms"]) for r in rows) == 80
+
+
+def test_a_callhome_sample_points_at_the_row_of_its_call_and_is_narrow_native():
+    c = dataclasses.replace(clip("call", "callhome", duration_s=70.0, offset_s=0.0), row_in_file=7)
+    rows = clip_rows(c, timing("call", speech=words(80)), SLICE)
+    assert len(rows) >= 3
+    assert {(r["audio_format"], r["row_in_file"], r["band"], r["treatment"]) for r in rows} == {
+        ("callhome_parquet", 7, "narrow_native", "as_is")
+    }
+    assert [r["offset"] for r in rows] == sorted(r["offset"] for r in rows)
+    assert rows[0]["offset"] == 0.0
+
+
+def test_every_other_as_is_source_is_read_as_a_file_at_the_wide_band():
+    for source in ("ami", "voices", "librivad", "voxpopuli", "speech-commands"):
+        (row,) = clip_rows(clip("a", source), timing("a"), SLICE)
+        assert (row["audio_format"], row["row_in_file"], row["band"]) == ("file", None, "wide")
+
+
+@pytest.fixture
+def as_is_data(data):
+    raw = data / "datasets/raw"
+    make_ami_tree(raw / "ami")
+    make_callhome_tree(raw / "callhome")
+    make_voices_tree(raw / "voices")
+    make_librivad_tree(raw / "librivad")
+    return data
+
+
+AS_IS_CONFIG = dataclasses.replace(
+    SLICE, name="as-is-test", sources=("ami", "callhome", "voices", "librivad"), languages=None, max_samples=None
+)
+
+
+def test_the_four_sources_used_as_they_are_go_through_index_and_plan(as_is_data):
+    run_index(AS_IS_CONFIG)
+    run_plan(AS_IS_CONFIG)
+    df = asyncio.run(read_parquet(work_dir(AS_IS_CONFIG) / "plan/plan.parquet"))
+    assert set(df["treatment"]) == {"as_is"}
+    assert df["shard"].null_count() == df.height
+    by_source = {s: df.filter(pl.col("source") == s) for s in AS_IS_CONFIG.sources}
+    assert set(by_source["callhome"]["audio_format"]) == {"callhome_parquet"}
+    assert by_source["callhome"]["row_in_file"].null_count() == 0
+    assert set(by_source["callhome"]["band"]) == {"narrow_native"}
+    for source in ("ami", "voices", "librivad"):
+        assert set(by_source[source]["audio_format"]) == {"file"}
+        assert by_source[source]["row_in_file"].null_count() == by_source[source].height
+        assert set(by_source[source]["band"]) == {"wide"}
+    # LibriVAD labels are used as they are, without the gap rule.
+    assert set(by_source["librivad"]["gap_ms"]) == {0}
+    assert set(by_source["ami"]["gap_ms"]) == {AS_IS_CONFIG.gap_ms}
+    assert (by_source["callhome"]["speech_ms"].list.len() > 0).all()
+
+
+def test_a_slice_of_languages_gives_every_callhome_clip_the_same_split_in_the_index(as_is_data):
+    full = AS_IS_CONFIG
+    run_index(dataclasses.replace(full, sources=("callhome",)))
+    first = asyncio.run(read_parquet(work_dir(full) / "index/callhome.parquet"))
+    run_index(dataclasses.replace(full, sources=("callhome",), languages=("de",)))
+    german = asyncio.run(read_parquet(work_dir(full) / "index/callhome.parquet"))
+    assert set(german["language"]) == {"de"}
+    splits = dict(zip(first["clip_id"], first["split"], strict=True))
+    assert all(splits[c] == s for c, s in zip(german["clip_id"], german["split"], strict=True))

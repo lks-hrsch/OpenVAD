@@ -219,7 +219,7 @@ def draw_sample(
         "gap_ms": 0 if timing.kind == "frame" else cfg.gap_ms,
         "byte_offset": None,
         "byte_length": None,
-        "row_in_file": None,
+        "row_in_file": clip.row_in_file,
         "labels": None,
         "in_small": None,
         "shard": None,
@@ -240,7 +240,7 @@ def draw_sample(
         return row | {
             "treatment": "as_is",
             "audio_filepath": clip.path,
-            "audio_format": "file",
+            "audio_format": "file" if clip.row_in_file is None else "callhome_parquet",
             "offset": clip.offset_s + start_ms / 1000,
             "duration": clip.duration_s if chunk is None else (end_ms - start_ms) / 1000,
             "speech_ratio": speech_ratio(speech_ms, end_ms - start_ms),
@@ -257,7 +257,7 @@ def draw_sample(
             "suppression": None,
             "codec": "none",
             "bitrate": None,
-            "band": "wide",
+            "band": getattr(SOURCES.get(clip.source), "BAND", "wide"),
         }
 
     # Padding uses the word union at G = 0, so a change of G leaves the audio as it is.

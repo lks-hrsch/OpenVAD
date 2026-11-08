@@ -210,6 +210,8 @@ Pins, URLs and checksums are in the fetchers (`training/src/openvad_train/fetch/
 - Meetings with five participants also have `Headset-4`.
 - Each audio stream is about 11.5 GB for the whole corpus (16 kHz, 16-bit, measured on `ES2002a`); IHM has one stream per participant, about 46 GB for four.
 - In an IHM channel the wearer is the dominant speaker and the others are crosstalk.
+- The adapter (`dataset/sources/ami.py`, measured on the share) gives 678 headset clips of 189 participants: train 543 clips and 323.1 h, dev 72 and 38.7 h, test 63 and 35.4 h; the words of a wearer's `words.xml` are 93.1 h of speech. Of 1,147,783 `<w>` elements 4 have no times and 11 end before they start; they are dropped. Vocal sounds, disfluency markers and gaps are other elements.
+- Cut by `split_over` the 397 h become 61,581 samples with median 24.8 s and 85 above 30 s (at most 40.2 s); 13,529 of them (94 h) have no speech, because a participant is quiet for long stretches.
 
 ### CallHome
 
@@ -217,6 +219,9 @@ Pins, URLs and checksums are in the fetchers (`training/src/openvad_train/fetch/
 - Calls (from the dataset card; hours measured to the last turn end): English 140 calls, 20.3 h; German 120, 18.4 h; Japanese 120, 18.7 h; Spanish 140, 21.9 h; Mandarin 140, 20.3 h; 660 calls, 99.6 h, 11.2 GB of parquet. The union of the turns is 89.1 h of speech; the calls carry 1,556 speaker labels.
 - The audio is mono 16-bit WAV at 16 kHz, cut to the transcribed span of each call. The original calls are 8 kHz telephone recordings; the mirror documents neither the upsampling nor the mix of the two sides into one channel. The files are used unchanged, with `band = narrow_native`, so no train-time narrowband step is applied ([0021](../project/adr/0021-telephone-channel-simulation.md)).
 - Labels: start and end time and speaker letter (`A`, `B`, sometimes `A1`, `B1`, `B2`) per turn; no transcripts and no speaker IDs across calls. Turns of the two sides overlap, and pauses inside a turn count as speech.
+- A shard has no call IDs and no audio path, only the row; a call is `<language>/<shard stem>/<row>`. The last turn ends where the audio ends (checked on 3 calls, to 1 ms), so the clip is as long as its last turn.
+- The adapter (`dataset/sources/callhome.py`, measured on the share) splits the 660 calls by the rank of their ID: 528 train (80.0 h), 66 validation (10.2 h), 66 test (9.5 h). The ±0.25 s around every turn boundary masks 45.5 h of the 99.6 h, because turns are dense; the speech union is 89.2 h. Cut by `split_over` the calls become 16,111 samples with median 22.4 s, of which 296 (1.8%) pass 30 s (at most 132 s) because overlapping turns leave no gap to cut at.
+- Reading one row means decoding the call out of its Parquet row group: about 6 s each for 300 to 600 s calls on the M3 Pro over SMB.
 
 ### FLEURS
 
@@ -236,6 +241,8 @@ Pins, URLs and checksums are in the fetchers (`training/src/openvad_train/fetch/
 - The release re-records 3,903 utterances (≈ 15 h) 256 times, the devkit 600 of them 32 times.
 - The devkit holds ≈ 84 h of speech, plus ≈ 235 h of distractor-only room noise.
 - Its speech is re-recorded LibriSpeech "clean". Of its 300 speakers, 12 are from `dev-clean`, 64 from `train-clean-100`, 224 from `train-clean-360` and none from `test-clean` (checked 2026-11-03).
+- The devkit ships the 600 source recordings (`source-16k/{train,test}/sp<speaker>/Lab41-SRI-VOiCES-src-*.wav`), 16 kHz and as long as their re-recordings, so the delay is measured on the files and no speaker is left uncovered. `references/{train,test}_index.csv` list the 19,200 re-recordings (12,800 and 6,400); `references/time_values.csv` is the release's table of lags for all 998,400 files, with the opposite sign to ours. The lag measured by cross-correlation within ±0.25 s agreed with it to the sample on 30 of 30 random devkit recordings (up to 972 samples, 61 ms).
+- The adapter (`dataset/sources/voices.py`, measured on the share) gives 18,432 clips (768 of the 12 `dev-clean` speakers dropped) of 288 speakers: 243 train (68.7 h; the 64 `train-clean-100` speakers and 179 of the 224 others), 22 validation (6.2 h) and 23 test (6.4 h). Measuring all delays takes about 80 ms per clip over the share (each recording and, once per 32, its source are read), roughly 25 min per pass; `index` and `plan` each do one.
 
 ### Noise: DEMAND, MUSAN, WHAM!
 
@@ -260,6 +267,9 @@ Pins, URLs and checksums are in the fetchers (`training/src/openvad_train/fetch/
 - `medium` takes every 10th utterance of `train-clean-100` and mixes each one 54 times, so its 546 h NonConcat and 680 h Concat hold about 10 h of unique speech, not the 101 h of `train-clean-100`; each utterance appears 54 times by design.
 - Splits: `medium` train is used as generated. `medium` test (from `test-clean`) is used as generated, in the test split and as the benchmark of [0020](../project/adr/0020-evaluation-benchmarks.md).
 - `medium` val (from `dev-clean`) does not exist at the pinned revision, because `create_LibriSpeech_wav.py` converts only two splits; `just fetch librivad-val` generates it into `datasets/raw/librivad-val/` with its own manifest, because `create_LibriVAD.py` and `create_LibriSpeechConcat.py` already handle `val`, and `Files/Noises/*_val.wav` and the `dev-clean` alignments exist. It holds about 27.4 h NonConcat and 35.2 h Concat, validation only ([0024](../project/adr/0024-training-data-licence-policy.md)).
+- Labels (`Files/Labels/<dataset>/<split>/<speaker>/<chapter>/<stem>.npy`) are one `int16` per sample, 1 speech and 0 non-speech, and as long as the wav (checked on 4 mixtures). The 54 mixtures of an utterance share one label. A concatenated pair `A_+_B` has its label in the folder of `B`, not of `A` (`1995-1836-0014_+_1837-0000` is under `1995/1837`, `1580-141084-0050_+_1995-1826-0000` under `1995/1826`), so upstream `match_labels.py`, which reads the folders from the first part, is wrong for pairs of different chapters or speakers; the adapter derives the folder from `B`, and all 252,396 mixtures of the medium train and test find a label file that way.
+- The adapter (`dataset/sources/librivad.py`, measured on the share) gives 252,396 clips of 291 speakers: train 231,174 (1,220.4 h) and test 21,222 (65.3 h). The validation layout is read from `datasets/raw/librivad-val/{generated,labels}` and was built against a synthetic tree, because `librivad-val` is not generated yet.
+- The label tree holds a file for every utterance of a split (2,620 for `test-clean`), not only for the medium subset, so listing it does not give the clips; the adapter lists the wavs.
 - A LibriVAD-like set could be rebuilt by our own code from DEMAND, WHAM! and babble from our own speech sources, without LibriVAD's scripts and `Noises.zip`.
 
 ### Room impulse responses
