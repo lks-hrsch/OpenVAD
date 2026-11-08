@@ -34,22 +34,30 @@ class ForbiddenSource(Exception):  # noqa: N818  (the name the plan and its test
 
 # Directories under datasets/raw whose audio never enters the pipeline: benchmarks and LibriSpeech itself.
 _FORBIDDEN_RAW = {"ava-speech", "fearless-steps", "picovoice", "simsamu", "librispeech"}
-# LibriSpeech evaluation folders reach the set through LibriVAD only, and only in their own split.
-_EVALUATION_FOLDERS = {"dev-clean": "validation", "test-clean": "test"}
+# LibriSpeech evaluation folders reach the set through LibriVAD only, and only in their own split; its training
+# folder only in train.
+_SPLIT_FOLDERS = {"dev-clean": "validation", "test-clean": "test", "train-clean-100": "train"}
 
 
 def guard_path(path: str, split: str) -> None:
-    parts = PurePosixPath(path).parts
-    source = parts[parts.index("raw") + 1] if "raw" in parts and parts.index("raw") + 1 < len(parts) else None
+    """Refuse a path ADR 0024 keeps out of `split`. It fails closed: a path that is not under `raw/<source>`, or
+    that has a `..` segment, cannot be judged and is refused, and names are compared without regard to case.
+    """
+    parts = tuple(p.casefold() for p in PurePosixPath(path).parts)
+    if ".." in parts:
+        raise ForbiddenSource(f"{path}: a path with a .. segment cannot be checked (ADR 0024)")
+    if "raw" not in parts or parts.index("raw") + 1 >= len(parts):
+        raise ForbiddenSource(f"{path}: not a path under raw/<source>, so it cannot be checked (ADR 0024)")
+    source = parts[parts.index("raw") + 1]
     if source in _FORBIDDEN_RAW:
         raise ForbiddenSource(f"{path}: {source} never enters the pipeline (ADR 0024)")
     if source == "librivad-val" and split != "validation":
         raise ForbiddenSource(f"{path}: LibriVAD val is validation only, not {split} (ADR 0024)")
     for part in parts:
-        if part in _EVALUATION_FOLDERS and not (source or "").startswith("librivad"):
+        if part in _SPLIT_FOLDERS and not source.startswith("librivad"):
             raise ForbiddenSource(f"{path}: {part} is read through LibriVAD only (ADR 0024)")
-        if part in _EVALUATION_FOLDERS and split != _EVALUATION_FOLDERS[part]:
-            raise ForbiddenSource(f"{path}: {part} belongs to {_EVALUATION_FOLDERS[part]}, not {split} (ADR 0024)")
+        if part in _SPLIT_FOLDERS and split != _SPLIT_FOLDERS[part]:
+            raise ForbiddenSource(f"{path}: {part} belongs to {_SPLIT_FOLDERS[part]}, not {split} (ADR 0024)")
 
 
 def reserve_speakers(clips: Iterable[Clip], share: float = 0.05) -> set[tuple[str, str, str]]:

@@ -65,6 +65,53 @@ def test_guard_rejects_evaluation_folders_outside_librivad():
         guard_path("raw/voices/LibriSpeech/test-clean/a.wav", "test")
 
 
+@pytest.mark.parametrize(
+    "path", ["datasets/swc/a.ogg", "swc/a.ogg", "/mnt/a.ogg", "datasets/raw", "datasets\\raw\\ava-speech\\a.wav"]
+)
+def test_guard_refuses_a_path_it_cannot_place_under_raw(path):
+    with pytest.raises(ForbiddenSource, match="raw/<source>"):
+        guard_path(path, "train")
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "datasets/raw/swc/../librispeech/a.flac",
+        "datasets/raw/swc/../../raw/ava-speech/a.wav",
+        "datasets/raw/librivad/../librivad/generated/LibriSpeech/test-clean/a.wav",
+    ],
+)
+def test_guard_refuses_a_dotdot_segment_whatever_it_resolves_to(path):
+    with pytest.raises(ForbiddenSource, match=r"\.\."):
+        guard_path(path, "train")
+
+
+@pytest.mark.parametrize(
+    ("path", "split"),
+    [
+        ("datasets/RAW/AVA-Speech/a.wav", "test"),
+        ("datasets/raw/LibriSpeech/LibriSpeech/test-clean/a.flac", "test"),
+        ("datasets/raw/librivad/generated/LibriSpeech/Test-Clean/a.wav", "train"),
+        ("datasets/raw/LibriVAD-Val/generated/LibriSpeech/dev-clean/a.wav", "test"),
+        ("datasets/raw/voices/LibriSpeech/DEV-CLEAN/a.wav", "validation"),
+    ],
+)
+def test_guard_compares_names_without_regard_to_case(path, split):
+    with pytest.raises(ForbiddenSource):
+        guard_path(path, split)
+
+
+@pytest.mark.parametrize("split", ["validation", "test"])
+def test_guard_keeps_librivad_train_clean_100_in_train(split):
+    with pytest.raises(ForbiddenSource, match="belongs to train"):
+        guard_path("datasets/raw/librivad/generated/LibriSpeech/train-clean-100/a.wav", split)
+
+
+def test_guard_keeps_the_train_folder_out_of_other_sources():
+    with pytest.raises(ForbiddenSource, match="through LibriVAD only"):
+        guard_path("datasets/raw/voices/train-clean-100/a.wav", "train")
+
+
 def test_guard_accepts_ordinary_training_paths():
     guard_path("datasets/raw/swc/german/A/audio.ogg", "train")
     guard_path("datasets/raw/librivad/generated/LibriSpeech/train-clean-100/a.wav", "train")
