@@ -10,7 +10,8 @@ Adapter contract: `MFA_ALIGNED`, `clips(raw, languages)`. `raw` is `datasets/raw
 
 import json
 import logging
-from collections.abc import Iterator
+from collections import Counter
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 from openvad_train.dataset.models import indexed_languages
@@ -55,27 +56,29 @@ def _locale_dir(raw: Path, locale: str) -> Path | None:
     return found[0].parent if found else None
 
 
-def _locale_clips(raw: Path, locale: str, language: str, folder: Path) -> Iterator[Clip]:
-    """Dev and test as the release has them. Train is every validated clip of a speaker in neither (ADR 0023), also
-    one that is in no `train.tsv`, which is the pool rule of `split_stats`.
+def _locale_clips(
+    raw: Path, locale: str, language: str, folder: Path, held_speakers: set[str], counts: Counter
+) -> Iterator[Clip]:
+    """Dev and test as the release has them. Train is every validated clip of a speaker who is in the dev or test
+    of no locale (ADR 0023), also one that is in no `train.tsv`: the pool rule of `split_stats`, over all locales
+    because a `client_id` is global. Clips left out for that are counted in `counts["held_out_speaker_clips"]`.
 
     `duration_s` is the length in `clip_durations.tsv`, which comes from the MP3 header: 5.6 to 7.5 ms too long on
     real files without a Xing header. That is fine for the index and the 30 h cap; `align` labels on the decoded
     length. Nothing is decoded here.
     """
     durations = {r["clip"]: int(r["duration[ms]"]) / 1000 for r in read_tsv(folder / "clip_durations.tsv")}
-    held: dict[str, Split] = {}  # clip path to split
-    held_speakers: set[str] = set()
-    for official, split in HELD_OUT.items():
-        for row in read_tsv(folder / f"{official}.tsv"):
-            held.setdefault(row["path"], split)
-            held_speakers.add(row["client_id"])
+    official: dict[str, Split] = {}  # clip path to split
+    for official_split, split in HELD_OUT.items():
+        for row in read_tsv(folder / f"{official_split}.tsv"):
+            official.setdefault(row["path"], split)
     prefix = RAW_PREFIX / folder.relative_to(raw) / "clips"
     for row in read_tsv(folder / "validated.tsv"):
         name = row["path"]
-        if name in held:
-            split = held[name]
+        if name in official:
+            split = official[name]
         elif row["client_id"] in held_speakers:
+            counts["held_out_speaker_clips"] += 1
             continue
         else:
             split = "train"
@@ -95,6 +98,13 @@ def _locale_clips(raw: Path, locale: str, language: str, folder: Path) -> Iterat
         )
 
 
+def _held_out(folders: Iterable[Path]) -> tuple[set[str], int]:
+    """The speakers of the official dev and test of every given locale, and how many are in a dev and a test."""
+    dev = {r["client_id"] for folder in folders for r in read_tsv(folder / "dev.tsv")}
+    test = {r["client_id"] for folder in folders for r in read_tsv(folder / "test.tsv")}
+    return dev | test, len(dev & test)
+
+
 def _count(folder: Path) -> int:
     with (folder / "validated.tsv").open("rb") as f:
         return max(0, sum(1 for _ in f) - 1)
@@ -103,17 +113,29 @@ def _count(folder: Path) -> int:
 def clips(raw: Path, languages: set[str] | None = None, report: dict | None = None) -> Iterator[Clip]:
     """Locales on disk that are skipped, because their language has no row in `mfa_models.tsv` or because their
     fetch is not finished, are recorded in `report["skipped"]` with their validated clip counts.
+
+    The held-out speakers come from the dev and test of every finished locale, whatever `languages` asks for, so a
+    speaker is never train in one language and dev or test in another. Official dev and test rows stay as published;
+    speakers who are dev in one locale and test in another are counted in `report["dev_test_speaker_overlaps"]`.
     """
     wanted = indexed_languages(languages)
     table = indexed_languages(None)
-    skipped = report.setdefault("skipped", {}) if report is not None else {}
+    report = {} if report is None else report
+    skipped = report.setdefault("skipped", {})
+    finished: dict[str, Path] = {}
     for locale in CV_LOCALES:
-        language = language_of(locale)
         if (folder := _locale_dir(raw, locale)) is None:
             continue
-        if language not in table or not _complete(raw, locale):
-            reason = "no row in mfa_models.tsv" if language not in table else "fetch not finished"
+        if language_of(locale) not in table or not _complete(raw, locale):
+            reason = "no row in mfa_models.tsv" if language_of(locale) not in table else "fetch not finished"
             skipped[locale] = {"reason": reason, "clips": _count(folder)}
             log.warning("Common Voice %s is skipped: %s", locale, reason)
-        elif language in wanted:
-            yield from _locale_clips(raw, locale, language, folder)
+        else:
+            finished[locale] = folder
+    held_speakers, overlaps = _held_out(finished.values())
+    report["dev_test_speaker_overlaps"] = overlaps
+    counts: Counter = Counter()
+    for locale, folder in finished.items():
+        if language_of(locale) in wanted:
+            yield from _locale_clips(raw, locale, language_of(locale), folder, held_speakers, counts)
+    report["held_out_speaker_clips"] = counts["held_out_speaker_clips"]

@@ -77,7 +77,8 @@ def make_cv_tree(raw: Path) -> Path:
 
 
 def make_mls_tree(raw: Path) -> Path:
-    """German with one clip per split and a second speaker in train; `mls_english` is not a language we use."""
+    """German with one clip per split and a second speaker in train; French has a train clip of the German test
+    speaker 30 and a test clip of the German dev speaker 20; `mls_english` is not a language we use."""
     segments = {
         "train": [("10_100_000000", 12.34, 1.0), ("11_101_000003", 3.5, 3.75)],
         "dev": [("20_200_000000", 10.0, 20.5)],
@@ -88,6 +89,17 @@ def make_mls_tree(raw: Path) -> Path:
         rows = [[i, f"http://example.org/{i}.mp3", start, start + length] for i, start, length in items]
         write_tsv(folder / "segments.txt", rows)
         write_tsv(folder / "transcripts.txt", [[i, f"text of {i}"] for i, _, _ in items])
+    french = {
+        "train": [("30_900_000001", 1.0, 2.0), ("40_901_000000", 1.0, 2.5)],
+        "dev": [("50_902_000000", 1.0, 2.0)],
+        "test": [("20_903_000000", 1.0, 2.0)],
+    }
+    for split, items in french.items():
+        folder = raw / "mls_french" / split
+        write_tsv(
+            folder / "segments.txt", [[i, "http://example.org", start, start + length] for i, start, length in items]
+        )
+        write_tsv(folder / "transcripts.txt", [[i, f"texte {i}"] for i, _, _ in items])
     write_tsv(raw / "mls_english" / "train" / "transcripts.txt", [["1_2_3", "ignored"]])
     return raw
 

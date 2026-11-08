@@ -99,12 +99,39 @@ def test_every_locale_of_the_fetcher_has_a_row_so_nothing_is_skipped_for_want_of
     assert {commonvoice.language_of(locale) for locale in CV_LOCALES} <= set(load_models())
 
 
-def test_only_the_asked_languages_are_read(cv_tree, monkeypatch):
+def test_only_the_asked_languages_have_their_clips_read_but_every_locale_gives_its_held_out_speakers(
+    cv_tree, monkeypatch
+):
     read = []
     original = commonvoice.read_tsv
     monkeypatch.setattr(commonvoice, "read_tsv", lambda p: read.append(p) or original(p))
     assert {c.language for c in commonvoice.clips(cv_tree, {"zh"})} == {"zh"}
-    assert not any("/de/" in str(p) for p in read)
+    de = {p.name for p in read if "/de/" in str(p)}
+    assert de == {"dev.tsv", "test.tsv"}
+
+
+def test_a_speaker_held_out_in_one_locale_is_never_train_in_another_also_when_only_that_one_is_asked_for(cv_tree):
+    # d is in the test of de and has a validated clip in zh-TW.
+    add_cv_locale(
+        cv_tree,
+        "zh-TW",
+        {"common_voice_zh-TW_1.mp3": ("t", "text"), "common_voice_zh-TW_2.mp3": ("d", "text")},
+        train=["common_voice_zh-TW_1.mp3"],
+    )
+    for asked, left_out in (({"zh-TW"}, 1), (None, 2)):  # all: also the validated clip c2 of a dev speaker
+        report = {}
+        tw = {c.clip_id: c for c in commonvoice.clips(cv_tree, asked, report) if c.language == "zh-TW"}
+        assert set(tw) == {"common_voice_zh-TW_1"}
+        assert report["held_out_speaker_clips"] == left_out
+
+
+def test_official_rows_stay_as_published_and_dev_test_overlaps_are_counted(cv_tree):
+    # c is in the dev of de and the test of zh-CN.
+    add_cv_locale(cv_tree, "zh-CN", {"common_voice_zh-CN_9.mp3": ("c", "text")}, test=["common_voice_zh-CN_9.mp3"])
+    report = {}
+    clips = {c.clip_id: c for c in commonvoice.clips(cv_tree, None, report)}
+    assert (clips["common_voice_de_c1"].split, clips["common_voice_zh-CN_9"].split) == ("validation", "test")
+    assert report["dev_test_speaker_overlaps"] == 1
 
 
 def test_a_validated_clip_without_a_duration_is_refused(cv_tree):

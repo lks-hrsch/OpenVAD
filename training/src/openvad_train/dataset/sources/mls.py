@@ -8,6 +8,7 @@
 Adapter contract: `MFA_ALIGNED`, `clips(raw, languages)`. `raw` is `datasets/raw/mls`.
 """
 
+from collections import Counter
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -33,8 +34,17 @@ LANGUAGE = {
 SPLITS: dict[str, Split] = {"train": "train", "dev": "validation", "test": "test"}
 
 
-def _split_clips(raw: Path, name: str, language: str, official: str) -> Iterator[Clip]:
-    """One clip per line of `transcripts.txt` (IDs are `<speaker>_<book>_<segment>`).
+def _speakers(raw: Path, name: str, official: str) -> set[str]:
+    lines = (raw / f"mls_{name}" / official / "transcripts.txt").read_text().splitlines()
+    return {line.split("_", 1)[0] for line in lines}
+
+
+def _split_clips(
+    raw: Path, name: str, language: str, official: str, held_speakers: set[str], counts: Counter
+) -> Iterator[Clip]:
+    """One clip per line of `transcripts.txt` (IDs are `<speaker>_<book>_<segment>`). A train clip of a speaker who
+    is in the dev or test of any language is left out and counted: reader ids are global, and a reader can record in
+    several languages.
 
     `duration_s` is the segment's `end - start` in `segments.txt`, which agrees with the FLAC header to 4 ms on 150
     sampled files; reading 1.6 M headers off the share would take hours. `align` labels on the decoded length.
@@ -47,6 +57,9 @@ def _split_clips(raw: Path, name: str, language: str, official: str) -> Iterator
     for line in (folder / "transcripts.txt").read_text().splitlines():
         segment, text = line.split("\t", 1)
         speaker, book, _ = segment.split("_")
+        if official == "train" and speaker in held_speakers:
+            counts["held_out_speaker_clips"] += 1
+            continue
         yield Clip(
             clip_id=f"{language}/{segment}",
             source=SOURCE,
@@ -72,7 +85,16 @@ def clips(raw: Path, languages: set[str] | None = None, report: dict | None = No
                 "reason": "no row in mfa_models.tsv",
                 "clips": sum(count_lines(f) for f in folder.glob("*/transcripts.txt")),
             }
-    for name, language in LANGUAGE.items():
-        if language in wanted and (raw / f"mls_{name}").is_dir():
+    present = {name: language for name, language in LANGUAGE.items() if (raw / f"mls_{name}").is_dir()}
+    # From every language on disk, whatever `languages` asks for, so a split does not depend on the request.
+    dev = {s for name in present for s in _speakers(raw, name, "dev")}
+    test = {s for name in present for s in _speakers(raw, name, "test")}
+    if report is not None:
+        report["dev_test_speaker_overlaps"] = len(dev & test)
+    counts: Counter = Counter()
+    for name, language in present.items():
+        if language in wanted:
             for official in SPLITS:
-                yield from _split_clips(raw, name, language, official)
+                yield from _split_clips(raw, name, language, official, dev | test, counts)
+    if report is not None:
+        report["held_out_speaker_clips"] = counts["held_out_speaker_clips"]
