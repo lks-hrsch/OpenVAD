@@ -21,7 +21,7 @@ from openvad_train.dataset.config import FULL, SLICE, SPEAKER_CAP_HOURS, BuildCo
 from openvad_train.dataset.labels import apply_gap_rule
 from openvad_train.dataset.parquet_io import write_parquet
 from openvad_train.dataset.schema import Clip, Timing, rank
-from openvad_train.dataset.sources import swc
+from openvad_train.dataset.sources import commonvoice, fleurs, mls, speechcommands, swc, voxpopuli
 from openvad_train.fetch.common import MANIFEST, file_hash, raw_dir, write_manifest
 
 
@@ -97,7 +97,7 @@ def apply_cap_rank(
 # An adapter has `clips(raw, languages)` and the constant `MFA_ALIGNED`. One that is not forced-aligned by MFA also has
 # `timings(raw, clips)` and is capped here. An MFA adapter may have `timings` too, for its clips without a transcript
 # (Speech Commands background noise), whose labels are fixed.
-SOURCES: dict[str, ModuleType] = {"swc": swc}
+SOURCES: dict[str, ModuleType] = {m.SOURCE: m for m in (swc, commonvoice, mls, fleurs, voxpopuli, speechcommands)}
 
 _SCHEMA = {
     "clip_id": pl.String,

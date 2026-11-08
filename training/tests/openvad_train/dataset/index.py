@@ -284,3 +284,12 @@ def test_the_stage_runs_a_named_configuration_and_requires_one(data_dir):
     assert set(_read(data_dir)["language"]) == {"de"}
     with pytest.raises(SystemExit):
         index.main([])
+
+
+def test_every_adapter_is_registered_under_its_raw_folder_and_says_whether_mfa_labels_it():
+    assert set(index.SOURCES) == {"swc", "common-voice", "mls", "fleurs", "voxpopuli", "speech-commands"}
+    for name, module in index.SOURCES.items():
+        assert name == module.SOURCE
+        assert isinstance(module.MFA_ALIGNED, bool)
+        assert callable(module.clips)
+        assert hasattr(module, "timings") == (not module.MFA_ALIGNED or name == "speech-commands")

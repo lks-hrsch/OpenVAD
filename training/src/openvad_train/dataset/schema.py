@@ -25,13 +25,16 @@ def sample_seed(global_seed: int, plan_version: str, sample_id: str) -> int:
     return _blake2_64(str(global_seed), plan_version, sample_id)
 
 
+Split = Literal["train", "validation", "test"]
+
+
 @dataclass(frozen=True)
 class Clip:
     clip_id: str
     source: str
     language: str
     speaker: str | None
-    split: Literal["train", "validation", "test"]
+    split: Split
     path: str
     offset_s: float
     duration_s: float

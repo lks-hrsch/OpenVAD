@@ -53,3 +53,12 @@ def spec_for(models: dict[str, ModelSpec], language: str) -> ModelSpec:
     if spec.status == "open":
         raise ValueError(f"{language}: no MFA model is chosen yet ({spec.note})")
     return spec
+
+
+def indexed_languages(languages: set[str] | None) -> set[str]:
+    """The languages an MFA source adapter indexes: those with a row in the table (also `open` ones, whose hours
+    count for the failure rule), narrowed to `languages` when that is given. A source language without a row, such
+    as Common Voice's Persian, has no MFA model (ADR 0023) and is left out.
+    """
+    table = set(load_models())
+    return table if languages is None else table & languages

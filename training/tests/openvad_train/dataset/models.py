@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from openvad_train.dataset.models import ModelSpec, load_models, spec_for
+from openvad_train.dataset.models import ModelSpec, indexed_languages, load_models, spec_for
 
 
 def test_models_table_ships_with_the_package_and_loads():
@@ -47,3 +47,11 @@ def test_every_row_says_how_far_it_is_verified_and_open_choices_stay_open():
             spec_for(models, language)
     with pytest.raises(ValueError, match="no row for language 'xx'"):
         spec_for(models, "xx")
+
+
+def test_indexed_languages_are_the_tables_rows_open_ones_included_narrowed_by_the_request():
+    table = set(load_models())
+    assert indexed_languages(None) == table
+    assert "ca" in table  # open: indexed, and align refuses it until the owner decides
+    assert not table & {"fa", "ur", "ar", "mhr", "kab", "rw"}  # no MFA model (ADR 0023) or no row yet
+    assert indexed_languages({"de", "kab", "xx"}) == {"de"}
