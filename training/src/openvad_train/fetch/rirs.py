@@ -5,7 +5,7 @@
 
 """Room impulse responses for the room step of the channel chain: BUT ReverbDB and OpenSLR 28 (RIRS_NOISES).
 
-Only the RIR wavs are kept. BUT ReverbDB's 60 s room-noise recordings are most of its 8.7 GB, and the simulated RIRs
+Only the RIR wavs are kept. BUT ReverbDB's 60 s room-noise recordings are most of its 9.3 GB, and the simulated RIRs
 and the noises of RIRS_NOISES are not wanted. The fetcher writes `index.tsv`, one line per RIR with the room it was
 measured in, so the dataset stage never walks the tree.
 """

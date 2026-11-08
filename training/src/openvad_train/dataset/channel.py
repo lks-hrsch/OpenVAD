@@ -121,8 +121,9 @@ def suppress(x: np.ndarray, method: str) -> np.ndarray:
     """Classical noise suppression on the STFT: `wiener` or `spectral_subtraction` (the plan's `suppression`).
 
     The noise power of each frequency is the 20th percentile of its frame powers over the whole sample, scaled to a
-    mean, which holds for stationary noise and for samples with at least 20% non-speech. The gain has a floor of
-    -15 dB.
+    mean, which holds for stationary noise and for samples with at least 20% non-speech. That is non-causal: the
+    first frame is treated with what the last one shows. It is a deliberate choice, since the stored set is built
+    offline. The gain has a floor of -15 dB.
     """
     if method not in SUPPRESSION_METHODS:
         raise ValueError(f"unknown suppression {method!r}, expected one of {SUPPRESSION_METHODS}")

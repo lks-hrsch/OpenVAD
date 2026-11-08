@@ -288,7 +288,7 @@ As-is sources skip this and the stored channel chain.
 
 | Step | p | Values |
 | --- | --- | --- |
-| Room | 0.5 | real RIRs: BUT ReverbDB (CC BY 4.0, 8.7 GB) and OpenSLR 28 (Apache-2.0, 1.3 GB) (owner, 2026-11-06); rooms split 80/10/10 by hash; peak aligned to zero |
+| Room | 0.5 | real RIRs: BUT ReverbDB (CC BY 4.0, 9.3 GB archive) and OpenSLR 28 (Apache-2.0, 1.3 GB) (owner, 2026-11-06); rooms split 80/10/10 by hash; peak aligned to zero. The rooms are physical rooms, 25 in all: BUT's 9 and 16 of OpenSLR 28's real RIRs from the committed table `fetch/openslr28_rooms.tsv`, which merges the variants of one room. A draw picks the room of the sample's split uniformly first, then one of its RIRs, so the RIRs of a room with few of them repeat more often |
 | Handset | 0.7 | high-pass 100 to 300 Hz, low-pass 3.4 to 7 kHz, two peaks ±6 dB |
 | AGC | 0.5 | target −26 to −16 dBFS, attack 5 to 20 ms, release 100 to 500 ms |
 | Soft clipping | 0.15 | drive 3 to 12 dB |
@@ -379,7 +379,7 @@ Fallbacks, tried in order if a pilot gate fails:
 
 Each milestone ends in something runnable, and later ones build on it.
 
-1. **Vertical slice:** SWC German, DEMAND, G.722, no MFA or resampler, none of the other chain steps or transients, a few hundred samples. Covers index, labels, plan, construct, publish, verify, and `load_dataset`. Measures FLAC ratio and throughput.
+1. **Vertical slice:** SWC German, DEMAND, a few hundred samples, with the full chain (room, handset, AGC, soft clipping, suppression) and every stored codec share since Task 19 (controller ruling); only the transients stay off until Task 18. It started as G.722 with none of the other chain steps. Covers index, labels, plan, construct, publish, verify, and `load_dataset`. Measures FLAC ratio and throughput.
 2. **Resampler and narrowband:** the filter, bindings, G.711, the train-time transform, and AMR-NB.
 3. **MFA gate:** build it, then pilot on English, German, Italian, Catalan and Japanese. Measures throughput and settles the model table. Gates are listed below.
 4. **All adapters:** remaining sources and the MFA batches.
@@ -457,7 +457,7 @@ These are not owner decisions yet. They are settled at the owner checkpoint at t
 
 - Module boundaries under `training/src/openvad_train/dataset/`.
 - MFA batch size, job counts and temporary disk use.
-- Noise suppression details, handset filter design and transient waveforms within the stated ranges.
+- Noise suppression details, handset filter design and transient waveforms within the stated ranges. Chosen: the suppressor's noise floor is the 20th percentile of each frequency's power over the whole sample, which is non-causal and fine because the stored set is built offline, not streamed.
 - Exact shard and Parquet row group sizes near the stated targets.
 
 ## Deferred
