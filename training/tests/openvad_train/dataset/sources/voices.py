@@ -81,11 +81,13 @@ def test_the_delay_is_the_lag_of_the_recording_behind_its_source(tmp_path):
         assert voices.measure_voices_delay(tmp_path / "delayed.wav", tmp_path / "source.wav") == lag / 16000
 
 
-def test_a_lag_beyond_the_window_is_not_found(tmp_path):
+def test_a_lag_of_three_eighths_of_a_second_is_found_and_one_beyond_the_window_is_not(tmp_path):
     source = noise(2.0, seed=1)
     sf.write(tmp_path / "source.wav", source, 16000, subtype="PCM_16")
-    sf.write(tmp_path / "delayed.wav", np.roll(source, 8000), 16000, subtype="PCM_16")  # 0.5 s
-    assert abs(voices.measure_voices_delay(tmp_path / "delayed.wav", tmp_path / "source.wav")) < voices.MAX_DELAY_S
+    sf.write(tmp_path / "delayed.wav", np.roll(source, 6000), 16000, subtype="PCM_16")  # 0.375 s
+    assert voices.measure_voices_delay(tmp_path / "delayed.wav", tmp_path / "source.wav") == 0.375
+    sf.write(tmp_path / "far.wav", np.roll(source, 12000), 16000, subtype="PCM_16")  # 0.75 s
+    assert abs(voices.measure_voices_delay(tmp_path / "far.wav", tmp_path / "source.wav")) <= voices.MAX_DELAY_S
 
 
 def test_recordings_at_different_rates_are_refused(tmp_path):
@@ -111,6 +113,48 @@ def test_a_word_shifted_past_the_recording_is_cut_to_it(voices_tree):
     clip = next(c for c in voices.clips(voices_tree) if c.speaker == "0083")
     (t,) = voices.timings(voices_tree, [clip])
     assert t.speech_ms == [(510, 3000)]
+
+
+def _recording(tree, speaker="0083"):
+    return next(c for c in voices.clips(tree) if c.speaker == speaker)
+
+
+def _edit_table(tree, edit):
+    table = tree / "VOiCES_devkit/references/time_values.csv"
+    table.write_text(edit(table.read_text()))
+
+
+def test_a_recording_whose_lag_the_devkit_table_gives_otherwise_is_dropped_and_counted(voices_tree):
+    name = _recording(voices_tree).path.removeprefix("datasets/raw/voices/VOiCES_devkit/")
+    _edit_table(voices_tree, lambda text: text.replace(f"{name},-160.0", f"{name},-100.0"))
+    report: dict = {}
+    clips = list(voices.clips(voices_tree, None, report))
+    assert report == {"delay_disagrees_with_devkit": 1, "no_devkit_delay": 0}
+    assert not any(c.path.endswith(name) for c in clips)
+    assert len(clips) == len(TRAIN_100_SPEAKERS) + len(TRAIN_360_SPEAKERS) + 1 - 1
+
+
+def test_a_recording_within_a_millisecond_of_the_table_stays(voices_tree):
+    name = _recording(voices_tree).path.removeprefix("datasets/raw/voices/VOiCES_devkit/")
+    _edit_table(voices_tree, lambda text: text.replace(f"{name},-160.0", f"{name},-170.0"))
+    report: dict = {}
+    clips = list(voices.clips(voices_tree, None, report))
+    assert any(c.path.endswith(name) for c in clips)
+    assert report["delay_disagrees_with_devkit"] == 0
+
+
+def test_a_recording_the_devkit_table_does_not_list_is_dropped_and_counted(voices_tree):
+    name = _recording(voices_tree).path.removeprefix("datasets/raw/voices/VOiCES_devkit/")
+    _edit_table(voices_tree, lambda text: "".join(line for line in text.splitlines(True) if name not in line))
+    report: dict = {}
+    assert not any(c.path.endswith(name) for c in voices.clips(voices_tree, None, report))
+    assert report == {"delay_disagrees_with_devkit": 0, "no_devkit_delay": 1}
+
+
+def test_a_name_that_is_not_a_recording_is_a_value_error(voices_tree):
+    clip = voices.Clip("x", "voices", "en", "1", "train", "datasets/raw/voices/x.wav", 0.0, 1.0, "l", None)
+    with pytest.raises(ValueError, match="not a VOiCES recording name"):
+        list(voices.timings(voices_tree, [clip]))
 
 
 def test_voices_is_not_forced_aligned_and_is_never_cut():

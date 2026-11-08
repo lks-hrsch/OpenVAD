@@ -190,6 +190,13 @@ def make_voices_tree(raw: Path) -> Path:
         grid = raw.parent / "librispeech-alignments" / dataset / str(int(speaker)) / str(chapter)
         grid.mkdir(parents=True, exist_ok=True)
         (grid / f"{int(speaker)}-{chapter}-{segment:04d}.TextGrid").write_text(_TEXTGRID)
+    # The release's table of lags: every devkit recording and one file of the rest of the release, in our sign reversed.
+    with (refs / "time_values.csv").open("w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["index", "noisy_filename", "peak cc loc (samples)"])
+        writer.writerow([0, "distant-16k/speech/train/rm9/none/sp9999/not-in-the-devkit.wav", -5])
+        for split_rows in rows.values():
+            writer.writerows([[len(split_rows), row[1], -float(VOICES_DELAY_SAMPLES)] for row in split_rows])
     for devkit_split, split_rows in rows.items():
         with (refs / f"{devkit_split}_index.csv").open("w", newline="") as f:
             writer = csv.writer(f)
