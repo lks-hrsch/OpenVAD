@@ -1184,3 +1184,13 @@ def test_a_model_override_is_refused_outside_the_pilot_and_without_the_model_on_
     with pytest.raises(ValueError, match="no row for language 'xx'"):
         run_align(pilot.cfg, ["ca"], models={"xx": ("vx_model", "rev1")})
     assert pilot.fake.calls == []
+
+
+def test_a_model_of_mfa_2_reads_its_version_from_meta_yaml(tmp_path):
+    # italian_cv 2.0.0 ships acoustic_model/meta.yaml and no meta.json; MFA 3.4.3 falls back to it as well.
+    model = tmp_path / "italian_cv.zip"
+    with zipfile.ZipFile(model, "w") as z:
+        z.writestr(
+            "acoustic_model/meta.yaml", "architecture: gmm-hmm\nphones:\n- a\ntrain_date: '2021'\nversion: 2.0.0b9\n"
+        )
+    assert align._model_version(model) == "2.0.0b9"

@@ -193,12 +193,21 @@ def _fetch_model(tools: Tools, kind: str, name: str, release: str) -> Path:
 
 
 def _model_version(path: Path) -> str | None:
-    """The version in the model's own `meta.json`. A dictionary is a plain text file and carries none."""
+    """The version in the model's own `meta.json`, or in the `meta.yaml` of a model made by MFA 2 (`italian_cv`
+    2.0.0), which MFA 3.4.3 also reads. A dictionary is a plain text file and carries none.
+    """
     if path.suffix != ".zip":
         return None
     with zipfile.ZipFile(path) as z:
-        meta = next(n for n in z.namelist() if n.endswith("meta.json"))
-        return json.loads(z.read(meta))["version"]
+        names = z.namelist()
+        if meta := next((n for n in names if n.endswith("meta.json")), None):
+            return json.loads(z.read(meta))["version"]
+        meta = next(n for n in names if n.endswith("meta.yaml"))
+        # The one top-level scalar needed, without a YAML parser the training package does not depend on.
+        version = re.search(r"^version: *['\"]?([^'\"\n]+?)['\"]?$", z.read(meta).decode(), re.M)
+        if version is None:
+            raise ValueError(f"{path}: {meta} has no version")
+        return version.group(1)
 
 
 def fetch_models(tools: Tools, spec: ModelSpec) -> Models:
