@@ -5,6 +5,8 @@
 
 import csv
 import dataclasses
+import threading
+import time
 from collections import Counter
 
 import numpy as np
@@ -491,3 +493,24 @@ def test_the_shortest_segment_the_mix_takes_filters_and_keeps_its_tir(tmp_path):
     segments = [segment(1000, 1000 + MIN_SEGMENT_N)]
     mixed = mix_competing(speech, active, segments, 6.0, tmp_path)
     assert measured_tir(mixed, speech, active, segments) == pytest.approx(6.0, abs=0.5)
+
+
+def test_the_frame_counts_of_a_wham_split_are_read_once_and_in_parallel(tmp_path, monkeypatch):
+    pool = NoisePool(wham=make_wham_tree(tmp_path / "wham", per_split=12))
+    reads, threads = [], set()
+    real_info = sf.info
+
+    def counting(file):
+        reads.append(file)
+        threads.add(threading.get_ident())
+        time.sleep(0.01)  # a cold read is slow, so the pool has work to spread
+        return real_info(file)
+
+    monkeypatch.setattr(sf, "info", counting)
+    draws = [pool.draw("city", "train", np.random.default_rng(i)) for i in range(200)]
+    assert len(reads) == len(set(reads)) == 12  # every header of the split, once, and no more per draw
+    assert len(threads) > 1
+    assert all(0 <= d.offset_n < 1600 for d in draws)
+    assert {d.file.parent.name for d in draws} == {"tr"}  # the other splits are not read
+    pool.draw("city", "test", np.random.default_rng(0))
+    assert len(reads) == 24

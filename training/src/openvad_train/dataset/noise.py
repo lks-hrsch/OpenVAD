@@ -11,6 +11,7 @@ import csv
 from bisect import bisect_right
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from itertools import accumulate
 from pathlib import Path
 from typing import NamedTuple
@@ -45,6 +46,7 @@ _WHAM_SPLITS = {"train": "tr", "validation": "cv", "test": "tt"}
 # (ADR 0023, owner 2026-11-03). Taiwan Mandarin counts as Mandarin; Cantonese (`yue`) does not.
 OPEN_LANGUAGES = frozenset({"ja", "zh", "zh-TW"})
 OPEN_LANGUAGE_P = 0.5
+_HEADER_WORKERS = 32
 
 
 class NoiseDraw(NamedTuple):
@@ -134,6 +136,11 @@ class NoisePool:
         folder = wham_split(split)
         if folder not in self._wham_files:
             self._wham_files[folder] = sorted((self._wham / folder).glob("*.wav"))
+            # One header per file, cold over the share (about 1.5 s each), would cost hours one draw at a time: read
+            # the whole split once, in parallel. The counts stay exact, never derived from file sizes.
+            with ThreadPoolExecutor(_HEADER_WORKERS) as threads:
+                counts = threads.map(lambda f: sf.info(f).frames, self._wham_files[folder])
+                self._frames |= dict(zip(self._wham_files[folder], counts, strict=True))
         files = self._wham_files[folder]
         if not files:
             raise ValueError(f"no WHAM! file in {self._wham / folder}")
