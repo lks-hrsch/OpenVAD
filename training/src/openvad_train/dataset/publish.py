@@ -24,6 +24,7 @@ from openvad_train.dataset.parquet_io import read_parquet, write_parquet
 from openvad_train.dataset.plan import PLAN_SCHEMA
 from openvad_train.dataset.sources.librivad import VAL_SOURCE
 from openvad_train.fetch.common import cache_dir, file_hash, raw_dir, read_manifest, take_share_lock, write_manifest
+from openvad_train.fetch.musan import musan_licences
 
 
 log = logging.getLogger(__name__)
@@ -190,8 +191,10 @@ def _publish(cfg: BuildConfig) -> None:
     # `librivad` rows can read the validation split of `librivad-val`, whose own manifest would otherwise go unrecorded.
     if rows["source_path"].str.starts_with(f"datasets/raw/{VAL_SOURCE}/").any():
         sources.add(VAL_SOURCE)
-    if rows["rir_id"].is_not_null().any():
+    if _rir_ids(rows):
         sources.add("rirs")
+    talkers = _talker_paths(rows)
+    sources |= {path.split("/")[2] for path in talkers}
     sources = sorted(sources)
     manifest_paths = {name: raw_dir(name) / "manifest.json" for name in sources}
     if absent := [name for name, path in manifest_paths.items() if not path.exists()]:
@@ -226,7 +229,9 @@ def _publish(cfg: BuildConfig) -> None:
             "licences": {
                 s: sorted(rows.filter(pl.col("source") == s)["licence"].unique()) for s in sorted(set(rows["source"]))
             }
-            | _rir_licences(rows),
+            | _noise_licences(rows)
+            | _rir_licences(rows)
+            | _talker_licences(work, talkers),
             "raw_sources": {name: file_hash(path, "sha256") for name, path in manifest_paths.items()},
             "samples": {split: rows.filter(pl.col("split") == split).height for split in SPLITS},
             "planned_shards": len(planned),
@@ -238,13 +243,67 @@ def _publish(cfg: BuildConfig) -> None:
     log.info("published %d samples to %s (%s)", rows.height, root, "interim" if missing else "complete")
 
 
+# The conditions whose `noise_source_ids` are speech from reserved speakers, not a noise file.
+_TALKER_CONDITIONS = ("babble", "ssn")
+
+
+def _rir_ids(rows: pl.DataFrame) -> set[str]:
+    """Every RIR a row reads: its room's, and those of its competing-talker segments."""
+    with_segments = rows.filter(pl.col("segments").list.len() > 0)["segments"]
+    return {*rows["rir_id"].drop_nulls(), *(s["rir_id"] for segments in with_segments for s in segments)} - {None}
+
+
+def _noise_licences(rows: pl.DataFrame) -> dict[str, list[str]]:
+    """`noise/<set>` to its licences, for every noise set a row's noise files come from (DEMAND, WHAM! and MUSAN).
+
+    The set is the directory under `datasets/raw/` that the path points into. DEMAND and WHAM! have one licence in
+    their raw manifest; MUSAN's differ per file, so its licences are those of the files the rows use.
+    """
+    ids = rows.filter(~pl.col("condition").is_in(_TALKER_CONDITIONS))["noise_source_ids"].explode().drop_nulls()
+    paths = sorted({i.partition("#")[0] for i in ids})
+    licences: dict[str, list[str]] = {}
+    for name in sorted({path.split("/")[2] for path in paths}):
+        if name == "musan":
+            table = musan_licences()
+            used = {table[path.rpartition("/")[2].removesuffix(".wav")] for path in paths if path.split("/")[2] == name}
+            licences[f"noise/{name}"] = sorted(used)
+        elif licence := (read_manifest(raw_dir(name)) or {}).get("licence"):
+            licences[f"noise/{name}"] = [licence]
+        else:
+            raise ValueError(f"the {name} manifest records no licence")
+    return licences
+
+
+def _talker_paths(rows: pl.DataFrame) -> set[str]:
+    """The files of the reserved speakers that babble, speech-shaped noise and competing talkers read."""
+    noise = rows.filter(pl.col("condition").is_in(_TALKER_CONDITIONS))["noise_source_ids"].explode().drop_nulls()
+    segments = rows.filter(pl.col("segments").list.len() > 0)["segments"]
+    return {*noise, *(s["source_path"] for segs in segments for s in segs)}
+
+
+def _talker_licences(work: Path, paths: set[str]) -> dict[str, list[str]]:
+    """`talkers/<source>` to the licences of the reserved clips whose speech the rows use, from the index stage.
+
+    A source's licence can differ by clip (SWC by folder), so it is looked up per clip, not per source.
+    """
+    licences: dict[str, list[str]] = {}
+    for name in sorted({path.split("/")[2] for path in paths}):
+        index = asyncio.run(read_parquet(work / "index" / f"{name}.parquet", ["path", "licence"]))
+        used = {p for p in paths if p.split("/")[2] == name}
+        found = index.filter(pl.col("path").is_in(used))
+        if missing := used - set(found["path"]):
+            raise ValueError(f"{len(missing)} talker clips are not in the {name} index, first: {sorted(missing)[0]}")
+        licences[f"talkers/{name}"] = sorted(found["licence"].unique())
+    return licences
+
+
 def _rir_licences(rows: pl.DataFrame) -> dict[str, list[str]]:
-    """`rirs/<set>` to its licence, for every RIR set a room row reads (BUT ReverbDB is CC BY 4.0 and needs credit).
+    """`rirs/<set>` to its licence, for every RIR set a row reads (BUT ReverbDB is CC BY 4.0 and needs credit).
 
     The set is the directory under `datasets/raw/rirs/` that `rir_id` points into; the licences are the fetcher's.
     """
-    ids = rows["rir_id"].drop_nulls()
-    if ids.is_empty():
+    ids = _rir_ids(rows)
+    if not ids:
         return {}
     licences = (read_manifest(raw_dir("rirs")) or {}).get("licences", {})
     sets = sorted({rir_id.split("/")[3] for rir_id in ids})

@@ -6,6 +6,7 @@
 import asyncio
 import dataclasses
 import hashlib
+import json
 import shutil
 import subprocess
 import tarfile
@@ -23,10 +24,20 @@ from openvad_train.dataset.construct import PlanMismatch, run_construct
 from openvad_train.dataset.labels import rasterise
 from openvad_train.dataset.parquet_io import read_parquet
 from openvad_train.dataset.plan import PLAN_SCHEMA, draw_sample
-from openvad_train.dataset.publish import PLAN_ONLY, _git_state, run_publish, set_small
+from openvad_train.dataset.publish import (
+    PLAN_ONLY,
+    _git_state,
+    _noise_licences,
+    _rir_licences,
+    _talker_licences,
+    _talker_paths,
+    run_publish,
+    set_small,
+)
 from openvad_train.dataset.schema import Clip, Timing
 from openvad_train.design_resampler import coefficients
 from openvad_train.fetch.common import file_hash, read_manifest
+from openvad_train.fetch.musan import musan_licences
 
 
 @pytest.fixture(autouse=True)
@@ -237,7 +248,7 @@ def test_manifest_records_provenance(built_with_as_is, data):
     assert m["resampler_sha256"] == hashlib.sha256(coefficients().astype("<f4").tobytes()).hexdigest()
     assert m["ffmpeg"]["version"]
     assert "delays_ms" in m["delays"]
-    assert m["licences"] == {"ami": ["CC0"], "librivad": ["CC0"], "swc": ["CC0"]}
+    assert m["licences"] == {"ami": ["CC0"], "librivad": ["CC0"], "noise/demand": ["CC BY-SA 3.0"], "swc": ["CC0"]}
     assert set(m["raw_sources"]) == {"ami", "demand", "librivad", "swc"}
     for name, digest in m["raw_sources"].items():
         assert digest == file_hash(data / "datasets/raw" / name / "manifest.json", "sha256")
@@ -263,7 +274,7 @@ def test_manifest_records_the_rirs_hash_when_a_row_has_a_room(data):
 def test_a_row_with_a_room_lists_its_rir_set_and_licence(data):
     m = read_manifest(dataset_root(build(data, room=True)))
     assert m is not None
-    assert m["licences"] == {"rirs/but": ["CC BY 4.0"], "swc": ["CC0"]}
+    assert m["licences"] == {"noise/demand": ["CC BY-SA 3.0"], "rirs/but": ["CC BY 4.0"], "swc": ["CC0"]}
 
 
 def test_a_rir_set_without_a_recorded_licence_fails(data):
@@ -400,3 +411,98 @@ def test_a_rerun_gives_the_same_files(built):
     before = {n: (root / f"{n}.parquet").read_bytes() for n in ("train", "validation", "test", "index")}
     run_publish(built)
     assert {n: (root / f"{n}.parquet").read_bytes() for n in before} == before
+
+
+SEGMENT = pl.Struct({"rir_id": pl.String, "source_path": pl.String})
+
+
+def licence_rows(*rows: tuple[str, list[str], list[dict], str | None]) -> pl.DataFrame:
+    """Rows of (condition, noise_source_ids, segments, rir_id), with the columns the licence tables read."""
+    return pl.DataFrame(
+        {
+            "condition": [r[0] for r in rows],
+            "noise_source_ids": [r[1] for r in rows],
+            "segments": [r[2] for r in rows],
+            "rir_id": [r[3] for r in rows],
+        },
+        schema={
+            "condition": pl.String,
+            "noise_source_ids": pl.List(pl.String),
+            "segments": pl.List(SEGMENT),
+            "rir_id": pl.String,
+        },
+    )
+
+
+def write_raw_manifest(data: Path, name: str, **fields) -> None:
+    (data / "datasets/raw" / name).mkdir(parents=True, exist_ok=True)
+    (data / "datasets/raw" / name / "manifest.json").write_text(json.dumps({"dataset": name} | fields))
+
+
+def test_noise_sets_are_listed_with_the_licence_of_their_manifest(data):
+    write_raw_manifest(data, "demand", licence="CC BY-SA 3.0")
+    write_raw_manifest(data, "wham", licence="CC BY-NC 4.0")
+    rows = licence_rows(
+        ("office", ["datasets/raw/demand/OOFFICE/ch01.wav"], [], None),
+        ("city", ["datasets/raw/wham/wham_noise/tr/a.wav#1"], [], None),
+        ("clean", [], [], None),
+    )
+    assert _noise_licences(rows) == {"noise/demand": ["CC BY-SA 3.0"], "noise/wham": ["CC BY-NC 4.0"]}
+
+
+def test_musan_lists_the_licences_of_the_files_the_rows_use(data):
+    table = musan_licences()
+    one_per_licence = {}
+    for file_id, licence in table.items():
+        if file_id.startswith("noise-sound-bible"):
+            one_per_licence.setdefault(licence, file_id)
+    assert len(one_per_licence) >= 2
+    ids = [f"datasets/raw/musan/musan/noise/sound-bible/{f}.wav" for f in one_per_licence.values()]
+    got = _noise_licences(licence_rows(("nature", ids[:1], [], None), ("street", ids[1:], [], None)))
+    assert got == {"noise/musan": sorted(one_per_licence)}
+
+
+def test_a_noise_set_without_a_licence_in_its_manifest_fails(data):
+    write_raw_manifest(data, "demand")
+    with pytest.raises(ValueError, match="demand manifest records no licence"):
+        _noise_licences(licence_rows(("office", ["datasets/raw/demand/OOFFICE/ch01.wav"], [], None)))
+
+
+def test_the_donor_files_of_babble_ssn_and_competing_rows_are_the_talkers_not_noise(data):
+    segment = {"rir_id": "datasets/raw/rirs/but/r.wav", "source_path": "datasets/raw/mls/c.flac"}
+    rows = licence_rows(
+        ("babble", ["datasets/raw/mls/a.flac", "datasets/raw/mls/b.flac"], [], None),
+        ("ssn", ["datasets/raw/common-voice/s.mp3"], [], None),
+        ("competing", [], [segment], None),
+        ("clean", [], [], None),
+    )
+    assert _noise_licences(rows) == {}
+    assert _talker_paths(rows) == {f"datasets/raw/mls/{n}.flac" for n in "abc"} | {"datasets/raw/common-voice/s.mp3"}
+
+
+def test_talkers_list_the_licences_of_the_clips_used_by_source(data):
+    cfg = dataclasses.replace(SLICE, name="licence-test")
+    index = work_dir(cfg) / "index"
+    index.mkdir(parents=True)
+    for name, clips in {
+        "mls": [("datasets/raw/mls/a.flac", "CC BY 4.0"), ("datasets/raw/mls/b.flac", "CC BY 4.0"), ("x", "CC0")],
+        "swc": [("datasets/raw/swc/s1.ogg", "CC BY-SA"), ("datasets/raw/swc/s2.ogg", "CC BY")],
+    }.items():
+        frame_ = pl.DataFrame(clips, schema={"path": pl.String, "licence": pl.String}, orient="row")
+        asyncio.run(parquet_io.write_parquet({index / f"{name}.parquet": frame_.lazy()}))
+    paths = {"datasets/raw/mls/a.flac", "datasets/raw/mls/b.flac", "datasets/raw/swc/s1.ogg", "datasets/raw/swc/s2.ogg"}
+    assert _talker_licences(work_dir(cfg), paths) == {
+        "talkers/mls": ["CC BY 4.0"],
+        "talkers/swc": ["CC BY", "CC BY-SA"],
+    }
+    with pytest.raises(ValueError, match="not in the mls index"):
+        _talker_licences(work_dir(cfg), {"datasets/raw/mls/missing.flac"})
+
+
+def test_the_rirs_of_competing_segments_are_listed_with_those_of_rooms(data):
+    write_raw_manifest(data, "rirs", licences={"but": "CC BY 4.0", "openslr28": "Apache-2.0"})
+    rows = licence_rows(
+        ("competing", [], [{"rir_id": "datasets/raw/rirs/openslr28/r.wav", "source_path": "p"}], None),
+        ("clean", [], [], "datasets/raw/rirs/but/Q/rir.wav"),
+    )
+    assert _rir_licences(rows) == {"rirs/but": ["CC BY 4.0"], "rirs/openslr28": ["Apache-2.0"]}

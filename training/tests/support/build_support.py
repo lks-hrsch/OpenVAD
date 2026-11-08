@@ -82,7 +82,7 @@ def make_build(
     sf.write(
         noise, (0.1 * np.random.default_rng(7).standard_normal(400_000)).astype(np.float32), 16000, subtype="PCM_16"
     )
-    (root / "datasets/raw/demand/manifest.json").write_text('{"dataset": "demand"}')
+    (root / "datasets/raw/demand/manifest.json").write_text('{"dataset": "demand", "licence": "CC BY-SA 3.0"}')
     if room:
         (root / RIR_FILE).parent.mkdir(parents=True)
         sf.write(root / RIR_FILE, synthetic_rir(), 16000, subtype="FLOAT")
