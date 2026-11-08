@@ -212,6 +212,7 @@ Pins, URLs and checksums are in the fetchers (`training/src/openvad_train/fetch/
 - In an IHM channel the wearer is the dominant speaker and the others are crosstalk.
 - The adapter (`dataset/sources/ami.py`, measured on the share) gives 678 headset clips of 189 participants: train 543 clips and 323.1 h, dev 72 and 38.7 h, test 63 and 35.4 h; the words of a wearer's `words.xml` are 93.1 h of speech. Of 1,147,783 `<w>` elements 4 have no times and 11 end before they start; they are dropped. Vocal sounds, disfluency markers and gaps are other elements.
 - Cut by `split_over` the 397 h become 61,562 samples with median 24.8 s. A sample is never cut inside speech, so 104 of them (0.17%) pass 30 s, at most 40.2 s, where a word crosses the limit or a last piece under 1 s joins the one before. 13,510 samples (94.3 h of the 397.2 h) hold no speech, because a participant is quiet for long stretches; they are kept as non-speech examples, and capping them is an owner decision.
+- Every AMI headset WAV is far above `_LONG_FILE_S` (60 s), so a first read of one also pays the whole-file integrity decode of `decode_16k` once per process, as VoxPopuli does (see "Reading as-is audio over the share").
 
 ### CallHome
 
