@@ -163,7 +163,7 @@ The table lists the 14 whose hours and speakers were read; the same tree on `mai
 | `uzbek_cv` | 0.24 | 5 | Epitran |
 
 - The model cards say they were trained on read speech in low-noise environments and recommend a wider beam when data diverges.
-- Whether MFA 3.4 runs these v2.0.0 models unchanged is not verified.
+- MFA 3.4.3 runs `italian_cv` 2.0.0 (made by MFA 2, `meta.yaml` instead of `meta.json`) and the newer VoxCommunis `ca_vxc_acoustic16` (made by MFA 2.2.17) without changes; see [MFA pilot](#mfa-pilot-2026-11-08) for how well.
 
 VoxCommunis itself (`pacscilab/VoxCommunis` on Hugging Face, CC0, updated 2026-07-19) holds newer MFA acoustic models, lexicons and word- and phone-level TextGrids of the validated Common Voice clips, built from Common Voice 16 to 23.
 
@@ -300,7 +300,7 @@ No language with a model is held out, so Korean, Vietnamese, Kazakh and Hausa ar
 - Italian and Dutch have no G2P model, so their out-of-vocabulary words become `spn` instead of getting generated pronunciations (owner, 2026-11-06). Other languages use `--use_g2p`.
 - The same VoxCommunis route covers the 10 languages without a model in mfa-models listed above (Catalan, Welsh, Bengali, Estonian, Finnish, Kabyle, Kinyarwanda, Luganda, Cantonese, Mongolian).
 - VoxCommunis models need G2P for out-of-vocabulary words: generate pronunciations with the same G2P system their lexicon used (Epitran or XPF) or train one with `mfa train_g2p` on the lexicon, so the phone set matches.
-- A language with an acoustic model and no lexicon file (Catalan, so far) gets a rule-based lexicon from Epitran (`dataset/lexicon.py`, `build_lexicon`; XPF only for a language Epitran lacks). A lexicon is only useful if its phones are ones the model knows, so `build_lexicon` takes the phone inventory in the model's `meta.json` and leaves out, and counts, every word with a phone outside it. No phone mapping is applied. The VoxCommunis models were trained on lexicons with their own segmentation (`ca_vxc_acoustic16` names a custom lexicon, `ca_lexicon-IPA`), so the inventory is checked per model. For Catalan, 135 of 293 common words written by hand (a hand-made list, not a corpus) have every Epitran `cat-Latn` phone in the inventory of `ca_vxc_acoustic16`, 46%. That is an upper bound: stress marks and vowel reduction were not checked (`català` is kept as `k a t a l a`, although the model has stressed vowels such as `ˈa`). The words lost are mostly those with `e` (Epitran writes `ɛ`, which the model lacks as a bare phone), a script `ɡ`, a tie-bar affricate or a length mark. Whether Catalan then passes the quality bar or follows the failure rule of [0025](../project/adr/0025-alignment-labelling.md) is for the owner to decide after the pilot.
+- A language with an acoustic model and no lexicon file (Catalan, so far) gets a rule-based lexicon from Epitran (`dataset/lexicon.py`, `build_lexicon`; XPF only for a language Epitran lacks). A lexicon is only useful if its phones are ones the model knows, so `build_lexicon` takes the phone inventory in the model's `meta.json` and leaves out, and counts, every word with a phone outside it. No phone mapping is applied. The VoxCommunis models were trained on lexicons with their own segmentation (`ca_vxc_acoustic16` names a custom lexicon, `ca_lexicon-IPA`), so the inventory is checked per model. For Catalan, 135 of 293 common words written by hand (a hand-made list, not a corpus) have every Epitran `cat-Latn` phone in the inventory of `ca_vxc_acoustic16`, 46%. That is an upper bound: stress marks and vowel reduction were not checked (`català` is kept as `k a t a l a`, although the model has stressed vowels such as `ˈa`). The words lost are mostly those with `e` (Epitran writes `ɛ`, which the model lacks as a bare phone), a script `ɡ`, a tie-bar affricate or a length mark. On a corpus sample (5,000 Common Voice sentences, 11,549 word types) the share is lower: 31% of types and 45% of tokens, with `ɛ` alone missing from 9,059 of the words left out. The pilot ran this route and Catalan did not calibrate ([MFA pilot](#mfa-pilot-2026-11-08)).
 - The remaining 8 (Persian, Urdu, Meadow Mari, Arabic, Laz, Kabardian, Adyghe, Puno Quechua) and the FLEURS languages without an MFA model are left out (0023). `MMS_FA` would cover them, with the costs below.
 - Re-align Common Voice 27.0 ourselves rather than reuse the VoxCommunis TextGrids, so that every clip has the same model version and logged metrics; use the shipped TextGrids as a cross-check where clips overlap.
 
@@ -332,6 +332,113 @@ No language with a model is held out, so Korean, Vietnamese, Kazakh and Hausa ar
 - The thesis must carry uroman's acknowledgement sentence if `MMS_FA` is used.
 - MFA is built from source (owner, 2026-11-06): `tools/montreal-forced-aligner` pinned to v3.4.3 and `tools/kaldi` as git submodules, `just build-mfa` compiling Kaldi into `tools/kaldi/dist` and setting up the uv project `tools/mfa` (editable MFA, `kalpy-kaldi`, a patched `pynini`), run with `just mfa`; conda-forge `kaldi` as `KALDI_ROOT` is the remaining fallback ([0025](../project/adr/0025-alignment-labelling.md)). The exact versions and the reasons for the build steps are in `tools/README.md`.
 
+## MFA pilot (2026-11-08)
+
+The pilot of the spec's quality bar: `index --config pilot`, then `align --config pilot --max-clips 200` (Common Voice only, work dir `work/openvad-pilot`), run on the M3 Pro Mac reading the share over SMB (owner, 2026-11-08), not on the workstation.
+Each language took 200 clips in rank order, at most 10 per speaker, the calibration batch's selection, so the calibration batch and the one label batch hold the same 200 clips.
+All numbers below are from these runs; the thresholds are a proposal for the controller and the owner, not set in `QualityBar`.
+
+### Coverage
+
+The pilot set is every Common Voice locale extracted on the share (`.<locale>-extracted`, 34 of 53 on 2026-11-08) with over 200 validated hours (`clip_durations.tsv` over `validated.tsv`, no decode) whose row is a `*_cv` or VoxCommunis model or `open`, plus English, German, Japanese and Mandarin.
+
+| Locale | Validated h | Row | In the pilot as |
+| :-- | --: | :-- | :-- |
+| `ca` | 3,465.7 | open | MFA run, `ca_vxc_acoustic16` by override |
+| `en` | 2,723.8 | `english_mfa` | MFA run |
+| `rw` | 2,034.0 | open | feasibility row |
+| `be` | 1,808.7 | open | feasibility row |
+| `de` | 1,385.7 | `german_mfa` | MFA run |
+| `kab` | 568.0 | open | feasibility row |
+| `eu` | 482.6 | open | feasibility row |
+| `ug` | 460.5 | open | feasibility row |
+| `lg` | 435.6 | open | feasibility row |
+| `ja` | 386.7 | `japanese_mfa` | MFA run |
+| `it` | 357.8 | `italian_cv` | MFA run |
+| `ba` | 257.8 | open | feasibility row |
+| `zh-CN` | 254.1 | `mandarin_mfa` | MFA run |
+| `ka` | 251.0 | open | feasibility row |
+| `ta` | 234.5 | open | feasibility row |
+| `ab` | 204.9 | open | feasibility row |
+| `yue` | 204.1 | open | feasibility row |
+
+- Over 200 h with a `*_mfa` row, so not in the pilot: `es` (619.9 h), `fr` (1,095.3 h), `sw` (407.5 h), `ru` (254.4 h).
+- `ka`, `ta`, `ab` and `yue` are over 200 h validated but under 200 h in the train pool (193.2, 182.1, 157.4 and 182.3 h, [datasets](datasets.md)); under a pool reading they would leave the set.
+- Missing: no pilot language. The 19 locales not extracted yet (`cs`, `et`, `mn`, `sv-SE`, `ky`, `bn`, `tt`, `cv`, `hy-AM`, `ro`, `el`, `fi`, `bg`, `sr`, `gn`, `hsb`, `vi`, `ha`, `ko`) are all under 200 h in the release statistics of Common Voice 27.0 (an estimate, validated clips times the mean duration; the largest is `cs` with 81.6 h).
+
+### Per-language table
+
+Failure rate is `no_alignment` (MFA wrote no TextGrid or a blank analysis row) over the clips sent to MFA; no clip was dropped before MFA for a missing transcript or a failed decode. Drop shares are of the aligned clips. The fixed rules are the wider beam, word and phone length, coverage and the first 20 ms; the fitted rules are the speaking rate and the log-likelihood floor, which with 200 clips are fitted on the same clips they judge, so the floor removes about 5% by construction.
+
+| Language | Model | Clips | Failure rate | Fixed-rule drops | Fitted-rule drops | Kept | Calibration (clips, speakers, aligned, passing fixed rules) |
+| :-- | :-- | --: | --: | :-- | :-- | --: | :-- |
+| `de` | `german_mfa` 3.0.0 | 200 | 1 (0.5%) | 9 (4.5%): beam 1, word 2, phone 5, coverage 1 | 12 (6.0%): rate 2, log-likelihood 10 | 178 | 200, 160, 199, 190 |
+| `en` | `english_mfa` 3.1.0 | 200 | 5 (2.5%) | 36 (18.5%): beam 13, word 8, phone 13, coverage 1, onset 1 | 8 (4.1%): log-likelihood 8 | 151 | 200, 189, 195, 159 |
+| `it` | `italian_cv` 2.0.0 | 200 | 1 (0.5%) | 133 (66.8%): beam 1, word 58, phone 65, onset 9 | 6 (3.0%): rate 2, log-likelihood 4 | 60 | 200, 136, 199, 66 |
+| `ja` | `japanese_mfa` 3.0.0 | 200 | 2 (1.0%) | 12 (6.1%): beam 4, word 2, phone 3, coverage 3 | 11 (5.6%): rate 1, log-likelihood 10 | 175 | 200, 163, 198, 186 |
+| `zh` | `mandarin_mfa` 3.0.0 | 200 | 4 (2.0%) | 36 (18.4%): beam 3, word 3, phone 23, coverage 7 | 18 (9.2%): rate 10, log-likelihood 8 | 142 | 200, 173, 196, 160 |
+| `ca` | `ca_vxc_acoustic16`, Epitran lexicon | 200 | 0 in calibration | 168 (84%) in calibration: beam 9, word 4, phone 155 | not fitted | 0 | 200, 143, 200, 32: `too_few_to_calibrate` |
+
+- Japanese and Mandarin aligned with MFA's tokenisers (sudachipy and spacy-pkuseg in `tools/mfa`): a median of 8 words per kept Mandarin clip and an out-of-vocabulary share of 0.4%. Without them MFA 3.4.3 stops with an `ImportError`, it does not fall back. `sudachipy` 0.7 breaks the Japanese tokeniser (`tools/README.md`).
+- Italian fails on length: in the dropped clips the longest phone other than `spn` has a median of 854 ms, so it is not out-of-vocabulary words (their share is 0) but phones of `italian_cv` stretching over pauses. VoxCommunis has a newer `it_vxc_acoustic17`, which the pilot did not try.
+- Catalan: the lexicon built from the 200 clips holds 363 of 975 word types; 612 are left out because Epitran gives them a phone outside the model's inventory, mostly `ɛ`. Their audio goes to `spn`, and 155 clips then have a phone over 500 ms. 32 clips pass the fixed rules, under the 50 the calibration needs.
+
+Throughput, M3 Pro over SMB (MFA's default `--num_jobs 3`, one process decoding):
+
+| Language | Audio per run | MFA s, calibration and batch | Whole round s (with decode) |
+| :-- | --: | :-- | :-- |
+| `de` | 1,074 s | 54, 53 | 135, 81 |
+| `en` | 992 s | 51, 52 | 138, 106 |
+| `it` | 1,065 s | 94, 115 | 148, 245 |
+| `ja` | 948 s | 107, 102 | 135, 144 |
+| `zh` | 970 s | 54, 49 | 94, 81 |
+| `ca` | 1,068 s | 25 (calibration only) | 82 |
+
+- A run of 200 clips is dominated by MFA's start. German runs of 20 clips (112.5 s of audio) and 600 clips (3,150 s) took 41.0 and 62.8 s of MFA, so a run costs about 40 s plus about 26 s per hour of audio.
+- Decoding the MP3s from the share took 145 s for the 600 clips (0.24 s per clip, about 166 s per audio hour) and 0.4 s per clip on a first read; it, not MFA, bounds a run on this machine.
+- Per 1,000 audio hours at German speed, with `align`'s 5 h batches (200 runs): about 2.2 h of fixed cost plus 7.2 h of alignment, so about 9.4 h of MFA, and about 46 h of decoding over SMB in one process. For the 17,329 h train pool of the 27 locales measured in [datasets](datasets.md) (dev and test, the calibration runs and the refill rounds come on top) that is about 7 days of MFA and about 33 days of decoding. Italian and Japanese took about twice as long per 200-clip run; how that splits into fixed and per-hour cost was not measured. Neither is a workstation figure; the throughput gate needs the workstation measurement.
+- The first Japanese calibration run took 22 min, mostly before alignment started, while another job read Common Voice transcripts; the Mac froze and restarted during it. The rerun took 107 s.
+
+### Feasibility of the other open languages
+
+No MFA run, no model chosen and no row changed; the choice is the owner's. Every one of them has a VoxCommunis acoustic model and lexicon (`pacscilab/VoxCommunis` on Hugging Face, revision `54d61df1ca273798563e1a48ef9d781ad2a04bc9`); none has an MFA G2P model. The sample is 5,000 validated sentences of the locale, every k-th row, through `prepare_transcript` and lower-cased. Epitran coverage is the share of word types (and tokens) whose every Epitran phone is in the VoxCommunis model's inventory, as `build_lexicon` measures it; lexicon coverage is the share found in the VoxCommunis lexicon.
+
+| Language | VoxCommunis model | `*_cv` in mfa-models | Epitran or XPF code | Epitran coverage, types (tokens) | VoxCommunis lexicon coverage, types (tokens) |
+| :-- | :-- | :-- | :-- | :-- | :-- |
+| `rw` | `rw_epi_acoustic17` | none | `kin-Latn` | 91% (96%) | 93% (97%) |
+| `be` | `be_xpf_acoustic17` | `belarusian_cv` | XPF (code not verified) | n/a | 99% (100%) |
+| `kab` | `kab_vxc_acoustic20` | none | `kab-Latn` | 5% (12%): the model lacks a bare `a`, `i`, `u` | 67% (84%) |
+| `eu` | `eu_xpf_acoustic17` | `basque_cv` | XPF (code not verified) | n/a | 93% (98%) |
+| `ug` | `ug_xpf_acoustic17` | `uyghur_cv` | `uig-Arab` | 18% (27%): the model lacks `a`, `ɛ` | 78% (91%) |
+| `lg` | `lg_vxc_acoustic20` | none | `lug-Latn` | 36% (48%): `ɡ`, `ɾ`, prenasals | 95% (98%) |
+| `ba` | `ba_xpf_acoustic16` | `bashkir_cv` | XPF (code not verified) | n/a | 78% (84%) |
+| `ka` | `ka_xpf_acoustic16` | `georgian_cv` | `kat-Geor` | 33% (39%): `r`, `χ`, affricates | 93% (96%) |
+| `ta` | `ta_epi_acoustic17` | `tamil_cv` | `tam-Taml` | 99% (100%) | 99% (100%) |
+| `ab` | `ab_xpf_acoustic16` | `abkhaz_cv` | XPF (code not verified) | n/a | 28% (43%) |
+| `yue` | `yue_epi_acoustic19` (and a toned `yue_vxc_acoustic21_toned`) | none | `yue-Latn` takes Jyutping, not Han characters | not measurable: the text has no spaces and needs a segmenter | not measurable |
+
+- The middle part of a VoxCommunis file name names the G2P system of its lexicon (dataset card): `epi` Epitran, `xpf` the XPF Corpus, `vxc` a custom dictionary. The card gives no per-language XPF code, and Epitran has no map for Belarusian, Basque, Bashkir or Abkhaz.
+- Where a lexicon exists, the Epitran route is only a fallback for its out-of-vocabulary words; Epitran's segmentation matches the `epi` models (Kinyarwanda, Tamil) and not the `xpf` and `vxc` ones.
+- The Abkhaz lexicon covers few of the corpus words; whether that is spelling (apostrophes, case) or vocabulary is not checked.
+
+### Threshold proposal
+
+The denominators: the failure rate is over the clips sent to MFA, the drop share over the clips MFA aligned; `QualityBar` should be fed the same.
+
+- Failure rate: at most 5% of the clips sent to MFA. The five languages that calibrated failed 0.5 to 2.5%; a model or text that does not fit shows up in the drop rules rather than here (Catalan failed 0%).
+- Drop share: at most 25% of the aligned clips removed by the fixed rules, or, as one number over all drop rules, at most 35%. The aligned languages split into 4.5 to 18.5% (fixed) and 66.8% and above; with 200 clips the standard error at 18.5% is 2.8 points, so 25% is more than two of them above English and Mandarin. Any bar between about 25 and 60% gives the same verdicts here; the low end is proposed because a language that loses a quarter of its clips to fixed rules spends MFA time on labels it throws away. The fitted rules are left out of the preferred form because the log-likelihood floor removes about 5% by construction.
+- Verdicts under this proposal: German, English, Japanese and Mandarin pass. Italian fails; its pool is 304.5 h, so the failure rule drops it unless the owner picks another model. Catalan did not calibrate; its pool is 3,409.5 h, over 500 h, so the owner decides.
+
+### Hand check
+
+- `handcheck-sample --config pilot --languages en,de,it` wrote 75 clips (25 each) to `/Volumes/datasets/OpenVAD/datasets/processed/work/openvad-pilot/handcheck/clips` on the share; `key.json` is one level up and `report.json` will be.
+- Catalan has no scored clip (`too_few_to_calibrate`), so it is not in the sample and no other language replaces it.
+
+### Machine and versions
+
+Apple M3 Pro (12 cores, 36 GB), macOS 27.2, share over SMB; MFA 3.4.3 (`tools/montreal-forced-aligner` at `93411fc`), Kaldi `f400766`, MFA's SQLite database (`use_postgres: false`), `--num_jobs 3`; sudachipy 0.6.11, sudachidict-core 20260723, spacy-pkuseg 1.0.2, Epitran 1.35.3 (root `align` group), ffmpeg 8.1.3; OpenVAD at `84d0eff` for the runs.
+Models with the versions read from them: `english_mfa` 3.1.0 (G2P `english_us_mfa` reads 2.2.6.dev1), `german_mfa` 3.0.0, `italian_cv` 2.0.0 (reads 2.0.0b9), `japanese_mfa` 3.0.0 (reads 3.0; G2P `japanese_katakana_mfa` reads 3.0.0a2.dev0), `mandarin_mfa` 3.0.0, `ca_vxc_acoustic16` at the revision above (SHA-256 `f9524605…e0e3a1`, reads 2.2.17).
+
 ## Not verified
 
 - Which MMS variant Rousso et al. 2024 evaluated (ASR output or `MMS_FA`), and that their MFA model is `english_us_arpa`.
@@ -339,9 +446,9 @@ No language with a model is held out, so Korean, Vietnamese, Kazakh and Hausa ar
 - The ARPA 3.0 word boundary error behind the mfa-models benchmark text.
 - The MFA models used by Weber et al. 2026 for German and Dutch, and the cause of MFA's Dutch result; that paper's acceptance at Interspeech 2026.
 - Which model labels Croatian, Bosnian and Serbian; whether `acoustic/arabic.zip` is usable.
-- Whether MFA 3.4 runs the v2.0.0 `*_cv` models and the newer VoxCommunis models unchanged, and which MFA version trained the latter.
+- Whether MFA 3.4 runs the other v2.0.0 `*_cv` models and VoxCommunis models than `italian_cv` and `ca_vxc_acoustic16` unchanged, and which MFA version trained the VoxCommunis models other than `ca_vxc_acoustic16` (MFA 2.2.17, from its `meta.json`).
 - Versions of the `*_mfa` Hugging Face models other than Polish, Swahili, German and English.
-- MFA handling of digits and abbreviations.
+- MFA handling of digits and abbreviations, and what MFA's Japanese and Mandarin tokenisers make of a literal `<unk>`: none of the 1,200 pilot clips has a digit in its transcript.
 - uroman's romanisation of Cantonese; whether Adyghe, Kabardian and Puno Quechua were in `MMS_FA` training data; which FLEURS splits it saw.
 - `MMS_FA` CPU throughput.
 - The XPF licence; the long-term hosting of the `MMS_FA` weights.
