@@ -75,7 +75,7 @@ For alignment with LibriVAD, the owner chose its fixed SNR grid and noise catego
 ```text
 $OPENVAD_DATA_DIR/datasets/processed/openvad-v1/
   README.md          Hugging Face YAML: splits pointing at the three Parquet files
-  manifest.json      versions, build flags, seeds, licences per source
+  manifest.json      versions, build flags, seeds, licences per source, noise set (`noise/<set>`), RIR set (`rirs/<set>`) and talker source (`talkers/<source>`)
   index.parquet      one row per sample: split and tier
   train.parquet      pointers, labels and metadata
   validation.parquet
@@ -136,6 +136,8 @@ Working state sits next to it, under `datasets/processed/work/<name>/` with the 
 Metadata columns follow: `rank`, `source`, `language`, `speaker` (nullable), `licence`, `treatment` (`augmented`, `as_is`), `speech_ratio`, `condition`, `noise_source_ids`, `noise_offsets`, `snr_db` (nullable), `tir_db` (nullable), `baseline_snr_db` (nullable), `room`, `rir_id` (nullable), `handset`, `agc`, `clip_drive_db`, `suppression`, `codec`, `bitrate`, `codec_delay_ms`, `transients`, `gap_ms`, `dither_dbfs`, `segments`, `aligner` (nullable), `seed`.
 
 These cover the manifest fields of ADR 0023; loss pattern is absent because v1 has no packet loss.
+
+`noise_source_ids` holds paths relative to `$OPENVAD_DATA_DIR`, with `noise_offsets` the sample each is read from. A WHAM! file carries its channel as `#0` or `#1`. For babble the six paths are the talkers' files and for SSN the one the filter is fitted to. A competing talker has no noise file: `segments` holds `clip_id`, `start_n` and `end_n` (samples of the constructed sample), `rir_id`, `lowpass_hz`, and the talker's `source_path` and `source_offset_n`.
 
 `plan.parquet` holds these columns, with null pointers on constructed rows until `construct`, plus `split`.
 It also holds `clip_id`, `shard`, `source_path`, `source_offset_n`, `source_n`, `speech_offset_n`, `total_n`, `speech_ms` and `mask_ms`.
@@ -269,7 +271,7 @@ As-is sources skip this and the stored channel chain.
 | Condition | Share | Source |
 | --- | --- | --- |
 | Clean | 15% | |
-| Competing talker | 15% | ADR 0022: reserved speakers, 1 to 3 segments covering 10 to 50%, TIR 0 to 15 dB, each with an RIR and a random low-pass from 1 to 4 kHz |
+| Competing talker | 15% | ADR 0022: reserved speakers, 1 to 3 segments covering 10 to 50% of the sample, TIR 0 to 15 dB, each with an RIR of the sample's split and a random low-pass from 1 to 4 kHz |
 | Babble | 70/9 % | 6 energy-normalised talkers summed, as LibriVAD; same language, reserved speakers |
 | SSN | 70/9 % | Gaussian white noise through a 12th-order LPC all-pole filter fitted to one reserved speaker, as LibriVAD |
 | City | 70/9 % | WHAM!, `tr` train, `cv` validation, `tt` test, one random channel per draw |
@@ -277,12 +279,14 @@ As-is sources skip this and the stored channel chain.
 
 - Categories are LibriVAD's 9 plus clean and competing talker (owner, 2026-11-06). Music is not used (owner, 2026-11-06).
 - Noise comes from our pools, not LibriVAD's noise files (owner, 2026-11-06).
-- MUSAN noise files are sorted into the 9 categories by keyword (owner, 2026-11-06), so the 6.2 h adds variety to the thin DEMAND categories. A committed table, `dataset/musan_noise_categories.tsv`, holds the result of a one-time keyword pass plus manual review; files that fit no category are listed there as unused. Its licences come from the existing `fetch/musan_licences.tsv`.
+- MUSAN noise files are sorted into the 9 categories by keyword (owner, 2026-11-06), so the 6.2 h adds variety to the thin DEMAND categories. A committed table, `dataset/musan_noise_categories.tsv`, holds the result of a one-time keyword pass plus manual review; files that fit no category are listed there as unused. Its licences come from the existing `fetch/musan_licences.tsv`. The 843 `free-sound` files carry no title, so they are unused; the sort covers the 87 titled `sound-bible` files, 32 of which fit a category. Isolated events, telephony signalling and sound effects are unused. A category draws a DEMAND scene or a MUSAN file in proportion to its duration, and MUSAN is shared by all splits.
 - MUSAN music is not used.
 - **SNR:** uniform over {−5, 0, 5, 10, 15, 20} dB (owner, 2026-11-06, LibriVAD's grid), replacing ADR 0023's bimodal ranges.
+- **Reserved talkers:** babble, SSN and the competing talker draw from the reserved clips of the augmented sources in the sample's own split. A talker is a whole file (`offset_s = 0`), so a read never leaks the other speakers of a recording; AMI, VoxPopuli and CallHome clips are not used, and LibriVAD and VOiCES reserve none. A language with fewer than `babble_min_speakers` reserved speakers in the split draws from every language, and Japanese and Mandarin (`ja`, `zh`, `zh-TW`) do so half the time. Talkers are different speakers where the pool has them; a clip shorter than the sample repeats. Babble energy-normalises each talker over its whole span, pauses included, because reserved clips are not aligned.
+- **TIR:** the foreground RMS over the speech-active samples against the talker RMS over the samples its segments cover, so the level of the talker does not fall with the coverage. Segments do not overlap; coverage is their union over the whole sample. A competing row gets dither like a clean one, since the talker leaves most of the padding silent.
 - SNR is computed from speech RMS over speech-active frames and noise RMS over the same span, then applied to the noise over the whole sample.
-- **Common Voice baseline:** WADA-SNR on each clip estimates its speech power, and `baseline_snr_db` is recorded. Brouhaha is deferred because it needs an isolated `numpy<2` environment.
-- **Transients:** synthetic clicks and DTMF only (owner, 2026-11-06), p = 0.3, peak ratio 0 to −18 dB. Typing and handling noise are dropped from ADR 0023.
+- **Common Voice baseline:** WADA-SNR on each clip estimates its speech power, and `baseline_snr_db` is recorded. Only the speech share `snr / (1 + snr)` of the power over the words counts as speech when the SNR and the TIR are set. Brouhaha is deferred because it needs an isolated `numpy<2` environment.
+- **Transients:** synthetic clicks and DTMF only (owner, 2026-11-06), p = 0.3, peak ratio 0 to −18 dB relative to the peak of the mix. They are overlaid on the acoustic mix, so the chain treats them like the rest, and `protect_peak` comes last. Typing and handling noise are dropped from ADR 0023.
 
 ### Stored channel chain, augmented sources
 
@@ -290,7 +294,7 @@ As-is sources skip this and the stored channel chain.
 | --- | --- | --- |
 | Room | 0.5 | real RIRs: BUT ReverbDB (CC BY 4.0, 9.3 GB archive) and OpenSLR 28 (Apache-2.0, 1.3 GB) (owner, 2026-11-06); rooms split 80/10/10 by hash; peak aligned to zero. The rooms are physical rooms, 25 in all: BUT's 9 and 16 of OpenSLR 28's real RIRs from the committed table `fetch/openslr28_rooms.tsv`, which merges the variants of one room. A draw picks the room of the sample's split uniformly first, then one of its RIRs, so the RIRs of a room with few of them repeat more often |
 | Handset | 0.7 | high-pass 100 to 300 Hz, low-pass 3.4 to 7 kHz, two peaks ±6 dB |
-| AGC | 0.5 | target −26 to −16 dBFS, attack 5 to 20 ms, release 100 to 500 ms |
+| AGC | 0.5 | target −26 to −16 dBFS, attack 5 to 20 ms, release 100 to 500 ms; the output is limited to a peak of 1.0 with a 5 ms look-ahead gain dip, so an onset after a quiet stretch does not make `protect_peak` scale the whole sample down |
 | Soft clipping | 0.15 | drive 3 to 12 dB |
 | Noise suppression | 0.3 | Wiener or spectral subtraction with scipy |
 
@@ -379,7 +383,7 @@ Fallbacks, tried in order if a pilot gate fails:
 
 Each milestone ends in something runnable, and later ones build on it.
 
-1. **Vertical slice:** SWC German, DEMAND, a few hundred samples, with the full chain (room, handset, AGC, soft clipping, suppression) and every stored codec share since Task 19 (controller ruling); only the transients stay off until Task 18. It started as G.722 with none of the other chain steps. Covers index, labels, plan, construct, publish, verify, and `load_dataset`. Measures FLAC ratio and throughput.
+1. **Vertical slice:** SWC German, DEMAND, a few hundred samples, with the full chain (room, handset, AGC, soft clipping, suppression), the transients and every stored codec share (controller ruling, Tasks 18 and 19). It started as G.722 with none of the other chain steps. Covers index, labels, plan, construct, publish, verify, and `load_dataset`. Measures FLAC ratio and throughput.
 2. **Resampler and narrowband:** the filter, bindings, G.711, the train-time transform, and AMR-NB.
 3. **MFA gate:** build it, then pilot on English, German, Italian, Catalan and Japanese. Measures throughput and settles the model table. Gates are listed below.
 4. **All adapters:** remaining sources and the MFA batches.
