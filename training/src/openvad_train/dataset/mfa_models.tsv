@@ -24,4 +24,4 @@ uk							ADR 0025 leaves open whether ukrainian_mfa 3.0.0 or ukrainian_cv labels
 hr							ADR 0025 leaves open which model labels Croatian (croatian_mfa 2.0.0a or serbocroatian_mfa 3.3.0)	open
 sr							ADR 0025 leaves open which model labels Serbian (serbocroatian_mfa 3.3.0 has Serbian G2P)	open
 bs							ADR 0025: Bosnian has no model of its own	open
-ca							no model in mfa-models; VoxCommunis has one (CV 16) with no lexicon file listed, and ADR 0025's hand check names Catalan	open
+ca							no model in mfa-models; VoxCommunis has ca_vxc_acoustic16 (Common Voice 16, hosted on Hugging Face, so not fetched by `mfa model download`) with no lexicon file; lexicon route: rule-based lexicon from Epitran cat-Latn (dataset/lexicon.py, `uv sync --all-packages --group align`), whose phones do not match the model's (measured on 293 hand-written words, 46% inside the model's inventory; the model's custom lexicon marks stress on vowels and has no bare open e), so the failure rule applies unless the pilot says otherwise; ADR 0025's hand check names Catalan	open

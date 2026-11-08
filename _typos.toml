@@ -12,3 +12,5 @@ ba = "ba"
 arange = "arange"
 # NumPy's `ndarray.flags.writeable`.
 writeable = "writeable"
+# The PyPI package certifi, a dependency of requests (docs/notes/forced-alignment.md).
+certifi = "certifi"
