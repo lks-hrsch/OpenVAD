@@ -310,6 +310,21 @@ These numbers size shards and plan runs; they are not the headline real-time fac
   That is about 30% of the construct CPU time at this scale. At full scale it is one decode per long file per worker, so a file that several workers read is decoded several times.
 - One SWC Ogg (`german/Nike_des_Paionios/audio.ogg`) fails the integrity decode with a CRC mismatch; its two sampled chunks were left out and logged, as designed.
 
+## Reading as-is audio over the share
+
+Measured on 2026-11-08 on the macOS M3 Pro (12 cores), Python 3.12.15, reading the share over SMB (`/Volumes/datasets/openvad`) through `load_audio`, one process and one read at a time, nothing copied. Rows are random with seed 0, built with `draw_sample` from the adapters' clips, so a row is a whole clip. These are the cold reads a training worker makes on first touch, not the headline real-time factor.
+
+| Source | Reads | Distinct files | Reads per second | Median, 95th percentile, maximum |
+| --- | --- | --- | --- | --- |
+| Speech Commands (1 s WAV) | 1,000 | 1,000 | 6.06 | 143 ms, 280 ms, 674 ms |
+| VoxPopuli (median 9.2 s of a session Ogg), integrity decode on first read | 691 of 1,000 (stopped at the 25 min budget) | 578 | 0.46 | 1.56 s, 7.8 s, 12.9 s |
+| VoxPopuli, `_verify_intact` replaced by a no-op (seek only), 200 rows with seed 1 | 200 | 184 | 3.52 | 265 ms, 541 ms, 721 ms |
+
+- A Speech Commands read spawns one ffmpeg per clip (`decode_16k` decodes a file of up to 60 s whole).
+- A VoxPopuli session file is hours long, so `decode_16k` first decodes all of it once per process (`_verify_intact`, 4096 paths cached) and then seeks with soundfile. That first decode is what the first row costs: 0.46 reads per second against 3.52 with it off, about 7.5 times (two different random samples). A training worker pays it once per session file it touches, so with several workers the same file is decoded several times, and the 598,179 clips lie in 4,611 session files.
+- Seeking alone is fast enough (about 0.27 s per row), so the open question for training is the integrity decode, not the seeks. Doing it once in `verify`, or caching the result on the share, would remove it from the reads; neither is built, and no audio is copied (owner's decision).
+- A CallHome read decodes the whole call out of its Parquet row group, about 6 s for a 300 to 600 s call (3 calls timed), and a 30 s sample of it repeats that. Training on CallHome as it is needs the calls cached locally, which the owner has to decide.
+
 ## Scale references
 
 - Granary v2 labels 463,062 h of speech, about 165,300 h of it flagged high quality, mostly unlabelled VoxPopuli (380,711 h) and LibriLight (49,334 h), with Whisper-style pseudo-transcripts and no word timings.
