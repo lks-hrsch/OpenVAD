@@ -31,6 +31,7 @@ from openvad_train.fetch.librivad import fetch_librivad, fetch_librivad_small, f
 from openvad_train.fetch.mls import fetch_mls
 from openvad_train.fetch.musan import fetch_musan
 from openvad_train.fetch.picovoice import fetch_picovoice
+from openvad_train.fetch.rirs import fetch_rirs
 from openvad_train.fetch.simsamu import fetch_simsamu
 from openvad_train.fetch.speechcommands import fetch_speechcommands
 from openvad_train.fetch.swc import fetch_swc
@@ -55,6 +56,7 @@ FETCHERS: dict[str, Callable[[], None]] = {
     "common-voice": fetch_commonvoice,
     "simsamu": fetch_simsamu,
     "wham": fetch_wham,
+    "rirs": fetch_rirs,
     "mls": fetch_mls,
     "fleurs": fetch_fleurs,
     "voxpopuli": fetch_voxpopuli,

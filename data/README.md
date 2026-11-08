@@ -6,7 +6,7 @@ Code finds the data root through `OPENVAD_DATA_DIR` (default `./data`), so it ca
 
 ## Fetching
 
-`just fetch <dataset>` with `<dataset>` one of `librispeech`, `alignments`, `ava`, `librivad`, `demand`, `voices`, `callhome`, `swc`, `musan`, `librivad-small`, `librivad-val`, `picovoice`, `common-voice`, `simsamu`, `wham`, `mls`, `fleurs`, `voxpopuli`, `ami`, `speech-commands`.
+`just fetch <dataset>` with `<dataset>` one of `librispeech`, `alignments`, `ava`, `librivad`, `demand`, `voices`, `callhome`, `swc`, `musan`, `librivad-small`, `librivad-val`, `picovoice`, `common-voice`, `simsamu`, `wham`, `rirs`, `mls`, `fleurs`, `voxpopuli`, `ami`, `speech-commands`.
 Each run writes into `$OPENVAD_DATA_DIR/datasets/raw/<dataset>/` and ends with a `manifest.json` with the keys `dataset`, `licence`, `use`, `sources` (URL and message-digest algorithm 5 or SHA-256 per download), `files`, `bytes` and `retrieved`, plus fetcher-specific ones.
 A re-run skips a dataset whose manifest verifies (file count and bytes match) and stops with an error if the manifest exists but does not verify (delete `manifest.json` to refetch); `librivad` regenerates the whole set unless its generation finished (marker `.generate-done`), because the upstream generator cannot resume. A fetch holds a lock file `cache/<name>.fetching` in the data dir (and a local lock under `~/.cache/openvad`) so two machines on one share cannot fetch the same dataset; it is removed when the run ends. A run killed on another machine leaves the file behind: delete it by hand once no fetch is running there. The same machine recovers a stale lock on its own.
 
@@ -43,7 +43,7 @@ A re-run skips a dataset whose manifest verifies (file count and bytes match) an
   The directory ends at about 8.4 GB: that audio plus the labels of every `dev-clean` utterance (about 1.4 GB, although the generator uses one utterance in ten), which are all moved so that no needed label can be filtered out. While it runs it also holds the working copy, about 1.5 GB of `dev-clean` wav files and concatenated pairs, so plan for about 10 GB.
   Upstream labels a concatenated pair across chapters or speakers wrongly (it looks for the first utterance in the folder of the second), as on `train-clean-100` and `test-clean`; the adapter drops those clips and counts them under `label_length_mismatch`.
 - LibriVAD `medium` takes every 10th utterance of `train-clean-100` with 54 mixtures each, so about 10 h of unique speech appear 54 times by design.
-- `just fetch rirs` (not written yet) is to fetch the room impulse responses of BUT ReverbDB and OpenSLR 28 ([ADR 0021](../docs/project/adr/0021-telephone-channel-simulation.md)).
+- `rirs` downloads the room impulse responses of BUT ReverbDB (release 19_06, `RIR-Only` archive, 9.3 GB, over `https://merlin.fit.vutbr.cz/ReverbDB/`) and OpenSLR 28 (`rirs_noises.zip`, 1.3 GB) over 8 parallel range connections ([ADR 0021](../docs/project/adr/0021-telephone-channel-simulation.md)). Neither publisher gives a checksum, so the SHA-256 pinned in the fetcher is that of the file downloaded on 2026-11-08 (OpenSLR's MD5 is pinned too) and only detects a later change. It keeps the RIR wavs only: the 2,325 of BUT ReverbDB as `but/<place>/<mic>/<speaker>/<position>/RIR/*.wav` (the 60 s room-noise recordings that make up most of the archive are not kept) and the 325 real RIRs of `openslr28/RIRS_NOISES/real_rirs_isotropic_noises/` (AIR, REVERB 2014 and RWCP; the simulated RIRs and the noises are not kept; several files have more than one channel and the first is used). It writes `index.tsv`, one line per RIR with its room: the place for BUT ReverbDB (9 rooms), and for OpenSLR 28 the room read off the file name (28 rooms, e.g. `air-booth`, `rvb-smallroom1`, `rwcp-ane`). The manifest records both licences.
 
 ## ffmpeg for dataset construction
 
@@ -80,6 +80,7 @@ $OPENVAD_DATA_DIR/
     common-voice/             <locale>/ (53 locales)   <release>/<locale>/{train,dev,test,validated,...}.tsv, clips/*.mp3
     simsamu/                  <recording>/<recording>.{m4a,rttm,srt,json}, metadata.csv
     wham/                     wham_noise/{tr,cv,tt}/*.wav, wham_noise/metadata/
+    rirs/                     index.tsv, but/<place>/.../RIR/*.wav, openslr28/RIRS_NOISES/real_rirs_isotropic_noises/*.wav
     mls/                      mls_<language>/{train,dev,test}/{transcripts.txt,audio/<speaker>/<book>/*.flac}
     fleurs/                   <lang>/{train,dev,test}.tsv, <lang>/audio/<split>/*.wav
     voxpopuli/                annotations/asr_<lang>.tsv.gz, raw_audios/   session .ogg files
@@ -115,8 +116,8 @@ Every training dataset and anything rendered from them stay on the owner's netwo
 | Common Voice Scripted Speech 27.0, 53 locales (Mozilla Data Collective) | CC0-1.0; the platform terms forbid re-hosting or re-sharing the audio, also modified, and any attempt to identify speakers | train (validated clips of speakers outside dev and test, augmented), dev, test (official) |
 | Simsamu (HF `medkit/simsamu`) | MIT, audio and annotations | benchmark (8 kHz condition, see ADR 0020) |
 | WHAM! noise (`tr`, `cv`, `tt`) | CC BY-NC 4.0 | noise (City): `tr` train, `cv` dev, `tt` test only (ADR 0023) |
-| BUT ReverbDB (fetcher to come) | CC BY 4.0, about 8.7 GB | room impulse responses, rooms split 80/10/10 by hash (ADR 0021) |
-| OpenSLR 28, RIRS_NOISES (fetcher to come) | Apache-2.0, about 1.3 GB | room impulse responses, as BUT ReverbDB (ADR 0021) |
+| BUT ReverbDB, release 19_06 (RIR-Only) | CC BY 4.0 (the project page; the `read_me.txt` of the release is under Apache-2.0) | room impulse responses, rooms split 80/10/10 by a hash of the room (ADR 0021) |
+| OpenSLR 28, RIRS_NOISES (real RIRs only) | Apache-2.0 (the OpenSLR page); the RIRs come from AIR, REVERB 2014 and RWCP | room impulse responses, as BUT ReverbDB (ADR 0021) |
 | MLS (DE, FR, ES, IT, NL, PL, PT; FLAC) | CC BY 4.0 | train (augmented), dev, test (official) |
 | FLEURS (42 languages, HF `google/fleurs`) | CC BY 4.0 | train (augmented), dev, test (official) |
 | VoxPopuli transcribed (13 languages) | CC0 data; code CC BY-NC 4.0, not used | train, dev, test by speaker, unmodified; rows without a speaker ID train only |

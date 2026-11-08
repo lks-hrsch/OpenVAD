@@ -14,3 +14,5 @@ arange = "arange"
 writeable = "writeable"
 # The PyPI package certifi, a dependency of requests (docs/notes/forced-alignment.md).
 certifi = "certifi"
+# RWCP room code in the file names of OpenSLR 28 (fetch/rirs.py).
+ane = "ane"

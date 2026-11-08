@@ -277,9 +277,10 @@ Pins, URLs and checksums are in the fetchers (`training/src/openvad_train/fetch/
 
 ### Room impulse responses
 
-- BUT ReverbDB: CC BY 4.0, about 8.7 GB of real room impulse responses.
-- OpenSLR 28 (RIRS_NOISES): Apache-2.0, about 1.3 GB.
-- Both are used for the room step of [0021](../project/adr/0021-telephone-channel-simulation.md) (p = 0.5), with rooms split 80/10/10 by hash and each response peak-aligned to zero. `just fetch rirs` is to fetch both; neither is fetched yet, and the sizes are from the dataset construction spec, not from a manifest.
+- BUT ReverbDB, release 19_06, `RIR-Only` archive: CC BY 4.0 (project page), 9,308,593,693 bytes. It holds 2,325 RIRs in 9 rooms (checked on the archive), measured with 31 microphones at about 5 speaker positions each; the RIRs are 16 kHz mono wavs under `PLACE/MIC_SETUP/SPK_SETUP/MIC_ID/RIR/` and are compensated for the delay between loudspeaker and microphone. Most of the archive is 60 s room-noise recordings, which the fetcher does not keep.
+- OpenSLR 28 (RIRS_NOISES): Apache-2.0 (OpenSLR page), 1,311,166,223 bytes, MD5 `e6f48e257286e05de56413b4779d8ffb`. Its `real_rirs_isotropic_noises` holds 325 RIRs from the AIR, REVERB 2014 and RWCP databases, with no room column: the fetcher reads 28 rooms off the file names. 287 of the 325 files have 2 to 30 channels (microphone arrays); the first channel is used. The simulated RIRs of the same archive (60,000) are not used, since the point of the room step is real rooms.
+- Neither publisher gives a checksum, so the pinned SHA-256 (taken from a download whose gzip stream and zip index were read to the end) only detects a later change of the file. Run over all 2,650 RIRs, `apply_rir` found a direct path in every one. The room split of the 37 rooms is 29 train, 4 validation and 4 test. `Hotel_SkalskyDvur_ConferenceRoom2` has unreliable measured microphone positions according to the release notes; its RIRs are used, since only the positions are in doubt.
+- Both are used for the room step of [0021](../project/adr/0021-telephone-channel-simulation.md) (p = 0.5). The 37 rooms are ranked by a hash of the room name: the first tenth is validation, the next tenth test and the rest train, whatever slice or language is built. A draw picks a room of the split and then one of its RIRs, so a room with many measurements does not dominate. Each response is cut at its peak and scaled to unit energy, so it adds no label shift and keeps the mean power. `just fetch rirs` fetches both; the first run onto the share is still to be done.
 
 ### AVA-Speech and Picovoice
 
