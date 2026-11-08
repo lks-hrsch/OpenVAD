@@ -11,7 +11,7 @@ Adapter contract: `MFA_ALIGNED`, `clips(raw, languages)`. `raw` is `datasets/raw
 import csv
 import gzip
 from collections import defaultdict
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 from openvad_train.dataset.models import indexed_languages
@@ -22,6 +22,7 @@ from openvad_train.fetch.voxpopuli import VOXPOPULI_LANGS
 
 SOURCE = "voxpopuli"
 MFA_ALIGNED = True
+REPORTS = True
 RAW_PREFIX = Path("datasets/raw/voxpopuli")
 LICENCE = "CC0-1.0"
 csv.field_size_limit(1 << 30)  # the `vad` column of a long segment
@@ -34,7 +35,22 @@ def _rows(table: Path) -> Iterator[dict[str, str]]:
                 yield row
 
 
-def clips(raw: Path, languages: set[str] | None = None) -> Iterator[Clip]:
+def _unique(rows: Iterable[dict[str, str]]) -> tuple[list[dict[str, str]], int]:
+    """One row per `id_`. The release lists a paragraph both in a part session file and in the whole-day file, with
+    the same text and speaker; the row with the smallest start offset wins (ties: the path), which is the part file
+    and avoids seeking hours into a whole-day Ogg. Returns the rows and how many were removed.
+    """
+    best: dict[str, dict[str, str]] = {}
+    total = 0
+    for r in rows:
+        total += 1
+        key = lambda row: (float(row["start_time"]), row["session_id"])  # noqa: E731
+        if r["id_"] not in best or key(r) < key(best[r["id_"]]):
+            best[r["id_"]] = r
+    return list(best.values()), total - len(best)
+
+
+def clips(raw: Path, languages: set[str] | None = None, report: dict | None = None) -> Iterator[Clip]:
     """The official splits share speakers, so a speaker goes to train, validation or test as a whole: 80/10/10 by
     hours (the SWC rule, which gives a speaker heard in several languages one split). A row without a speaker ID
     cannot be split and is train only (ADR 0023). A speaker's split depends on the languages asked for, as for SWC.
@@ -47,7 +63,9 @@ def clips(raw: Path, languages: set[str] | None = None) -> Iterator[Clip]:
     for language in VOXPOPULI_LANGS:
         table = raw / "annotations" / f"asr_{language}.tsv.gz"
         if language in wanted and table.is_file():
-            rows[language] = list(_rows(table))
+            rows[language], removed = _unique(_rows(table))
+            if report is not None:
+                report["duplicate_ids_removed"] = report.get("duplicate_ids_removed", 0) + removed
             for r in rows[language]:
                 if r["speaker_id"] != "None":
                     hours[r["speaker_id"]][language] += (float(r["end_time"]) - float(r["start_time"])) / 3600

@@ -53,3 +53,15 @@ def test_vp_leaves_out_a_language_without_an_mfa_model_and_one_not_asked_for(vp_
 
 def test_vp_is_an_mfa_source():
     assert voxpopuli.MFA_ALIGNED is True
+
+
+def test_a_repeated_id_gives_one_clip_the_one_in_the_part_file_and_it_is_counted(vp_tree):
+    report = {}
+    clips = [c for c in voxpopuli.clips(vp_tree, None, report) if c.clip_id == "de_dup"]
+    assert [(c.offset_s, c.path.rsplit("/", 1)[1]) for c in clips] == [(50.0, "20140224-0900-PLENARY-3_original.ogg")]
+    assert report == {"duplicate_ids_removed": 1}
+
+
+def test_ids_are_unique(vp_tree):
+    ids = [c.clip_id for c in voxpopuli.clips(vp_tree)]
+    assert len(ids) == len(set(ids))

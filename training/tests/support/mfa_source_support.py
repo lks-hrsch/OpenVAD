@@ -103,15 +103,15 @@ VP_HEADER = [
 ]  # fmt: skip
 
 
-def add_vp_table(raw: Path, language: str, rows: list[tuple[str, str, float, float, str]]) -> None:
-    """`rows` are (id, speaker or "None", start, end, official split)."""
+def add_vp_table(raw: Path, language: str, rows: list[tuple]) -> None:
+    """`rows` are (id, speaker or "None", start, end, official split) and optionally the session file."""
     path = raw / "annotations" / f"asr_{language}.tsv.gz"
     path.parent.mkdir(parents=True, exist_ok=True)
     with gzip.open(path, "wt", newline="") as f:
         writer = csv.writer(f, delimiter="|", quoting=csv.QUOTE_NONE, escapechar="\\")
         writer.writerow(VP_HEADER)
-        for clip_id, speaker, start, end, split in rows:
-            session = "20140224-0900-PLENARY-3"
+        for clip_id, speaker, start, end, split, *session in rows:
+            session = session[0] if session else "20140224-0900-PLENARY-3"
             writer.writerow(
                 [
                     clip_id,
@@ -138,6 +138,11 @@ def make_vp_tree(raw: Path) -> Path:
     """
     rows = [(f"de_s{s}_{i}", str(s), 100.0 * i, 100.0 * i + 60.0, "train") for s in range(1, 31) for i in range(s)]
     rows += [("invalid_row", "1", 0.0, 5.0, "invalid")]
+    # The same paragraph in a part session file and, hours later, in the whole-day file.
+    rows += [
+        ("de_dup", "1", 50.0, 55.0, "train", "20140224-0900-PLENARY-3"),
+        ("de_dup", "1", 46850.0, 46855.0, "train", "20140224-0900-PLENARY-3_whole"),
+    ]
     rows += [(f"de_none_{i}", "None", 10.0 * i, 10.0 * i + 5.0, "dev" if i == 0 else "train") for i in range(3)]
     add_vp_table(raw, "de", rows)
     add_vp_table(raw, "fi", [("fi_1", "1", 0.0, 5.0, "train")])
