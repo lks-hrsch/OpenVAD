@@ -247,7 +247,7 @@ A build missing planned shards is marked `state: interim`.
 | Common Voice, FLEURS | one clip, one sample, padded |
 | MLS, SWC | split at word gaps longer than G into chunks of at most 6.6 s speech, each padded to 10 to 20 s |
 | VoxPopuli | as annotated; above 30 s split at gaps |
-| AMI, CallHome | cut at non-speech gaps to at most 30 s; not padded |
+| AMI, CallHome | cut at non-speech gaps to at most 30 s; not padded. A sample runs longer only where speech crosses the limit (a word, or overlapping turns in CallHome) or a last piece under 1 s joins the one before |
 | Speech Commands | one clip, one sample |
 | VOiCES | whole wav, every re-recording; distractor-only noise files not used |
 | LibriVAD `medium` | every generated wav, one row each; each utterance appears 54 times by design |

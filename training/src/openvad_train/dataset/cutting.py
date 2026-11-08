@@ -92,10 +92,13 @@ def split_over(timing: Timing, max_s: float = 30.0, end_ms: int | None = None) -
     A cut goes to the longest gap in the second half of the `max_s` after a chunk's start, or in the first half if
     the second has none. If no gap has its midpoint within `max_s`, the cut is `max_s` after the start when that
     point is inside a stretch with no word (a long pause, or the silence before the first word or after the last),
-    so a meeting channel that is quiet for minutes still gives chunks within the limit. Otherwise a word crosses
-    that point and the chunk runs on to the next gap, taking at most `_PAUSE_KEPT_MS` of it; with no gap at all it
-    stays whole. The last chunk ends at `end_ms`, or at the last word if that is not given; a last piece under
-    `_MIN_LAST_PIECE_MS` joins the chunk before, as in `cut_long`. A timing without speech has no chunks.
+    so a meeting channel that is quiet for minutes still gives chunks within the limit.
+
+    A chunk is never cut inside speech, so it runs longer than `max_s` in two cases only: a word (or, in
+    CallHome, a run of overlapping turns) crosses the limit, and the chunk runs on to the next gap, taking at most
+    `_PAUSE_KEPT_MS` of it; and a last piece under `_MIN_LAST_PIECE_MS` joins the chunk before, as in `cut_long`.
+    With no gap at all a chunk stays whole. The last chunk ends at `end_ms`, or at the last word if that is not
+    given. A timing without speech has no chunks.
     """
     words = apply_gap_rule(timing.speech_ms, 0)
     if not words:

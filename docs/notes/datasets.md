@@ -211,7 +211,7 @@ Pins, URLs and checksums are in the fetchers (`training/src/openvad_train/fetch/
 - Each audio stream is about 11.5 GB for the whole corpus (16 kHz, 16-bit, measured on `ES2002a`); IHM has one stream per participant, about 46 GB for four.
 - In an IHM channel the wearer is the dominant speaker and the others are crosstalk.
 - The adapter (`dataset/sources/ami.py`, measured on the share) gives 678 headset clips of 189 participants: train 543 clips and 323.1 h, dev 72 and 38.7 h, test 63 and 35.4 h; the words of a wearer's `words.xml` are 93.1 h of speech. Of 1,147,783 `<w>` elements 4 have no times and 11 end before they start; they are dropped. Vocal sounds, disfluency markers and gaps are other elements.
-- Cut by `split_over` the 397 h become 61,581 samples with median 24.8 s and 85 above 30 s (at most 40.2 s); 13,529 of them (94 h) have no speech, because a participant is quiet for long stretches.
+- Cut by `split_over` the 397 h become 61,562 samples with median 24.8 s. A sample is never cut inside speech, so 104 of them (0.17%) pass 30 s, at most 40.2 s, where a word crosses the limit or a last piece under 1 s joins the one before. 13,510 samples (94.3 h of the 397.2 h) hold no speech, because a participant is quiet for long stretches; they are kept as non-speech examples, and capping them is an owner decision.
 
 ### CallHome
 
@@ -220,7 +220,7 @@ Pins, URLs and checksums are in the fetchers (`training/src/openvad_train/fetch/
 - The audio is mono 16-bit WAV at 16 kHz, cut to the transcribed span of each call. The original calls are 8 kHz telephone recordings; the mirror documents neither the upsampling nor the mix of the two sides into one channel. The files are used unchanged, with `band = narrow_native`, so no train-time narrowband step is applied ([0021](../project/adr/0021-telephone-channel-simulation.md)).
 - Labels: start and end time and speaker letter (`A`, `B`, sometimes `A1`, `B1`, `B2`) per turn; no transcripts and no speaker IDs across calls. Turns of the two sides overlap, and pauses inside a turn count as speech.
 - A shard has no call IDs and no audio path, only the row; a call is `<language>/<shard stem>/<row>`. The last turn ends where the audio ends (checked on 3 calls, to 1 ms), so the clip is as long as its last turn.
-- The adapter (`dataset/sources/callhome.py`, measured on the share) splits the 660 calls by the rank of their ID: 528 train (80.0 h), 66 validation (10.2 h), 66 test (9.5 h). The ±0.25 s around every turn boundary masks 45.5 h of the 99.6 h, because turns are dense; the speech union is 89.2 h. Cut by `split_over` the calls become 16,111 samples with median 22.4 s, of which 296 (1.8%) pass 30 s (at most 132 s) because overlapping turns leave no gap to cut at.
+- The adapter (`dataset/sources/callhome.py`, measured on the share) splits the 660 calls by the rank of their ID: 528 train (80.0 h), 66 validation (10.2 h), 66 test (9.5 h). The ±0.25 s around every turn boundary masks 45.5 h of the 99.6 h, because turns are dense; the speech union is 89.2 h. Cut by `split_over` the calls become 16,110 samples with median 22.4 s, of which 297 (1.84%) pass 30 s (at most 132.4 s) because overlapping turns leave no gap to cut at.
 - Reading one row means decoding the call out of its Parquet row group: about 6 s each for 300 to 600 s calls on the M3 Pro over SMB.
 
 ### FLEURS
