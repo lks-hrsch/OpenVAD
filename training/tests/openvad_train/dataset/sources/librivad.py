@@ -41,6 +41,48 @@ def test_a_pair_whose_label_is_not_as_long_as_its_wav_is_dropped_and_counted_by_
     assert any("1089-134686-0000_+_0001" in c.clip_id for c in clips)
 
 
+def _shorten_label(tree, samples_short):
+    """The label of the plain utterance 1089-134686-0001 (24,000 samples, speech in its last 81) cut short."""
+    label = np.zeros(24000, np.int16)
+    label[-81:] = 1
+    folder = tree / "repo/Files/Labels/LibriSpeech/train-clean-100/1089/134686"
+    return save_samplewise_labels(folder, label[: 24000 - samples_short].tolist(), "1089-134686-0001.npy")
+
+
+def test_a_label_one_sample_short_is_kept_and_extended_by_its_last_value_and_counted_apart(librivad_tree):
+    _shorten_label(librivad_tree, 1)
+    report: dict = {}
+    clips = [c for c in librivad.clips(librivad_tree, None, report) if "LibriSpeech/train-clean-100" in c.clip_id]
+    ours = [c for c in clips if c.clip_id.endswith("/1089-134686-0001")]
+    assert len(ours) == 4
+    assert {c.duration_s for c in ours} == {24000 / 16000}
+    assert report["label_one_sample_short"] == {"train": 4}
+    assert report["label_length_mismatch"] == {"test": 4, "train": 4, "validation": 4}  # the cross pair only
+    (timing, *_) = librivad.timings(librivad_tree, ours[:1])
+    # Frame 149 holds 80 samples of the shortened label, a tie, and 81 once the last value is repeated.
+    assert rasterise(timing.speech_ms, [], 24000).tolist()[-2:] == [0, 1]
+
+
+def test_frame_labels_run_over_the_wav_length_and_refuse_another_length(tmp_path):
+    path = save_samplewise_labels(tmp_path, [0] * 79 + [1] * 80)
+    assert librivad.frame_labels(path).tolist() == [0]  # 80 of 160 samples, counting what is missing as silence
+    assert librivad.frame_labels(path, 160).tolist() == [1]
+    with pytest.raises(ValueError, match="159 samples for a wav of 161"):
+        librivad.frame_labels(path, 161)
+
+
+def test_a_label_two_samples_short_is_dropped_and_counted_as_a_mismatch(librivad_tree):
+    _shorten_label(librivad_tree, 2)
+    report: dict = {}
+    clips = list(librivad.clips(librivad_tree, None, report))
+    assert not any(c.clip_id.endswith("train-clean-100/Babble_noise/5/1089-134686-0001") for c in clips)
+    assert not any(
+        "LibriSpeech/train-clean-100" in c.clip_id and c.clip_id.endswith("/1089-134686-0001") for c in clips
+    )
+    assert report["label_length_mismatch"]["train"] == 4 + 4  # the cross pair and this utterance
+    assert report["label_one_sample_short"] == {}
+
+
 def test_the_length_is_the_wav_header_not_the_label(librivad_tree):
     c = next(c for c in librivad.clips(librivad_tree) if "1089-134686-0000_+_0001" in c.clip_id)
     assert c.duration_s == 56000 / 16000

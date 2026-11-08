@@ -44,15 +44,22 @@ VAL_LABELS = "labels"
 _THREADS = 16
 
 
-def frame_labels(path: Path) -> np.ndarray:
+def frame_labels(path: Path, n_samples: int | None = None) -> np.ndarray:
     """One label per 10 ms from a per-sample `int16` file (1 speech, 0 non-speech): speech if strictly more than
     half of the frame's 160 samples are, so a tie is non-speech. The frame count is `round(samples / 160)` as in
     `rasterise`; samples past the last frame are not counted, and a short last frame counts its missing samples as
     non-speech.
+
+    `n_samples` is the length of the wav. A label exactly one sample shorter (36 plain utterances are) gets one
+    more sample that repeats its last value; any other length that is not `n_samples` is an error.
     """
     samples = np.load(path)
     if samples.ndim != 1 or samples.min() < 0 or samples.max() > 1:
         raise ValueError(f"{path}: expected one 0 or 1 per sample, got shape {samples.shape}")
+    if n_samples is not None and len(samples) != n_samples:
+        if len(samples) + 1 != n_samples:
+            raise ValueError(f"{path}: {len(samples)} samples for a wav of {n_samples}")
+        samples = np.append(samples, samples[-1])
     n_frames = round(len(samples) / SAMPLES_PER_FRAME)
     padded = np.zeros(n_frames * SAMPLES_PER_FRAME, dtype=np.int64)
     kept = min(len(samples), len(padded))
@@ -84,9 +91,11 @@ def clips(raw: Path, languages: set[str] | None = None, report: dict | None = No
     """One clip per generated wav of `train-clean-100` and `test-clean` under `raw`, and of `dev-clean` under the
     sibling `librivad-val` when it exists. The length is the wav's header. The 54 mixtures of an utterance (nine
     noises at six SNRs) share its label file, which has one value per sample, so a label whose length is not the
-    wav's frame count belongs to another signal and the clip is dropped, never trimmed or stretched: the pairs of
-    two chapters or speakers in `LibriSpeechConcat` are such (about 1,890 clips). `report["label_length_mismatch"]`
-    counts them per split. The speaker is the LibriSpeech speaker (of the first utterance of a concatenated pair),
+    wav's frame count is not that signal's, and the clip is dropped, never trimmed or stretched. One sample short
+    is the exception (`report["label_one_sample_short"]`, kept, see `frame_labels`). A label that differs by more
+    than one sample is dropped, which on the share is most of the pairs of two chapters or speakers in
+    `LibriSpeechConcat`, some pairs of one chapter, and nothing else; `report["label_length_mismatch"]` counts
+    them per split. The speaker is the LibriSpeech speaker (of the first utterance of a concatenated pair),
     whom the folders keep in one split.
     """
     if languages is not None and LANGUAGE not in languages:
@@ -105,10 +114,14 @@ def clips(raw: Path, languages: set[str] | None = None, report: dict | None = No
         lengths = dict(zip(needed, pool.map(_n_samples, needed), strict=True))
     durations = wav_durations([wav for _, _, _, wav, _ in found])
     mismatched: Counter[str] = Counter()
+    one_short: Counter[str] = Counter()
     for (tree, dataset, folder, wav, label), duration in zip(found, durations, strict=True):
-        if round(duration * SAMPLE_RATE) != lengths[label]:
+        missing = round(duration * SAMPLE_RATE) - lengths[label]
+        if missing not in (0, 1):
             mismatched[SPLITS[folder]] += 1
             continue
+        if missing:
+            one_short[SPLITS[folder]] += 1
         noise, snr = wav.parent.parent.name, wav.parent.name
         yield Clip(
             clip_id=f"{dataset}/{folder}/{noise}/{snr}/{wav.stem}",
@@ -124,12 +137,13 @@ def clips(raw: Path, languages: set[str] | None = None, report: dict | None = No
         )
     if report is not None:
         report["label_length_mismatch"] = dict(sorted(mismatched.items()))
+        report["label_one_sample_short"] = dict(sorted(one_short.items()))
 
 
 @lru_cache(maxsize=8192)
-def _speech_ms(path: Path) -> tuple[tuple[int, int], ...]:
-    """The runs of speech frames as millisecond intervals."""
-    edges = np.diff(np.concatenate([[0], frame_labels(path), [0]]).astype(np.int8))
+def _speech_ms(path: Path, n_samples: int) -> tuple[tuple[int, int], ...]:
+    """The runs of speech frames as millisecond intervals, over a wav of `n_samples`."""
+    edges = np.diff(np.concatenate([[0], frame_labels(path, n_samples), [0]]).astype(np.int8))
     starts, ends = np.flatnonzero(edges == 1), np.flatnonzero(edges == -1)
     return tuple((int(s) * FRAME_MS, int(e) * FRAME_MS) for s, e in zip(starts, ends, strict=True))
 
@@ -146,8 +160,8 @@ def timings(raw: Path, clips: Iterable[Clip]) -> Iterator[Timing]:
     parallel, since each costs about 100 ms over the share.
     """
     clips = list(clips)
-    paths = [_label_of_clip(raw, clip) for clip in clips]
+    keys = [(_label_of_clip(raw, clip), round(clip.duration_s * SAMPLE_RATE)) for clip in clips]
     with ThreadPoolExecutor(_THREADS) as pool:
-        list(pool.map(_speech_ms, set(paths)))  # fills the cache
-    for clip, path in zip(clips, paths, strict=True):
-        yield Timing(clip.clip_id, "frame", list(_speech_ms(path)), [], None, "librivad:labels")
+        list(pool.map(lambda key: _speech_ms(*key), set(keys)))  # fills the cache
+    for clip, key in zip(clips, keys, strict=True):
+        yield Timing(clip.clip_id, "frame", list(_speech_ms(*key)), [], None, "librivad:labels")

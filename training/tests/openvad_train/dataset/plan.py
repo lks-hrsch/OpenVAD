@@ -927,5 +927,6 @@ def test_the_index_manifest_records_what_the_as_is_adapters_dropped(as_is_data):
     run_index(cfg)
     manifest = json.loads((work_dir(cfg) / "index/manifest.json").read_text())
     assert manifest["per_source"]["librivad"]["adapter"] == {
-        "label_length_mismatch": {"test": 4, "train": 4, "validation": 4}
+        "label_length_mismatch": {"test": 4, "train": 4, "validation": 4},
+        "label_one_sample_short": {},
     }
