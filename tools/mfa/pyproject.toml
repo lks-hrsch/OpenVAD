@@ -6,7 +6,19 @@ name = "openvad-mfa"
 version = "0.0.0"
 description = "Montreal Forced Aligner 3.4.3 built from the submodules, used as a tool"
 requires-python = ">=3.12,<3.13"
-dependencies = ["montreal-forced-aligner", "kalpy-kaldi==0.10.5", "pgvector", "psycopg2-binary", "jinja2"]
+dependencies = [
+    "montreal-forced-aligner",
+    "kalpy-kaldi==0.10.5",
+    "pgvector",
+    "psycopg2-binary",
+    "jinja2",
+    # The Japanese and Mandarin tokenisers MFA imports for japanese_mfa and mandarin_mfa, which it does not declare.
+    "sudachipy<0.7",  # 0.7 renamed the NOOOVBOW2 category that the char.def of MFA 3.4.3 uses
+    "sudachidict-core",
+    "spacy-pkuseg",
+    "hanziconv",
+    "dragonmapper",
+]
 
 [tool.uv]
 package = false

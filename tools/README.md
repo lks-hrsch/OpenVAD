@@ -9,7 +9,7 @@ Only people who align need any of this: `just setup`, `uv sync` and the Nix shel
 | :-- | :-- |
 | `montreal-forced-aligner` | git submodule, tag `v3.4.3` (2026-10-08) |
 | `kaldi` | git submodule, commit `f4007661023b98b8081fd875029f0dee62242fd1` |
-| `mfa` | uv project (`openvad-mfa`) with its own `uv.lock`: editable MFA, `kalpy-kaldi==0.10.5` and the runtime packages MFA needs but does not declare (`pgvector`, `psycopg2-binary`, `jinja2`) |
+| `mfa` | uv project (`openvad-mfa`) with its own `uv.lock`: editable MFA, `kalpy-kaldi==0.10.5` and the runtime packages MFA needs but does not declare (`pgvector`, `psycopg2-binary`, `jinja2`), and the Japanese and Mandarin tokenisers (`sudachipy` below 0.7, whose 0.7 rejects the `NOOOVBOW2` category in MFA 3.4.3's `char.def`, `sudachidict-core`, `spacy-pkuseg`, `hanziconv`, `dragonmapper`); `spacy-pkuseg` downloads its model to `~/.pkuseg` on first use |
 | `kaldi/build`, `kaldi/dist` | build output of `just build-mfa`, untracked (`ignore = untracked` on the submodule keeps it out of `git status`) |
 
 `mfa` is a project of its own, not a dependency group of the root workspace.
