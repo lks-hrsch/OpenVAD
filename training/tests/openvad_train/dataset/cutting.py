@@ -222,3 +222,11 @@ def test_split_over_prefers_a_gap_to_the_inside_of_a_pause():
 def test_split_over_takes_at_most_half_a_second_of_a_long_pause_after_a_word_over_the_limit():
     t = timing([(0, 30_500), (90_000, 91_000)])
     assert split_over(t)[0] == Chunk(0, 31_000)  # the word crosses 30 s, so the cut is 500 ms into the pause after it
+
+
+def test_split_over_does_not_leave_a_last_piece_under_one_second():
+    t = timing([(0, 1000)])
+    assert split_over(t, end_ms=30_001) == [Chunk(0, 30_001)]
+    assert split_over(t, end_ms=60_005) == [Chunk(0, 30_000), Chunk(30_000, 60_005)]
+    assert split_over(t, end_ms=60_999) == [Chunk(0, 30_000), Chunk(30_000, 60_999)]
+    assert split_over(t, end_ms=61_000)[-1] == Chunk(60_000, 61_000)
