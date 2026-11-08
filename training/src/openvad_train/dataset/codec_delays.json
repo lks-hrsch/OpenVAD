@@ -2,11 +2,45 @@
   "ffmpeg": "8.1.3",
   "build": "nixpkgs ffmpeg-full 8.1.3 (libopencore_amrnb, libvo_amrwbenc, libopus)",
   "sign": "positive means the output lags the input",
-  "note": "amr_nb is the codec alone at 8 kHz; narrow_roundtrip adds 4.125 ms for the resampler round trip",
+  "note": "amr_nb is the codec alone at 8 kHz; narrow_roundtrip adds 4.125 ms for the resampler round trip (stored_delay_ms)",
+  "bitrate_note": "measured_ms holds one chirp measurement per bit/s over the whole configured range of each codec: every AMR mode, Opus at 12, 16, 20, 24 and 32 kbit/s; the delay does not depend on the bitrate, so delays_ms has one value per codec",
   "delays_ms": {
     "g722": 1.375,
     "opus": 0.0,
     "amr_wb": 5.9375,
     "amr_nb": 5.0
+  },
+  "measured_ms": {
+    "g722": {
+      "64000": 1.375
+    },
+    "opus": {
+      "12000": 0.0,
+      "16000": 0.0,
+      "20000": 0.0,
+      "24000": 0.0,
+      "32000": 0.0
+    },
+    "amr_wb": {
+      "6600": 5.9375,
+      "8850": 5.9375,
+      "12650": 5.9375,
+      "14250": 5.9375,
+      "15850": 5.9375,
+      "18250": 5.9375,
+      "19850": 5.9375,
+      "23050": 5.9375,
+      "23850": 5.9375
+    },
+    "amr_nb": {
+      "4750": 5.0,
+      "5150": 5.0,
+      "5900": 5.0,
+      "6700": 5.0,
+      "7400": 5.0,
+      "7950": 5.0,
+      "10200": 5.0,
+      "12200": 5.0
+    }
   }
 }

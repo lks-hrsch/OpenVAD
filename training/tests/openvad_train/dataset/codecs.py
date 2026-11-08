@@ -26,6 +26,8 @@ from openvad_train.dataset.codecs import (
     narrow_roundtrip,
     preflight,
     roundtrip,
+    stored_delay_ms,
+    stored_roundtrip,
 )
 
 
@@ -170,6 +172,75 @@ def test_impulse_lands_at_table_delay(codec, bitrate):
 def test_committed_delay_matches_a_fresh_measurement(codec, bitrate):
     require_encoders(encoder_of(codec))
     assert measure_delay(codec, bitrate) == pytest.approx(delay_ms(codec), abs=0.1)
+
+
+def committed_measurements() -> list[tuple[str, int, float]]:
+    table = json.loads(Path(codecs.__file__).with_name("codec_delays.json").read_text())["measured_ms"]
+    return [(codec, int(bitrate), ms) for codec, by_bitrate in table.items() for bitrate, ms in by_bitrate.items()]
+
+
+def test_the_committed_measurements_cover_every_amr_mode_and_the_opus_range():
+    measured = {(c, b) for c, b, _ in committed_measurements()}
+    assert {(c, b) for c in AMR_MODES_BPS for b in AMR_MODES_BPS[c]} <= measured
+    assert {b for c, b in measured if c == "opus"} >= {12000, 32000}
+    assert ("g722", 64000) in measured
+
+
+def test_the_delay_does_not_depend_on_the_bitrate_in_the_committed_measurements():
+    assert all(ms == delay_ms(codec) for codec, _, ms in committed_measurements())
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize(("codec", "bitrate", "ms"), committed_measurements())
+def test_every_committed_measurement_reproduces(codec, bitrate, ms):
+    require_encoders(encoder_of(codec))
+    assert measure_delay(codec, bitrate) == pytest.approx(ms, abs=0.1)
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize(
+    ("codec", "bitrate"),
+    [
+        ("g722", 64000),
+        ("opus", 12000),
+        ("opus", 32000),
+        ("amr_wb", 6600),
+        ("amr_wb", 23850),
+        ("amr_nb", 4750),
+        ("amr_nb", 12200),
+    ],
+)
+def test_the_stored_leg_keeps_length_and_lags_by_the_stored_delay(codec, bitrate):
+    require_encoders(encoder_of(codec))
+    n = 2 * 16000
+    x = chirp(n, 100, 3500)  # a chirp, because an impulse is a poor probe for AMR: its peak is 0.003 of 0.9
+    x[:2000] = 0
+    y = stored_roundtrip(x, codec, bitrate)
+    assert y.shape == x.shape
+    lag_ms = (np.argmax(signal.correlate(y, x, mode="full", method="fft")) - (n - 1)) / 16
+    assert lag_ms == pytest.approx(stored_delay_ms(codec), abs=0.5)
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize(("codec", "bitrate"), [("g722", 64000), ("amr_wb", 12650), ("opus", 32000), ("amr_nb", 12200)])
+def test_each_codec_keeps_length_and_the_impulse_within_ten_milliseconds_of_its_delay(codec, bitrate):
+    require_encoders(encoder_of(codec))
+    y = stored_roundtrip(impulse_at(8000, n=16000), codec, bitrate)
+    assert len(y) == 16000
+    assert abs(np.argmax(np.abs(y)) / 16 - (500 + stored_delay_ms(codec))) <= 10
+
+
+def test_the_stored_delay_adds_the_resampler_to_amr_nb_only():
+    assert stored_delay_ms("amr_nb") == delay_ms("amr_nb") + 66 / 16
+    assert stored_delay_ms("amr_nb") == pytest.approx(9.125)
+    assert [stored_delay_ms(c) for c in ("g722", "opus", "amr_wb")] == [delay_ms(c) for c in ("g722", "opus", "amr_wb")]
+
+
+@needs_ffmpeg
+def test_the_stored_leg_of_amr_nb_takes_16_khz_audio():
+    require_encoders("libopencore_amrnb")
+    x = chirp(16000, 100, 3500)
+    np.testing.assert_array_equal(stored_roundtrip(x, "amr_nb", 12200), narrow_roundtrip(x, "amr_nb", 12200))
 
 
 @needs_ffmpeg

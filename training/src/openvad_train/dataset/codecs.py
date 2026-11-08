@@ -19,7 +19,7 @@ import numpy as np
 import soundfile as sf
 from scipy import signal
 
-from openvad_rs import decimate_2x, interpolate_2x
+from openvad_rs import GROUP_DELAY_16K, decimate_2x, interpolate_2x
 
 
 class MissingCodec(RuntimeError):  # noqa: N818 (the name is the plan's interface)
@@ -164,9 +164,8 @@ def narrow_roundtrip(audio: np.ndarray, codec: str, bitrate: int | None) -> np.n
 
     The output keeps its delay; nothing is compensated. It lags the input by `delay_ms(codec)` (the codec alone,
     measured at 8 kHz) plus the resampler round trip of `2 * GROUP_DELAY_16K` samples at 16 kHz (66 samples,
-    4.125 ms). The label shift of a plan row therefore needs that sum before it rounds to the 10 ms grid;
-    `codec_delay_ms` in `construct.py` reads the table alone and must add the resampler share when the leg is
-    restored.
+    4.125 ms). The label shift of a plan row therefore needs that sum before it rounds to the 10 ms grid,
+    which `stored_delay_ms` gives.
     """
     if codec != "amr_nb":
         raise ValueError(f"narrow_roundtrip only runs amr_nb, got {codec!r}")
@@ -175,6 +174,11 @@ def narrow_roundtrip(audio: np.ndarray, codec: str, bitrate: int | None) -> np.n
     # so the clip keeps the int16 conversion defined.
     np.clip(narrow, -1.0, 32767 / 32768, out=narrow)
     return interpolate_2x(roundtrip(narrow, codec, bitrate, 8000))[: len(audio)]
+
+
+def stored_roundtrip(audio: np.ndarray, codec: str, bitrate: int) -> np.ndarray:
+    """The stored codec leg of a plan row on 16 kHz audio: `narrow_roundtrip` for amr_nb, `roundtrip` for the rest."""
+    return narrow_roundtrip(audio, codec, bitrate) if codec == "amr_nb" else roundtrip(audio, codec, bitrate)
 
 
 _DELAYS = Path(__file__).with_name("codec_delays.json")
@@ -191,6 +195,11 @@ def delay_ms(codec: str) -> float:
     if codec not in delays:
         raise KeyError(f"no delay measured for {codec!r}; measured: {sorted(delays)}")
     return delays[codec]
+
+
+def stored_delay_ms(codec: str) -> float:
+    """The delay of `stored_roundtrip` in ms: the codec's, plus the resampler round trip for amr_nb."""
+    return delay_ms(codec) + (2 * GROUP_DELAY_16K / 16 if codec == "amr_nb" else 0.0)
 
 
 # Above this, seeking plus one cached whole-file check beats one decode per read. Rank-ordered shards interleave
