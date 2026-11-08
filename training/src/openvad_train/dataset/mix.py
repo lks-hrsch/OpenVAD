@@ -102,6 +102,18 @@ def overlay_transient(x: np.ndarray, event: np.ndarray, offset_n: int, peak_rati
     return out
 
 
+def add_transients(x: np.ndarray, transients: list[dict], rng: np.random.Generator) -> np.ndarray:
+    """`x` with the plan's `transients` overlaid in order, each a synthetic click or DTMF digit at its offset and
+    peak ratio. The sum can pass 1.0: this belongs before `protect_peak`, never after.
+    """
+    for t in transients:
+        if t["kind"] not in ("click", "dtmf"):
+            raise ValueError(f"unknown transient {t['kind']!r}, expected click or dtmf")
+        event = synth_click(rng) if t["kind"] == "click" else synth_dtmf(rng)
+        x = overlay_transient(x, event, t["offset_n"], t["peak_db"])
+    return x
+
+
 def synth_click(rng: np.random.Generator) -> np.ndarray:
     """A 0.5 to 5 ms burst of exponentially decaying Gaussian noise with unit peak."""
     n = int(rng.integers(SAMPLE_RATE // 2000, SAMPLE_RATE // 200 + 1))

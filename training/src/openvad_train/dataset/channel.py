@@ -16,6 +16,7 @@ from typing import NamedTuple
 import numpy as np
 import soundfile as sf
 from scipy import signal
+from scipy.ndimage import minimum_filter1d, uniform_filter1d
 
 from openvad_train.dataset.mix import SAMPLE_RATE
 from openvad_train.dataset.schema import _blake2_64
@@ -75,13 +76,30 @@ def handset(x: np.ndarray, params: Mapping) -> np.ndarray:
 
 _AGC_BLOCK = 16  # 1 ms: gain follows the level of blocks, not samples, so the loop below is short
 _AGC_MAX_GAIN_DB = 30.0  # a hand-set limit; without it digital silence would be raised to the target
+_AGC_LIMIT_N = 81  # 5 ms at 16 kHz, odd so the window is centred and the limiter adds no delay
+
+
+def _limit_peak(y: np.ndarray) -> np.ndarray:
+    """`y` with its peak at most 1.0, the gain dipping smoothly around an overshoot and nowhere else.
+
+    The gain that would bring each sample to 1.0 is minimum-filtered and then averaged over the same window, so at
+    every sample the average cannot exceed that sample's own need. Audio that never exceeds 1.0 is returned as it is.
+    """
+    magnitude = np.abs(y)
+    if magnitude.max(initial=0.0) <= 1.0:
+        return y
+    need = np.minimum(1.0, 1.0 / np.maximum(magnitude, 1e-30))
+    gain = uniform_filter1d(minimum_filter1d(need, _AGC_LIMIT_N, mode="nearest"), _AGC_LIMIT_N, mode="nearest")
+    return np.clip(y * gain, -1.0, 1.0)  # the clip only absorbs floating-point rounding
 
 
 def agc(x: np.ndarray, params: Mapping) -> np.ndarray:
     """Automatic gain control: the plan's `agc` struct gives the target RMS level and the two time constants.
 
     The level is the RMS of 1 ms blocks smoothed with `attack_ms` when it rises and `release_ms` when it falls.
-    The gain `target / level`, at most +30 dB, is interpolated between block centres.
+    The gain `target / level`, at most +30 dB, is interpolated between block centres. The attack lets the first
+    block of a loud onset after a quiet stretch through at the old gain, so the output is limited to a peak of 1.0
+    here: `protect_peak` after the chain would otherwise scale the whole sample down for one overshoot.
     """
     n = len(x)
     blocks = -(-n // _AGC_BLOCK)
@@ -96,7 +114,7 @@ def agc(x: np.ndarray, params: Mapping) -> np.ndarray:
         env[i] = smooth
     gain = np.minimum(10 ** (params["target_dbfs"] / 20) / np.maximum(env, 1e-12), 10 ** (_AGC_MAX_GAIN_DB / 20))
     sample_gain = np.interp(np.arange(n), (np.arange(blocks) + 0.5) * _AGC_BLOCK, gain)
-    return (x * sample_gain).astype(np.float32)
+    return _limit_peak(x * sample_gain).astype(np.float32)
 
 
 def soft_clip(x: np.ndarray, drive_db: float) -> np.ndarray:

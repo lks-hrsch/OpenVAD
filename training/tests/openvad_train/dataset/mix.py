@@ -12,6 +12,7 @@ from openvad_train.dataset.codecs import DecodeError
 from openvad_train.dataset.mix import (
     _WADA_DB,
     _WADA_G,
+    add_transients,
     dither,
     loop_slice,
     mix_at_snr,
@@ -219,3 +220,32 @@ def test_read_span_refuses_silence_and_an_offset_past_the_end(tmp_path):
         read_span(str(tmp_path / "zero.wav"), 0, 100)
     with pytest.raises(DecodeError, match="no audio"):
         read_span(str(tmp_path / "a.wav"), 900, 100)
+
+
+def test_add_transients_puts_each_event_at_its_offset_and_peak_ratio():
+    x = sine(16000)  # peak 0.3
+    out = add_transients(x, [{"kind": "click", "offset_n": 4000, "peak_db": -6.0}], np.random.default_rng(0))
+    added = out - x
+    assert not added[:4000].any()
+    assert not added[4000 + 80 + 1 :].any()
+    assert np.abs(added).max() == pytest.approx(0.3 * 10 ** (-6 / 20), rel=0.02)
+    dtmf = add_transients(x, [{"kind": "dtmf", "offset_n": 8000, "peak_db": 0.0}], np.random.default_rng(0)) - x
+    assert np.abs(dtmf).max() == pytest.approx(0.3, rel=0.02)
+    assert np.count_nonzero(dtmf) > 800  # 50 to 150 ms
+
+
+def test_add_transients_is_reproducible_and_refuses_an_unknown_kind():
+    x, event = sine(16000), [{"kind": "dtmf", "offset_n": 100, "peak_db": -3.0}]
+    assert np.array_equal(
+        add_transients(x, event, np.random.default_rng(1)), add_transients(x, event, np.random.default_rng(1))
+    )
+    assert np.array_equal(add_transients(x, [], np.random.default_rng(1)), x)
+    with pytest.raises(ValueError, match="typing"):
+        add_transients(x, [{"kind": "typing", "offset_n": 0, "peak_db": 0.0}], np.random.default_rng(1))
+
+
+def test_a_transient_at_0_db_can_double_the_peak_so_protect_peak_must_come_after_it():
+    x = sine(16000) / 0.3 * 0.9  # peak 0.9, as a loud mix leaves it
+    out = add_transients(x, [{"kind": "click", "offset_n": 0, "peak_db": 0.0}], np.random.default_rng(0))
+    assert np.abs(out).max() > 1.0
+    assert np.abs(protect_peak(out)).max() <= 1.0

@@ -20,6 +20,7 @@ from openvad_train.dataset.channel import (
     split_rooms,
     suppress,
 )
+from openvad_train.dataset.mix import protect_peak
 from rir_support import make_rir_tree, synthetic_rir
 
 
@@ -126,6 +127,43 @@ def test_agc_release_time_sets_how_long_a_loud_burst_keeps_the_gain_down():
     slow = agc(x, {"target_dbfs": -20.0, "attack_ms": 5.0, "release_ms": 500.0})
     window = slice(RATE // 2 + RATE // 5, RATE // 2 + RATE // 4)  # 200 to 250 ms after the burst
     assert rms(slow[window]) < rms(fast[window])
+
+
+AGC_PROBE = {"target_dbfs": -20.0, "attack_ms": 20.0, "release_ms": 200.0}
+
+
+def floor_then_tone() -> np.ndarray:
+    """1 s of a -60 dBFS floor, then 2 s of a -20 dBFS (RMS) tone: the onset outruns the attack of the gain."""
+    return np.concatenate([white(1.0, 1e-3), tone(440, 10 ** (-20 / 20) * np.sqrt(2), 2.0)])
+
+
+def test_agc_output_never_passes_full_scale_after_a_loud_onset_following_a_quiet_stretch():
+    y = agc(floor_then_tone(), AGC_PROBE)
+    assert np.abs(y).max() <= 1.0
+    assert np.abs(y).max() > 0.9  # limited, not flattened
+
+
+def test_protect_peak_leaves_the_steady_part_of_the_agc_probe_near_the_target():
+    steady = protect_peak(agc(floor_then_tone(), AGC_PROBE))[-RATE // 2 :]
+    assert dbfs(steady) == pytest.approx(-20, abs=3)
+    # Without the limiter the onset reached 2.2 and `protect_peak` pulled this part down to about -27 dBFS.
+
+
+def test_the_limiter_changes_nothing_while_the_output_stays_below_full_scale():
+    x = white(2.0, 0.05)
+    quiet = agc(x, AGC_PROBE | {"target_dbfs": -26.0})
+    assert np.abs(quiet).max() < 1.0
+    assert np.array_equal(quiet, agc(x, AGC_PROBE | {"target_dbfs": -26.0}))
+    gain = quiet / x
+    assert np.all(np.diff(gain[1000:-1000]) < 0.01)  # the AGC's own smooth gain, no limiter dip
+
+
+def test_the_limiter_dips_the_gain_only_around_the_overshoot():
+    x = floor_then_tone()
+    y = agc(x, AGC_PROBE)
+    late = slice(RATE + RATE // 2, None)  # long after the onset, where the AGC alone already stays below 1.0
+    assert np.abs(y[late]).max() < 1.0
+    assert dbfs(y[late]) == pytest.approx(-20, abs=1)
 
 
 def test_agc_does_not_raise_digital_silence():
