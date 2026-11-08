@@ -6,13 +6,13 @@
 import pytest
 
 from openvad_train.dataset import __main__ as cli
-from openvad_train.dataset import align, construct, publish, verify
+from openvad_train.dataset import align, construct, handcheck, publish, verify
 from openvad_train.dataset.config import SLICE
 
 
 def test_unimplemented_stage_is_an_error():
-    with pytest.raises(SystemExit, match="not yet implemented stage 'handcheck-sample'"):
-        cli.main(["handcheck-sample"])
+    with pytest.raises(SystemExit, match="not yet implemented stage 'pilot'"):
+        cli.main(["pilot"])
 
 
 def test_stage_receives_its_arguments(monkeypatch):
@@ -53,3 +53,8 @@ def test_align_is_registered_and_takes_a_config_and_languages(monkeypatch):
     cli.main(["align", "--config", "slice", "--languages", "de,fr"])
     cli.main(["align", "--config", "full"])
     assert seen == [(SLICE.name, ["de", "fr"]), ("openvad-v1", None)]
+
+
+def test_the_hand_check_stages_are_registered():
+    assert cli.STAGES["handcheck-sample"] is handcheck.main_sample
+    assert cli.STAGES["handcheck-score"] is handcheck.main_score
