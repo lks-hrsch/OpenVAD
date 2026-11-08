@@ -11,7 +11,7 @@ import pytest
 
 from openvad_train.dataset import lexicon
 from openvad_train.dataset.align import load_models
-from openvad_train.dataset.lexicon import EpitranMissingError, build_lexicon, model_phones
+from openvad_train.dataset.lexicon import EpitranMissingError, ModelMetaError, build_lexicon, model_phones
 
 
 def fake(word: str) -> list[str]:
@@ -46,6 +46,14 @@ def test_the_inventory_is_read_from_the_meta_of_the_acoustic_model(tmp_path):
         z.writestr("ca_mfa_acoustic16/meta.json", json.dumps({"phones": ["a", "\u02c8e", "ɲ"], "version": "2.2.17"}))
         z.writestr("ca_mfa_acoustic16/phones.txt", "<eps> 0\n")
     assert model_phones(model) == {"a", "\u02c8e", "ɲ"}
+
+
+def test_a_zip_without_meta_json_is_a_named_error(tmp_path):
+    model = tmp_path / "not_a_model.zip"
+    with zipfile.ZipFile(model, "w") as z:
+        z.writestr("readme.txt", "no meta")
+    with pytest.raises(ModelMetaError, match=r"no meta\.json"):
+        model_phones(model)
 
 
 def test_without_epitran_the_error_names_the_sync_command(monkeypatch):

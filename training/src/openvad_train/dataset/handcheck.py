@@ -151,10 +151,10 @@ def sample_handcheck(
             )
             if json.loads(r["metrics"]).get("loglik") is not None
         ]
-        if len(rows) < per_language:
-            short.append(f"{language} ({len(rows)})")
-            continue
         by_id = {r["clip_id"]: (source, r) for source, r in rows}
+        if len(by_id) < per_language:
+            short.append(f"{language} ({len(by_id)})")
+            continue
         scored = [(json.loads(r["metrics"])["loglik"], r["clip_id"]) for _, r in by_id.values()]
         for clip_id in _stratified(scored, per_language):
             source, r = by_id[clip_id]
@@ -210,12 +210,12 @@ def pair_boundaries(owner: list[int], mfa: list[int]) -> list[tuple[int, int]]:
 
 
 def _owner_speech_ms(textgrid: Path) -> list[tuple[int, int]]:
-    """The owner's speech intervals in ms: every interval of the `speech` tier whose text is not exactly empty. So a
-    label other than `speech`, or a label of only spaces, counts as speech too, and only a blank interval is not.
+    """The owner's speech intervals in ms: every interval of the `speech` tier whose text is not blank. So a label
+    other than `speech` counts as speech too, and an empty or whitespace-only one does not.
     """
     tier = _tier(parse_textgrid(textgrid.read_text(encoding="utf-8")), "speech")
     return [
-        (round(a * 1000), round(b * 1000)) for a, b, text in tier if text != "" and round(b * 1000) > round(a * 1000)
+        (round(a * 1000), round(b * 1000)) for a, b, text in tier if text.strip() and round(b * 1000) > round(a * 1000)
     ]
 
 
@@ -249,19 +249,20 @@ def score_handcheck(path: Path) -> dict:
 
     `path` is the sample directory that `sample_handcheck` returned. The training labels are the MFA word intervals
     after the gap rule with the G of the build configuration, rasterised on the 10 ms grid by `labels.rasterise`
-    with the clip's mask; the owner's intervals are rasterised as labelled, without the gap rule. An interval counts
-    as speech if its text is not exactly empty (see `_owner_speech_ms`).
+    with the clip's mask. The owner's intervals get the same gap rule, because the comparison is of the labels
+    training would see on both sides, so a labeller who marks the words and pauses by the same convention scores 1.0.
+    An interval counts as speech if its text is not blank (see `_owner_speech_ms`).
 
     - Frame agreement: the share of frames with the same label, over the frames the mask leaves unmasked, summed
       over the clips (not an average of per-clip shares).
-    - Onsets and offsets: the starts and ends of the owner's speech runs (touching or overlapping intervals merged)
+    - Onsets and offsets: the starts and ends of the owner's speech runs (after the same gap rule)
       against those of the MFA runs after the gap rule, in ms, paired per clip by `pair_boundaries`. A boundary
       inside a masked stretch is not excluded. `within_20_ms` and `within_50_ms` are shares of the paired
       boundaries; the unpaired ones are counted apart (`unpaired_owner`, `unpaired_mfa`), because they are misses
       of a different kind.
 
-    The report has the totals and `per_language`. `empty_textgrids` counts clips where the owner marked no speech at
-    all, which may mean a clip not yet labelled.
+    The report has the totals and `per_language`. Every sampled clip passed MFA, so a TextGrid with no speech in it
+    means a clip not yet labelled: it is left out of every total and counted in `empty_textgrids`.
     """
     key = json.loads((path / "key.json").read_text(encoding="utf-8"))
     gap_ms = key["gap_ms"]
@@ -269,15 +270,18 @@ def score_handcheck(path: Path) -> dict:
     by_language: dict[str, Counter] = {}
     for name, f in sorted(key["files"].items()):
         owner_ms = _owner_speech_ms(path / "clips" / f"{name}.TextGrid")
+        by_language.setdefault(f["language"], Counter())
+        if not owner_ms:
+            totals["empty"] += 1
+            by_language[f["language"]]["empty"] += 1
+            continue
         mfa_ms = apply_gap_rule([(a, b) for a, b in f["speech_ms"]], gap_ms)
         mask_ms = [(a, b) for a, b in f["mask_ms"]]
-        owner_runs = apply_gap_rule(owner_ms, 1)  # touching intervals are one run
+        owner_runs = apply_gap_rule(owner_ms, gap_ms)
         theirs = rasterise(mfa_ms, mask_ms, f["n_samples"])
         ours = rasterise(owner_runs, [], f["n_samples"])
         unmasked = theirs != 2
-        c = Counter(
-            clips=1, frames=int(unmasked.sum()), agree=int((theirs == ours)[unmasked].sum()), empty=int(not owner_runs)
-        )
+        c = Counter(clips=1, frames=int(unmasked.sum()), agree=int((theirs == ours)[unmasked].sum()))
         mine, reference = _boundaries(owner_runs), _boundaries(mfa_ms)
         for kind in ("onsets", "offsets"):
             pairs = pair_boundaries(mine[kind], reference[kind])
@@ -288,7 +292,7 @@ def score_handcheck(path: Path) -> dict:
             c[f"{kind}_unpaired_owner"] = len(mine[kind]) - len(pairs)
             c[f"{kind}_unpaired_mfa"] = len(reference[kind]) - len(pairs)
         totals += c
-        by_language.setdefault(f["language"], Counter()).update(c)
+        by_language[f["language"]].update(c)
     report = {
         "gap_ms": gap_ms,
         "empty_textgrids": totals["empty"],

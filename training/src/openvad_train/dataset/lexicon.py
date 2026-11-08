@@ -24,6 +24,10 @@ EPITRAN_CODES = {"ca": "cat-Latn"}
 SYNC_COMMAND = "uv sync --all-packages --group align"
 
 
+class ModelMetaError(RuntimeError):
+    """An acoustic model zip has no `meta.json`, so it has no phone inventory to read."""
+
+
 class EpitranMissingError(RuntimeError):
     """Epitran is not installed: it lives in the `align` dependency group, which `uv sync` does not install."""
 
@@ -31,7 +35,9 @@ class EpitranMissingError(RuntimeError):
 def model_phones(acoustic: Path) -> frozenset[str]:
     """The phone inventory in the `meta.json` of a downloaded MFA acoustic model (a zip)."""
     with zipfile.ZipFile(acoustic) as z:
-        meta = next(n for n in z.namelist() if n.endswith("meta.json"))
+        meta = next((n for n in z.namelist() if n.endswith("meta.json")), None)
+        if meta is None:
+            raise ModelMetaError(f"{acoustic} has no meta.json: not an MFA acoustic model")
         return frozenset(json.loads(z.read(meta))["phones"])
 
 

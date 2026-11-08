@@ -10,12 +10,14 @@ import re
 import shutil
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 import soundfile as sf
 
 from align_support import make_clip
 from openvad_train.dataset import align, handcheck, index
 from openvad_train.dataset.align import parse_textgrid
+from openvad_train.dataset.codecs import decode_16k
 from openvad_train.dataset.config import SLICE, work_dir
 from openvad_train.dataset.handcheck import (
     QualityBar,
@@ -28,6 +30,7 @@ from openvad_train.dataset.handcheck import (
 from openvad_train.dataset.labels import apply_gap_rule
 from openvad_train.dataset.parquet_io import write_parquet
 from openvad_train.dataset.schema import Timing
+from openvad_train.fetch.common import data_dir
 
 
 WORDS = [(200, 500), (600, 900), (1300, 1500)]  # the second gap is 400 ms, the first 100 ms: G = 200 merges the first
@@ -106,6 +109,25 @@ def test_an_existing_sample_is_never_overwritten(sampled):
     assert label.read_text() == "the owner's work"
 
 
+def test_the_wav_is_the_16_bit_quantisation_of_the_decoded_clip(sampled):
+    out = sample_handcheck(sampled, languages=("de",), per_language=3)
+    clips = {c.clip_id: c for c in align._read_index(work_dir(sampled), "fake")}
+    for name, f in json.loads((out / "key.json").read_text())["files"].items():
+        clip = clips[f["clip_id"]]
+        decoded = decode_16k(str(data_dir() / clip.path), clip.offset_s, clip.duration_s)
+        expected = np.clip(np.rint(decoded * 32768), -32768, 32767).astype(np.int16)
+        written, rate = sf.read(out / "clips" / f"{name}.wav", dtype="int16")
+        assert rate == 16000
+        assert np.array_equal(written, expected)
+
+
+def test_duplicate_clips_do_not_count_towards_the_size(sampled):
+    base = work_dir(sampled) / "words" / "fake" / "de"
+    shutil.copy(base / "00000.parquet", base / "00001.parquet")  # the same 40 clips again
+    with pytest.raises(ValueError, match=r"de \(40\)"):
+        sample_handcheck(sampled, languages=("de",), per_language=41)
+
+
 def test_a_language_with_too_few_clips_is_an_error_naming_it(sampled):
     with pytest.raises(ValueError, match=r"en \(30\), ca \(0\)"):
         sample_handcheck(sampled, languages=("de", "en", "ca"), per_language=31)
@@ -170,16 +192,26 @@ def test_exact_agreement_is_perfect(out):
     assert json.loads((out / "report.json").read_text()) == report
 
 
-def test_the_training_labels_apply_the_gap_rule_and_the_owner_does_not(out):
-    # The owner marks the three words separately; training merges the first two (100 ms gap under G = 200 ms), so
-    # the 100 ms between them is speech in the training labels and not in the owner's.
-    separate = {name: [((0.2, 0.5), "speech"), ((0.6, 0.9), "speech"), ((1.3, 1.5), "speech")] for name in ["h001"]}
-    label(out, separate)
+def test_the_owner_gets_the_same_gap_rule_so_a_pause_under_g_costs_nothing(out):
+    # The owner marks the words and a 150 ms pause between the first two (G = 200 ms): training merges them.
+    key = json.loads((out / "key.json").read_text())
+    paused = {name: [((0.2, 0.5), "speech"), ((0.65, 0.9), "speech"), ((1.3, 1.5), "speech")] for name in key["files"]}
+    label(out, paused)
     report = score_handcheck(out)
-    assert report["frames"] == 8 * 160
-    assert report["frame_agreement"] == pytest.approx(1 - 10 / (8 * 160))  # ten frames of one clip
-    assert report["onsets"]["unpaired_owner"] == 1  # the owner has one more run in h001
-    assert report["onsets"]["unpaired_mfa"] == 0
+    assert report["frame_agreement"] == 1.0
+    for kind in ("onsets", "offsets"):
+        assert report[kind]["paired"] == 16
+        assert report[kind]["within_20_ms"] == 1.0
+        assert (report[kind]["unpaired_owner"], report[kind]["unpaired_mfa"]) == (0, 0)
+
+
+def test_a_pause_over_g_stays_a_gap_for_the_owner_as_for_training(out):
+    key = json.loads((out / "key.json").read_text())
+    split = {name: [((0.2, 0.5), "speech"), ((0.75, 0.9), "speech"), ((1.3, 1.5), "speech")] for name in key["files"]}
+    label(out, split)  # the owner's 250 ms pause is over G and stays open; training bridged its 100 ms one
+    report = score_handcheck(out)
+    assert report["onsets"]["unpaired_owner"] == 8  # one extra run per clip
+    assert report["frame_agreement"] == pytest.approx(1 - 25 / 160)  # 500 to 750 ms
 
 
 def test_boundaries_are_scored_within_20_and_50_ms(out):
@@ -190,24 +222,34 @@ def test_boundaries_are_scored_within_20_and_50_ms(out):
     assert report["frame_agreement"] < 1.0
 
 
-def test_any_label_but_an_empty_one_is_speech(out):
+def test_any_label_but_a_blank_one_is_speech(out):
     label(out, {"h001": [((0.2, 0.9), " "), ((1.3, 1.5), "noise")]})
     report = score_handcheck(out)
-    assert report["onsets"]["unpaired_owner"] == 0  # both runs are found in h001, whatever their text
-    assert report["onsets"]["unpaired_mfa"] == 0
-    assert report["frame_agreement"] == 1.0
+    # the whitespace-only interval is no speech, so h001 has one run where MFA has two, and "noise" is speech
+    assert report["onsets"]["unpaired_owner"] == 0
+    assert report["onsets"]["unpaired_mfa"] == 1
+    assert report["onsets"]["paired"] == 15
 
 
 def test_masked_frames_are_left_out_of_agreement(out):
     key = json.loads((out / "key.json").read_text())
     key["files"]["h001"]["mask_ms"] = [[0, 1000]]
     (out / "key.json").write_text(json.dumps(key))
-    label(out, {"h001": []})  # the owner marks no speech at all in h001
+    label(out, {"h001": [((1.3, 1.5), "speech")]})  # the owner leaves out the speech under the mask
     report = score_handcheck(out)
-    # h001 keeps 60 unmasked frames, of which the MFA labels the 200 ms run at 1300 to 1500 ms: 20 disagree
-    assert report["frames"] == 7 * 160 + 60
-    assert report["frame_agreement"] == pytest.approx(1 - 20 / (7 * 160 + 60))
+    assert report["frames"] == 7 * 160 + 60  # h001 keeps 60 unmasked frames
+    assert report["frame_agreement"] == 1.0
+
+
+def test_a_clip_with_no_speech_marked_is_not_labelled_and_leaves_every_total(out):
+    label(out, {"h001": []})
+    report = score_handcheck(out)
     assert report["empty_textgrids"] == 1
+    assert report["clips"] == 7
+    assert report["frames"] == 7 * 160
+    assert report["onsets"]["paired"] == 14
+    languages = {lang: r["empty_textgrids"] for lang, r in report["per_language"].items()}
+    assert sorted(languages.values()) == [0, 1]
 
 
 def test_pairing_is_one_to_one_by_nearest_distance():
