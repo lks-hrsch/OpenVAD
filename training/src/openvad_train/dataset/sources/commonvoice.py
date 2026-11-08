@@ -27,7 +27,7 @@ HELD_OUT: dict[str, Split] = {"dev": "validation", "test": "test"}
 
 def _locale_dir(raw: Path, locale: str) -> Path | None:
     """The folder with the TSVs and `clips/`, or None while the locale is not fetched (the fetch is resumable)."""
-    found = sorted((raw / locale).glob("**/validated.tsv"))
+    found = sorted((raw / locale).glob("*/*/validated.tsv"))  # the fixed layout; `**` would walk `clips/` over SMB
     if len(found) > 1:
         raise RuntimeError(
             f"Common Voice {locale}: expected one validated.tsv under {raw / locale}, found {len(found)}"

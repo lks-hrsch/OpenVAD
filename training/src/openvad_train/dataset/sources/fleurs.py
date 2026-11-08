@@ -33,11 +33,11 @@ def _language(directory: str) -> str:
 
 def _split_clips(raw: Path, directory: str, language: str, official: str) -> Iterator[Clip]:
     """Columns of `<split>.tsv`: id, file, raw text, normalised text, characters, sample count at 16 kHz, gender. The
-    normalised text has numbers written out, which MFA can align and a digit would turn into `<unk>`.
+    raw text is used, because `prepare_transcript` normalises it (the normalised column does not write numbers out).
     """
     with (raw / directory / f"{official}.tsv").open(newline="", encoding="utf-8") as f:
         for row in csv.reader(f, delimiter="\t", quoting=csv.QUOTE_NONE):
-            _, name, _, text, _, samples, _ = row
+            _, name, text, _, _, samples, _ = row
             yield Clip(
                 clip_id=f"{directory}/{Path(name).stem}",
                 source=SOURCE,

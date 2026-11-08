@@ -24,10 +24,10 @@ SOURCE = "voxpopuli"
 MFA_ALIGNED = True
 RAW_PREFIX = Path("datasets/raw/voxpopuli")
 LICENCE = "CC0-1.0"
+csv.field_size_limit(1 << 30)  # the `vad` column of a long segment
 
 
 def _rows(table: Path) -> Iterator[dict[str, str]]:
-    csv.field_size_limit(1 << 30)  # the `vad` column of a long segment
     with gzip.open(table, "rt", newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f, delimiter="|", quoting=csv.QUOTE_NONE):
             if row["split"] != "invalid":  # the text does not match the audio
@@ -38,7 +38,8 @@ def clips(raw: Path, languages: set[str] | None = None) -> Iterator[Clip]:
     """The official splits share speakers, so a speaker goes to train, validation or test as a whole: 80/10/10 by
     hours (the SWC rule, which gives a speaker heard in several languages one split). A row without a speaker ID
     cannot be split and is train only (ADR 0023). A speaker's split depends on the languages asked for, as for SWC.
-    The text is `normed_text`, with numbers written out.
+    The text is `normed_text`, which writes numbers out but drops letters outside the language's alphabet in about
+    0.3 to 1.6% of rows.
     """
     wanted = indexed_languages(languages)
     rows: dict[str, list[dict[str, str]]] = {}

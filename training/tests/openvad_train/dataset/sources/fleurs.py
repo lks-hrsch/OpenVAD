@@ -25,14 +25,14 @@ def test_fleurs_keeps_official_splits_and_maps_mandarin(fleurs_tree):
     assert splits == {(lang, s) for lang in ("de", "zh") for s in ("train", "validation", "test")}
 
 
-def test_fleurs_fields_from_the_normalised_text_and_the_sample_count(fleurs_tree):
+def test_fleurs_fields_from_the_raw_text_and_the_sample_count(fleurs_tree):
     c = next(c for c in fleurs.clips(fleurs_tree) if c.clip_id == "de_de/de_de-dev")
     assert (c.source, c.licence, c.offset_s, c.duration_s, c.transcript) == (
         "fleurs",
         "CC BY 4.0",
         0.0,
         3.0,
-        "normalised dev",
+        "Raw dev.",
     )
     assert c.path == "datasets/raw/fleurs/de_de/audio/dev/de_de-dev.wav"
 
