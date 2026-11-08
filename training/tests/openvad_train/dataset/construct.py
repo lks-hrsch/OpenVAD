@@ -519,11 +519,19 @@ def test_common_voice_waits_for_its_wada_snr_step(raw, extra):
         construct_sample(make_row(**extra, source="common-voice"), raw)
 
 
-def test_every_slice_row_is_buildable():
+def test_every_slice_row_names_only_legs_that_are_built_and_a_rir_that_exists(raw):
+    # Drawn with a RIR pool, as `run_plan` does: a room row without a `rir_id` would be refused by construct_sample.
+    rirs = RirPool(make_rir_tree(raw / "datasets/raw/rirs"))
+    rows = []
     for i in range(500):
         clip = Clip(f"c{i}", "swc", "de", "s", "train", "a.ogg", 0.0, 10.0, "CC-BY-SA", None)
-        row = draw_sample(clip, Timing(f"c{i}", "word", [(100, 900)], [], None, "test"), SLICE)
+        row = draw_sample(clip, Timing(f"c{i}", "word", [(100, 900)], [], None, "test"), SLICE, rirs=rirs)
         assert construct._legs_not_built(row) == []
+        assert row["room"] == (row["rir_id"] is not None)
+        assert row["rir_id"] is None or (raw / row["rir_id"]).is_file()
+        rows.append(row)
+    assert any(r["room"] for r in rows)
+    # test_slice_rows_draw_the_whole_chain_and_every_codec_and_all_construct builds such rows.
 
 
 def test_a_clip_drive_of_zero_is_still_applied(raw):
