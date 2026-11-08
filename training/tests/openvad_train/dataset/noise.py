@@ -18,6 +18,7 @@ from openvad_train.dataset.codecs import DecodeError
 from openvad_train.dataset.config import DEMAND_CATEGORIES
 from openvad_train.dataset.mix import rms
 from openvad_train.dataset.noise import (
+    MIN_SEGMENT_N,
     MUSAN_CATEGORIES,
     OPEN_LANGUAGES,
     NoisePool,
@@ -386,6 +387,8 @@ def test_a_different_offset_is_a_different_part_of_the_talker(tmp_path):
         ([segment(60000, 70000)], "leaves"),
         ([segment(0, 9000), segment(8000, 12000)], "overlaps"),
         ([segment(0, 9000, rir=None)], "rir_id"),
+        ([segment(1000, 1000 + MIN_SEGMENT_N - 1)], "under the 640"),
+        ([segment(1000, 1015)], "under the 640"),
     ],
 )
 def test_a_malformed_segment_list_is_refused(tmp_path, segments, message):
@@ -407,3 +410,24 @@ def test_a_baseline_lowers_the_competing_talker_when_part_of_the_clip_is_its_own
     based = mix_competing(speech, active, segments, 10.0, tmp_path, baseline_snr_db=0.0)
     assert measured_tir(plain, speech, active, segments) == pytest.approx(10.0, abs=0.5)
     assert measured_tir(based, speech, active, segments) == pytest.approx(10.0 + 3.01, abs=0.5)
+
+
+def test_a_segment_fades_in_and_out_over_10_ms_and_the_tir_is_measured_on_the_faded_track(tmp_path):
+    speech, active = competing_setup(tmp_path)
+    segments = [segment(8000, 24000)]
+    mixed = mix_competing(speech, active, segments, 10.0, tmp_path)
+    track = (mixed - speech)[8000:24000]
+    body = rms(track[2000:-2000])
+    assert track[0] == 0
+    assert track[-1] == 0
+    assert rms(track[:40]) < 0.3 * body
+    assert rms(track[-40:]) < 0.3 * body
+    assert rms(track[160:480]) > 0.5 * body  # the ramp is over after 10 ms
+    assert measured_tir(mixed, speech, active, segments) == pytest.approx(10.0, abs=0.5)
+
+
+def test_the_shortest_segment_the_mix_takes_filters_and_keeps_its_tir(tmp_path):
+    speech, active = competing_setup(tmp_path)
+    segments = [segment(1000, 1000 + MIN_SEGMENT_N)]
+    mixed = mix_competing(speech, active, segments, 6.0, tmp_path)
+    assert measured_tir(mixed, speech, active, segments) == pytest.approx(6.0, abs=0.5)

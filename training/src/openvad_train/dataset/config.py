@@ -51,6 +51,8 @@ class BuildConfig:
     competing_coverage: tuple[float, float] = (0.10, 0.50)
     competing_tir_db: tuple[float, float] = (0.0, 15.0)
     competing_lowpass_hz: tuple[float, float] = (1000.0, 4000.0)
+    # No segment is shorter: a few samples cannot be filtered or heard, and a 10 ms ramp must fit inside.
+    competing_min_segment_ms: int = 200
     babble_talkers: int = 6
     babble_min_speakers: int = 50  # fewer speakers: babble draws from any language
     reserved_share: float = 0.05

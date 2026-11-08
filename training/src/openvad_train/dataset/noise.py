@@ -247,6 +247,12 @@ def build_ssn(lpc: np.ndarray, n: int, rng: np.random.Generator) -> np.ndarray:
     return (y / rms(y)).astype(np.float32)
 
 
+# Each segment fades in and out over 10 ms inside its own span, so its edges are no cue to the model; with both
+# ramps and a body, 40 ms is the shortest a segment can be. The plan keeps to `competing_min_segment_ms`, far above.
+_FADE_N = SAMPLE_RATE // 100
+MIN_SEGMENT_N = 4 * _FADE_N
+
+
 class Segment(NamedTuple):
     """One competing-talker segment: samples `start_n` to `end_n` of the sample hold `source_path` read from
     `source_offset_n` (the plan's `segments` entry), through `rir_id` and a low-pass at `lowpass_hz`.
@@ -273,9 +279,10 @@ def mix_competing(
 
     The TIR is the RMS of `speech` over the `active` samples against the RMS of the talkers over the samples the
     segments cover, which is how loud the competing talker is when it talks. Measured over `active` alone it would
-    fall with the coverage and can be zero where the talker does not overlap a word. Segments must not overlap.
-    `baseline_snr_db` is as in `speech_rms`.
-    `DecodeError` for a talker file that cannot be read.
+    fall with the coverage and can be zero where the talker does not overlap a word. Segments must not overlap, and
+    each is at least `MIN_SEGMENT_N` long: the low-pass cannot filter a handful of samples, and the 10 ms
+    raised-cosine ramps at both ends (applied before the TIR is measured) need room. `baseline_snr_db` is as in
+    `speech_rms`. `DecodeError` for a talker file that cannot be read.
     """
     if active.dtype != bool or active.shape != speech.shape:
         raise ValueError("active must be a boolean mask the shape of speech")
@@ -288,11 +295,17 @@ def mix_competing(
         n = seg.end_n - seg.start_n
         if not 0 <= seg.start_n < seg.end_n <= len(speech) or covered[seg.start_n : seg.end_n].any():
             raise ValueError(f"segment {seg.start_n} to {seg.end_n} is empty, overlaps another or leaves {len(speech)}")
+        if n < MIN_SEGMENT_N:
+            raise ValueError(f"{seg.clip_id}: a segment of {n} samples is under the {MIN_SEGMENT_N} the ramps need")
         if seg.rir_id is None:
             raise ValueError(f"{seg.clip_id}: a competing segment without a rir_id")
         talker = apply_rir(read_span(str(raw / seg.source_path), seg.source_offset_n, n), load_rir(raw / seg.rir_id))
         lowpass = signal.butter(4, seg.lowpass_hz, "lowpass", fs=SAMPLE_RATE, output="sos")
-        track[seg.start_n : seg.end_n] = signal.sosfiltfilt(lowpass, talker)
+        faded = signal.sosfiltfilt(lowpass, talker)
+        ramp = 0.5 * (1 - np.cos(np.pi * np.arange(_FADE_N) / _FADE_N))
+        faded[:_FADE_N] *= ramp
+        faded[-_FADE_N:] *= ramp[::-1]
+        track[seg.start_n : seg.end_n] = faded
         covered[seg.start_n : seg.end_n] = True
     gain = speech_rms(speech, active, baseline_snr_db) / (rms(track[covered]) * 10 ** (tir_db / 20))
     return (speech + gain * track).astype(np.float32)

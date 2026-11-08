@@ -1317,3 +1317,43 @@ def test_only_reserved_clips_of_the_augmented_sources_become_talkers(as_is_data)
     }
     assert donors
     assert all(p.startswith("datasets/raw/swc/") and p.endswith("english/Aaa/audio.ogg") for p in donors)
+
+
+def competing_segments_of(total_n: int, seeds: range, talkers, cfg=FULL) -> list[list[dict]]:
+    return [
+        plan_module._draw_segments(clip("fg"), total_n, cfg, talkers, None, np.random.default_rng([s, 10]))
+        for s in seeds
+    ]
+
+
+def test_no_competing_segment_is_under_the_floor_in_20000_full_draws(talkers):
+    floor_n = FULL.competing_min_segment_ms * 16
+    shortest = min(
+        s["end_n"] - s["start_n"] for segs in competing_segments_of(160000, range(20000), talkers) for s in segs
+    )
+    assert shortest >= floor_n == 3200
+
+
+def test_the_floor_holds_at_the_shortest_sample_that_fits_a_segment_and_coverage_stays_in_range(talkers):
+    # 0.4 s: the 50% cap holds exactly one segment of the 200 ms floor. A shorter sample has no competing talker.
+    total_n = 6400
+    assert plan_module._holds_a_segment(total_n, FULL)
+    assert not plan_module._holds_a_segment(total_n - 2, FULL)
+    for total in (total_n, 6401, 9000, 16000, 48000):
+        for segs in competing_segments_of(total, range(1500), talkers):
+            lengths = [s["end_n"] - s["start_n"] for s in segs]
+            assert min(lengths) >= 3200
+            assert 1 <= len(segs) <= 3
+            assert 0.10 * total - 1 <= sum(lengths) <= 0.50 * total
+            ordered = sorted((s["start_n"], s["end_n"]) for s in segs)
+            assert ordered[0][0] >= 0
+            assert ordered[-1][1] <= total
+            assert all(a[1] <= b[0] for a, b in pairwise(ordered))
+
+
+def test_a_sample_too_short_for_a_segment_is_planned_clean_with_its_dither(talkers):
+    short = dataclasses.replace(clip("short", duration_s=0.1), language="de")
+    row = draw_sample(short, timing("short", speech=((0, 100),)), only("competing"), talkers=talkers)
+    assert row["total_n"] < 6400
+    assert (row["condition"], row["segments"], row["tir_db"], row["snr_db"]) == ("clean", [], None, None)
+    assert -90 <= row["dither_dbfs"] <= -70

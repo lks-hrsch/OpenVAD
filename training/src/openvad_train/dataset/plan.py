@@ -202,15 +202,21 @@ def _draw_mix_and_chain(cfg: BuildConfig, total_n: int, rng: np.random.Generator
 def _draw_segments(
     clip: Clip, total_n: int, cfg: BuildConfig, talkers: TalkerPool, rirs: RirPool | None, rng: np.random.Generator
 ) -> list[dict]:
-    """The competing-talker segments of one sample (ADR 0022): `competing_segments` of them, not overlapping, their
-    union covering `competing_coverage` of the whole sample, each a different reserved talker with its own low-pass
-    and, from the clip's split, its own RIR. The RIRs are drawn last, so a missing tree moves nothing else.
+    """The competing-talker segments of one sample (ADR 0022): up to `competing_segments` of them, not overlapping,
+    each at least `competing_min_segment_ms` long, their union covering `competing_coverage` of the whole sample,
+    each a different reserved talker with its own low-pass and, from the clip's split, its own RIR. When the drawn
+    coverage cannot hold the drawn count at that length, the count is reduced. The sample must be at least twice
+    the minimum (`_holds_a_segment`). The RIRs are drawn last, so a missing tree moves nothing else.
     """
     low, high = cfg.competing_coverage
+    floor_n = cfg.competing_min_segment_ms * SAMPLES_PER_MS
+    # The coverage stays inside its range; a short sample takes the shortest cover that holds one segment.
     cover = round(rng.uniform(low, high) * total_n)
-    cover = int(np.clip(cover, math.ceil(low * total_n), math.floor(high * total_n)))
-    k = min(int(rng.integers(cfg.competing_segments[0], cfg.competing_segments[1] + 1)), cover)
-    lengths = np.diff([0, *np.sort(rng.choice(np.arange(1, cover), k - 1, replace=False)), cover])
+    cover = max(int(np.clip(cover, math.ceil(low * total_n), math.floor(high * total_n))), floor_n)
+    k = min(int(rng.integers(cfg.competing_segments[0], cfg.competing_segments[1] + 1)), cover // floor_n)
+    # Each segment takes the minimum, and the rest of the cover is split at k - 1 random cuts.
+    extra = cover - k * floor_n
+    lengths = floor_n + np.diff([0, *np.sort(rng.integers(0, extra + 1, k - 1)), extra])
     # Sorted cuts through the free samples put k blocks in order with a gap (maybe none) before each.
     cuts = np.sort(rng.integers(0, total_n - cover + 1, k))
     starts = cuts + np.cumsum(lengths) - lengths
@@ -231,6 +237,11 @@ def _draw_segments(
         for segment in segments:
             segment["rir_id"] = rirs.draw(clip.split, rng).file.relative_to(data_dir()).as_posix()
     return segments
+
+
+def _holds_a_segment(total_n: int, cfg: BuildConfig) -> bool:
+    """Whether a sample is long enough for one segment of the minimum length inside the coverage cap."""
+    return math.floor(cfg.competing_coverage[1] * total_n) >= cfg.competing_min_segment_ms * SAMPLES_PER_MS
 
 
 def draw_sample(
@@ -325,6 +336,9 @@ def draw_sample(
     # Later tasks add their draws after these, so the values drawn so far stay. A whole-ms offset keeps labels exact.
     speech_offset_n = SAMPLES_PER_MS * int(rng.integers((total_n - source_n) // SAMPLES_PER_MS + 1))
     drawn = _draw_mix_and_chain(cfg, total_n, rng)
+    if drawn["condition"] == "competing" and not _holds_a_segment(total_n, cfg):
+        # Under 0.4 s at the default: no segment fits the coverage cap. The row already has its dither.
+        drawn["condition"] = "clean"
     if pool is not None and drawn["condition"] in _NOISE_SET_OF:
         noise = pool.draw(drawn["condition"], clip.split, rng)
         row["noise_source_ids"] = [noise.source_id(data_dir())]
