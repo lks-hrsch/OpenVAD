@@ -16,21 +16,25 @@ from demand_support import make_demand_tree
 from noise_support import make_musan_tree, make_wham_tree, talker
 from openvad_train.dataset.codecs import DecodeError
 from openvad_train.dataset.config import DEMAND_CATEGORIES
+from openvad_train.dataset.mix import rms
 from openvad_train.dataset.noise import (
     MUSAN_CATEGORIES,
     OPEN_LANGUAGES,
     NoisePool,
+    Segment,
     TalkerPool,
     build_babble,
     build_ssn,
     category_of_demand,
     demand_channels,
     fit_lpc,
+    mix_competing,
     musan_noise_categories,
     talker_offset,
     wham_split,
 )
 from openvad_train.fetch.musan import musan_licences
+from rir_support import make_rir_tree
 
 
 @pytest.fixture
@@ -314,3 +318,83 @@ def test_ssn_is_stable_has_unit_rms_and_follows_the_rng():
 def test_an_all_pole_fit_to_silence_is_a_decode_error():
     with pytest.raises(DecodeError, match="silence"):
         fit_lpc(np.zeros(1000))
+
+
+def competing_setup(tmp_path):
+    """A 4 s foreground tone active from 1 to 3 s, a noise talker file and a RIR tree, all under `tmp_path`."""
+    t = np.arange(64000) / 16000
+    speech = (0.3 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+    active = np.zeros(64000, bool)
+    active[16000:48000] = True
+    speech[~active] = 0
+    sf.write(tmp_path / "talker.wav", (0.2 * np.random.default_rng(5).standard_normal(64000)).astype(np.float32), 16000)
+    make_rir_tree(tmp_path / "rirs")
+    return speech, active
+
+
+def segment(start_n, end_n, offset_n=0, lowpass_hz=3000.0, rir: str | None = "rirs/openslr28/room01_0.wav"):
+    return Segment("t", start_n, end_n, rir, lowpass_hz, "talker.wav", offset_n)
+
+
+def measured_tir(mixed, speech, active, segments):
+    track = mixed - speech
+    covered = np.zeros(len(speech), bool)
+    for s in segments:
+        covered[s.start_n : s.end_n] = True
+    assert not track[~covered].any()
+    return 20 * np.log10(rms(speech[active]) / rms(track[covered]))
+
+
+@pytest.mark.parametrize("tir_db", [0.0, 7.5, 15.0])
+def test_measured_tir_matches_the_drawn_one(tmp_path, tir_db):
+    speech, active = competing_setup(tmp_path)
+    segments = [segment(8000, 24000), segment(40000, 52000, offset_n=3000, lowpass_hz=1200.0)]
+    mixed = mix_competing(speech, active, segments, tir_db, tmp_path)
+    assert measured_tir(mixed, speech, active, segments) == pytest.approx(tir_db, abs=0.5)
+
+
+def high_band_share(x):
+    """The share of the energy of the first 2 s that lies above 4.5 kHz."""
+    spectrum = np.abs(np.fft.rfft(x[:32000])) ** 2
+    return spectrum[np.fft.rfftfreq(32000, 1 / 16000) > 4500].sum() / spectrum.sum()
+
+
+def test_the_talker_is_low_passed_and_reverberant_and_follows_its_segment(tmp_path):
+    speech, active = competing_setup(tmp_path)
+    low = mix_competing(speech, active, [segment(0, 32000, lowpass_hz=1000.0)], 5.0, tmp_path) - speech
+    high = mix_competing(speech, active, [segment(0, 32000, lowpass_hz=4000.0)], 5.0, tmp_path) - speech
+    assert high_band_share(low) < 1e-4
+    assert high_band_share(low) < high_band_share(high) / 20
+    assert not low[32000:].any()
+    dry = sf.read(tmp_path / "talker.wav", dtype="float32")[0][:32000]
+    assert not np.allclose(low[:32000] / rms(low[:32000]), dry / rms(dry), atol=0.1)  # the RIR changed it
+
+
+def test_a_different_offset_is_a_different_part_of_the_talker(tmp_path):
+    speech, active = competing_setup(tmp_path)
+    a = mix_competing(speech, active, [segment(0, 8000, offset_n=0)], 5.0, tmp_path)
+    b = mix_competing(speech, active, [segment(0, 8000, offset_n=20000)], 5.0, tmp_path)
+    assert not np.array_equal(a, b)
+    assert np.array_equal(a, mix_competing(speech, active, [segment(0, 8000, offset_n=0)], 5.0, tmp_path))
+
+
+@pytest.mark.parametrize(
+    ("segments", "message"),
+    [
+        ([], "at least one segment"),
+        ([segment(100, 100)], "empty"),
+        ([segment(60000, 70000)], "leaves"),
+        ([segment(0, 9000), segment(8000, 12000)], "overlaps"),
+        ([segment(0, 9000, rir=None)], "rir_id"),
+    ],
+)
+def test_a_malformed_segment_list_is_refused(tmp_path, segments, message):
+    speech, active = competing_setup(tmp_path)
+    with pytest.raises(ValueError, match=message):
+        mix_competing(speech, active, segments, 5.0, tmp_path)
+
+
+def test_a_silent_foreground_has_no_tir_to_measure(tmp_path):
+    speech, active = competing_setup(tmp_path)
+    with pytest.raises(ValueError, match="no speech"):
+        mix_competing(np.zeros_like(speech), active, [segment(0, 8000)], 5.0, tmp_path)

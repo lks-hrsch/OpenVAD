@@ -4,7 +4,7 @@
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 """The noise sources of the acoustic mix: the file pool (DEMAND, WHAM! and MUSAN), the reserved talkers and the
-babble and speech-shaped noise built from them.
+babble, speech-shaped noise and competing talkers built from them.
 """
 
 import csv
@@ -20,6 +20,7 @@ import soundfile as sf
 from scipy import signal
 from scipy.linalg import solve_toeplitz
 
+from openvad_train.dataset.channel import apply_rir, load_rir
 from openvad_train.dataset.codecs import DecodeError
 from openvad_train.dataset.mix import SAMPLE_RATE, read_span, rms
 from openvad_train.dataset.schema import Clip
@@ -244,3 +245,48 @@ def build_ssn(lpc: np.ndarray, n: int, rng: np.random.Generator) -> np.ndarray:
     """`n` samples of Gaussian white noise through the all-pole filter `lpc`, at unit RMS."""
     y = np.asarray(signal.lfilter([1.0], lpc, rng.standard_normal(n + _SSN_WARMUP_N)))[_SSN_WARMUP_N:]
     return (y / rms(y)).astype(np.float32)
+
+
+class Segment(NamedTuple):
+    """One competing-talker segment: samples `start_n` to `end_n` of the sample hold `source_path` read from
+    `source_offset_n` (the plan's `segments` entry), through `rir_id` and a low-pass at `lowpass_hz`.
+    """
+
+    clip_id: str
+    start_n: int
+    end_n: int
+    rir_id: str | None
+    lowpass_hz: float
+    source_path: str
+    source_offset_n: int
+
+
+def mix_competing(
+    speech: np.ndarray, active: np.ndarray, segments: list[Segment], tir_db: float, raw: Path
+) -> np.ndarray:
+    """`speech` plus the segments' talkers, each reverberated with its RIR and low-passed (ADR 0022), at `tir_db`.
+
+    The TIR is the RMS of `speech` over the `active` samples against the RMS of the talkers over the samples the
+    segments cover, which is how loud the competing talker is when it talks. Measured over `active` alone it would
+    fall with the coverage and can be zero where the talker does not overlap a word. Segments must not overlap.
+    `DecodeError` for a talker file that cannot be read.
+    """
+    if active.dtype != bool or active.shape != speech.shape:
+        raise ValueError("active must be a boolean mask the shape of speech")
+    if not segments:
+        raise ValueError("a competing-talker row needs at least one segment")
+    if not active.any() or not speech[active].any():
+        raise ValueError("no speech to measure the TIR against")
+    track, covered = np.zeros(len(speech), np.float32), np.zeros(len(speech), bool)
+    for seg in segments:
+        n = seg.end_n - seg.start_n
+        if not 0 <= seg.start_n < seg.end_n <= len(speech) or covered[seg.start_n : seg.end_n].any():
+            raise ValueError(f"segment {seg.start_n} to {seg.end_n} is empty, overlaps another or leaves {len(speech)}")
+        if seg.rir_id is None:
+            raise ValueError(f"{seg.clip_id}: a competing segment without a rir_id")
+        talker = apply_rir(read_span(str(raw / seg.source_path), seg.source_offset_n, n), load_rir(raw / seg.rir_id))
+        lowpass = signal.butter(4, seg.lowpass_hz, "lowpass", fs=SAMPLE_RATE, output="sos")
+        track[seg.start_n : seg.end_n] = signal.sosfiltfilt(lowpass, talker)
+        covered[seg.start_n : seg.end_n] = True
+    gain = rms(speech[active]) / (rms(track[covered]) * 10 ** (tir_db / 20))
+    return (speech + gain * track).astype(np.float32)
