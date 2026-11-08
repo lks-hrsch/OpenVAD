@@ -14,6 +14,7 @@ its model is what the quality bar and the failure rule judge, and a mapping woul
 import importlib
 import importlib.metadata
 import json
+import unicodedata
 import zipfile
 from collections.abc import Callable, Collection, Iterable
 from pathlib import Path
@@ -52,6 +53,10 @@ def _epitran(language: str) -> Callable[[str], list[str]]:
     return epitran.Epitran(EPITRAN_CODES[language]).trans_list
 
 
+def _is_punctuation(item: str) -> bool:
+    return all(unicodedata.category(c).startswith("P") for c in item)
+
+
 def epitran_release() -> str:
     """The installed Epitran's version, for the provenance of a lexicon it built."""
     return importlib.metadata.version("epitran")
@@ -69,13 +74,17 @@ def build_lexicon(
     `phones` is the acoustic model's inventory (`model_phones`); a word with a phone outside it is not in the result
     and is appended to `left_out` when that list is given, so the caller can count the words lost to a phone set that
     does not match. A word with no phones at all is skipped without being counted. `transliterate` replaces Epitran
-    (a word to its list of phones), for tests. Epitran can emit a bare combining mark as a phone (Catalan `cançó`);
-    with a model inventory such a word is left out, as it should be.
+    (a word to its list of phones), for tests.
+
+    Epitran passes punctuation through as if it were a phone (the `'` of Catalan `l'home`, the `-` of
+    `cinquanta-sis`), so every item made of punctuation alone is dropped before the inventory check; the word keeps
+    its written form as the key, which is what MFA looks up first. A bare combining mark is not punctuation and
+    stays (Catalan `cançó`), so with a model inventory such a word is left out, as it should be.
     """
     transliterate = transliterate or _epitran(language)
     lexicon: dict[str, str] = {}
     for word in dict.fromkeys(words):
-        pron = transliterate(word)
+        pron = [p for p in transliterate(word) if not _is_punctuation(p)]
         if not pron:
             continue
         if phones is not None and not all(p in phones for p in pron):

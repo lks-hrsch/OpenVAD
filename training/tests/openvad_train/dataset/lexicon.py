@@ -34,6 +34,14 @@ def test_without_an_inventory_every_word_with_phones_is_kept():
     assert build_lexicon(["aq"], "ca", transliterate=fake) == {"aq": "a q"}
 
 
+def test_punctuation_the_transliterator_passes_through_is_no_phone_and_the_word_keeps_its_spelling():
+    left_out: list[str] = []
+    curly = "a\u2019b"  # the typographic apostrophe Common Voice also writes
+    lex = build_lexicon(["l'home", "a-b", curly], "ca", phones=set("lhomeab"), transliterate=list, left_out=left_out)
+    assert lex == {"l'home": "l h o m e", "a-b": "a b", curly: "a b"}
+    assert left_out == []
+
+
 def test_a_word_with_no_phones_is_skipped_and_not_counted_as_left_out():
     left_out: list[str] = []
     assert build_lexicon(["-", "a"], "ca", phones={"a"}, transliterate=fake, left_out=left_out) == {"a": "a"}
@@ -83,3 +91,15 @@ def test_real_epitran_catalan_against_a_model_inventory():
     # `e` is the open ɛ in Epitran, which this inventory lacks; the stray cedilla of `cançó` is no phone either.
     assert lex == {"casa": "k a s a", "ull": "u ʎ"}
     assert left_out == ["pare", "cançó"]
+
+
+@pytest.mark.filterwarnings("ignore::SyntaxWarning")
+def test_real_epitran_catalan_apostrophe_and_hyphen_words_get_only_phones():
+    pytest.importorskip("epitran", reason="Epitran is in the `align` group: uv sync --all-packages --group align")
+    import epitran
+
+    words = ["l'home", "cinquanta-sis"]
+    inventory = {p for w in words for p in epitran.Epitran("cat-Latn").trans_list(w)} - {"'", "-"}
+    lex = build_lexicon(words, "ca", phones=inventory)
+    assert set(lex) == set(words)
+    assert all(p in inventory for pron in lex.values() for p in pron.split())

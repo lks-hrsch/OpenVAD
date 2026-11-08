@@ -833,9 +833,11 @@ def _limited(clips: list[Clip], max_clips: int | None) -> list[Clip]:
 
 def _with_lexicon(models: Models, clips: Iterable[Clip], language: str, words_dir: Path) -> Models:
     """`models` with a rule-based lexicon (`lexicon.build_lexicon`) for an acoustic model without a dictionary, built
-    from the words of every clip given, as `prepare_transcript` sends them and lower-cased as MFA reads them, and
-    limited to the model's phone inventory. It is written beside the words tables, since it is made from the
-    transcripts (ADR 0024), and the same clips give the same file, so a resumed run sees the same provenance.
+    from the words of every clip given, as `prepare_transcript` sends them and lower-cased as MFA folds them, and
+    limited to the model's phone inventory. A word with a hyphen or an apostrophe keeps that spelling: MFA looks a
+    whole word up before it splits it at those marks, and its pronunciation drops them. It is written beside the
+    words tables, since it is made from the transcripts (ADR 0024), and the same clips give the same file, so a
+    resumed run sees the same provenance.
     """
     words = sorted(
         {
