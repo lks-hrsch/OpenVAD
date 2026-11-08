@@ -3,10 +3,13 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+import fnmatch
 import io
 import tarfile
 import zipfile
+from collections import Counter
 from itertools import chain
+from pathlib import Path
 
 import pytest
 
@@ -20,37 +23,91 @@ WAV = wav_header(rate=16000, channels=1, bits=16, data=4) + bytes(4)
 REAL = rirs._REAL
 
 
+REAL_NAMES = (Path(__file__).parent.parent.parent / "support/openslr28_real_names.txt").read_text().split()
+REAL_RIRS = [n for n in REAL_NAMES if n.endswith(".wav") and "_noise_" not in n]
+
+
+def test_the_listing_is_the_archives_real_rirs_and_noises():
+    # The 325 real RIRs of RIRS_NOISES (its README), the lists and the noises that sit beside them.
+    assert len(REAL_RIRS) == 325
+    assert {"rir_list", "noise_list"} <= set(REAL_NAMES)
+    assert len(REAL_NAMES) == len(set(REAL_NAMES)) == 419
+
+
+@pytest.mark.parametrize("name", REAL_RIRS)
+def test_every_real_rir_maps_to_exactly_one_room(name):
+    patterns = [row for row in rirs._room_patterns() if fnmatch.fnmatchcase(name, row[0])]
+    assert len({room for _, room in patterns}) == 1
+    assert rirs.openslr_room(name) is not None
+
+
+def test_the_real_rirs_fill_exactly_the_expected_openslr_rooms():
+    found = Counter(f"openslr28-{rirs.openslr_room(n)}" for n in REAL_RIRS)
+    assert found == {room: n for room, n in rirs.EXPECTED_ROOMS.items() if room.startswith("openslr28-")}
+    assert len(found) == 16
+
+
+def test_the_expected_rooms_hold_the_pinned_rir_counts():
+    assert sum(n for room, n in rirs.EXPECTED_ROOMS.items() if room.startswith("but-")) == 2325
+    assert sum(room.startswith("but-") for room in rirs.EXPECTED_ROOMS) == 9
+    assert sum(n for room, n in rirs.EXPECTED_ROOMS.items() if room.startswith("openslr28-")) == 325
+
+
 @pytest.mark.parametrize(
-    ("name", "room"),
+    "group",
     [
-        ("air_type1_air_binaural_aula_carolina_1_3_135_3.wav", "air-aula_carolina"),
-        ("air_type1_air_binaural_booth_0_1.wav", "air-booth"),
-        ("air_type1_air_binaural_stairway_1_2_105.wav", "air-stairway"),
-        ("air_type1_air_phone_stairway1_hfrp.wav", "air-stairway"),
-        ("air_type1_air_phone_bt_corridor_hhp.wav", "air-corridor"),
-        ("air_type1_air_phone_lecture_hhp.wav", "air-lecture"),
-        ("RVB2014_type1_rir_mediumroom2_far_anglb.wav", "rvb-mediumroom2"),
-        ("RVB2014_type2_rir_simroom3_near_angla.wav", "rvb-simroom3"),
-        ("RWCP_type1_rir_circle_ane_imp000.wav", "rwcp-ane"),
-        ("RWCP_type2_rir_cirline_e2b_imp070.wav", "rwcp-e2b"),
-        ("RWCP_type3_rir_cirline_ofc_imp_rev.wav", "rwcp-ofc"),
-        ("RWCP_type4_rir_m10l.wav", "rwcp-type4"),
+        [
+            "RWCP_type1_rir_circle_e1a_imp090.wav",
+            "RWCP_type1_rir_circle_e1b_imp000.wav",
+            "RWCP_type1_rir_circle_e1c_imp180.wav",
+        ],
+        ["RWCP_type2_rir_cirline_e2a_imp050.wav", "RWCP_type2_rir_cirline_e2b_imp050.wav"],
+        ["RWCP_type1_rir_circle_e1b_imp000.wav", "RWCP_type2_rir_cirline_e2b_imp050.wav"],
+        ["RWCP_type1_rir_circle_ane_imp000.wav", "RWCP_type2_rir_cirline_ane_imp050.wav"],
+        ["RWCP_type1_rir_cirline_ofc_imp050.wav", "RWCP_type3_rir_cirline_ofc_imp_rev.wav"],
+        ["air_type1_air_binaural_lecture_0_1.wav", "air_type1_air_phone_lecture1_hhp.wav"],
+        [
+            "air_type1_air_binaural_stairway_1_1_0.wav",
+            "air_type1_air_phone_stairway2_hfrp.wav",
+            "air_type1_air_phone_bt_stairway_hhp.wav",
+        ],
+        ["RVB2014_type1_rir_smallroom1_far_angla.wav", "RVB2014_type2_rir_simroom3_near_anglb.wav"],
     ],
 )
-def test_openslr_room_is_read_off_the_name(name, room):
-    assert rirs.openslr_room(name) == room
+def test_the_variants_of_one_physical_room_share_an_id(group):
+    assert len({rirs.openslr_room(n) for n in group}) == 1
 
 
 @pytest.mark.parametrize(
-    "name", ["RWCP_type5_noise_cirline_ofc_ambient1.wav", "RVB2014_type1_noise_simroom1_1.wav", "rir_list"]
+    "pair",
+    [
+        ("RWCP_type1_rir_cirline_jr1_imp050.wav", "RWCP_type1_rir_cirline_jr2_imp060.wav"),
+        ("RWCP_type1_rir_cirline_ofc_imp050.wav", "RWCP_type1_rir_cirline_jr1_imp050.wav"),
+        ("air_type1_air_binaural_office_0_1.wav", "air_type1_air_binaural_meeting_0_1.wav"),
+    ],
+)
+def test_rooms_the_sources_name_apart_get_their_own_ids(pair):
+    assert len({rirs.openslr_room(n) for n in pair}) == 2
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["RWCP_type5_noise_cirline_ofc_ambient1.wav", "RVB2014_type1_noise_simroom1_1.wav", "rir_list", "noise_list"],
 )
 def test_openslr_noises_and_lists_have_no_room(name):
     assert rirs.openslr_room(name) is None
 
 
-def test_openslr_rir_of_no_known_pattern_is_an_error():
-    with pytest.raises(ValueError, match="which room"):
-        rirs.openslr_room("new_database_rir_1.wav")
+@pytest.mark.parametrize("name", ["new_database_rir_1.wav", "air_type1_air_phone_garage_hhp.wav"])
+def test_openslr_rir_of_no_known_pattern_is_an_error(name):
+    with pytest.raises(ValueError, match="exactly one room"):
+        rirs.openslr_room(name)
+
+
+def test_a_name_matching_two_patterns_is_an_error(monkeypatch):
+    monkeypatch.setattr(rirs, "_room_patterns", lambda: [("air_*", "a"), ("*_booth_*", "b")])
+    with pytest.raises(ValueError, match="exactly one room"):
+        rirs.openslr_room("air_type1_air_binaural_booth_0_1.wav")
 
 
 def archive_bytes(but: dict[str, bytes], openslr: dict[str, bytes]) -> dict[str, bytes]:
@@ -92,6 +149,12 @@ BUT = {
     "./VUT_FIT_L207/MicID01/SpkID01_20171223_S/01/mic_meta.txt": b"meta",
     "./VUT_FIT_Q301/MicID02/SpkID01_20171223_S/05/RIR/IR_sweep.v01.wav": WAV,
 }
+FAKE_ROOMS = {
+    "but-VUT_FIT_L207": 2,
+    "but-VUT_FIT_Q301": 1,
+    "openslr28-air-booth": 1,
+    "openslr28-rwcp-anechoic": 2,
+}
 OPENSLR = {
     "RIRS_NOISES/README": b"readme",
     f"{REAL}air_type1_air_binaural_booth_0_1.wav": WAV,
@@ -107,6 +170,7 @@ OPENSLR = {
 @pytest.fixture
 def fetched(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENVAD_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(rirs, "EXPECTED_ROOMS", FAKE_ROOMS)
     served = fake_download(monkeypatch, BUT, OPENSLR)
     rirs.fetch_rirs()
     return served
@@ -161,7 +225,7 @@ def test_the_index_lists_every_rir_with_its_room_and_feeds_the_pool(fetched):
         "but-VUT_FIT_L207",
         "but-VUT_FIT_Q301",
         "openslr28-air-booth",
-        "openslr28-rwcp-ane",
+        "openslr28-rwcp-anechoic",
     }
     assert all((out / line.split("\t")[0]).is_file() for line in lines[1:])
     pool = RirPool(out)
@@ -171,6 +235,9 @@ def test_the_index_lists_every_rir_with_its_room_and_feeds_the_pool(fetched):
 
 def test_fetch_does_not_extract_again_after_its_markers(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENVAD_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        rirs, "EXPECTED_ROOMS", {k: v for k, v in FAKE_ROOMS.items() if k[:3] != "but"} | {"but-VUT_FIT_OLD": 1}
+    )
     fake_download(monkeypatch, BUT, OPENSLR)
     out = common.raw_dir("rirs")
     old = out / "but/VUT_FIT_OLD/m/s/1/RIR/old.wav"
@@ -187,8 +254,28 @@ def test_fetch_does_not_extract_again_after_its_markers(monkeypatch, tmp_path):
 def test_a_new_openslr_rir_name_stops_the_fetch(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENVAD_DATA_DIR", str(tmp_path))
     fake_download(monkeypatch, BUT, OPENSLR | {f"{REAL}mystery_rir_1.wav": WAV})
-    with pytest.raises(ValueError, match="which room"):
+    with pytest.raises(ValueError, match="exactly one room"):
         rirs.fetch_rirs()
+
+
+@pytest.mark.parametrize(
+    ("expected", "complaint"),
+    [
+        (FAKE_ROOMS | {"but-VUT_FIT_L207": 3}, "but-VUT_FIT_L207: 2 of 3"),
+        (FAKE_ROOMS | {"but-VUT_FIT_E112": 1}, "but-VUT_FIT_E112: 0 of 1"),
+        ({k: v for k, v in FAKE_ROOMS.items() if k != "openslr28-air-booth"}, "openslr28-air-booth: 1 of 0"),
+    ],
+    ids=["short room", "missing room", "extra room"],
+)
+def test_a_tree_that_is_not_the_pinned_set_fails_and_writes_no_manifest(monkeypatch, tmp_path, expected, complaint):
+    monkeypatch.setenv("OPENVAD_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(rirs, "EXPECTED_ROOMS", expected)
+    fake_download(monkeypatch, BUT, OPENSLR)
+    with pytest.raises(RuntimeError, match=complaint):
+        rirs.fetch_rirs()
+    out = common.raw_dir("rirs")
+    assert not (out / "manifest.json").exists()
+    assert not (out / "index.tsv").exists()
 
 
 def test_rirs_is_a_registered_fetcher():

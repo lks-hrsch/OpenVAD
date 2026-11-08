@@ -1,0 +1,19 @@
+pattern	room	source
+air_type1_air_binaural_aula_carolina_*	air-aula-carolina	AIR 1.4 load_air.m (Jeub et al., DSP 2009): the Aula Carolina, a hall
+air_type1_air_*_booth_*	air-booth	AIR 1.4 load_air.m: room type booth
+air_type1_air_*_lecture*	air-lecture	AIR 1.4 load_air.m: room types lecture and lecture1, merged since the documentation does not say they differ
+air_type1_air_*_meeting_*	air-meeting	AIR 1.4 load_air.m: room type meeting, binaural and phone
+air_type1_air_*_office_*	air-office	AIR 1.4 load_air.m: room type office, binaural and phone
+air_type1_air_*_stairway*	air-stairway	AIR 1.4 load_air.m: room types stairway, stairway1 and stairway2, merged since the documentation does not say they differ
+air_type1_air_*_corridor_*	air-corridor	AIR 1.4 load_air.m: room type corridor
+air_type1_air_phone_bathroom_*	air-bathroom	AIR 1.4 load_air.m: room type bathroom
+air_type1_air_phone_kitchen_*	air-kitchen	AIR phone files named kitchen; not in the room list of load_air.m
+RVB2014_*_rir_*	rvb2014	REVERB challenge 2014 RIRs (small, medium, large and sim rooms): one id, since no source here separates them into rooms of their own
+RWCP_*_rir_circle_ane_*	rwcp-anechoic	RWCP-SSD micarray index (data1): ANE, anechoic room, measured with the circle and the cirline array
+RWCP_*_rir_cirline_ane_*	rwcp-anechoic	RWCP-SSD micarray index (data3): ANE, the same anechoic room
+RWCP_*_rir_circle_e1?_*	rwcp-echo	RWCP-SSD micarray index (data1): E1A, E1B, E1C, "Echo room (cylinder)" A to C, variants of one room
+RWCP_*_rir_cirline_e2?_*	rwcp-echo	RWCP-SSD micarray index (data1): E2A, E2B, "Echo room (panel)" A and B; the LREC 2000 paper describes one variable-reverberation room, so merged with E1
+RWCP_*_rir_cirline_ofc_*	rwcp-conference	RWCP-SSD micarray index: OFC, conference room (data1, data3, data5)
+RWCP_*_rir_cirline_jr1_*	rwcp-tatami-large	RWCP-SSD micarray index: JR1, "Tatami-floored room (L)"
+RWCP_*_rir_cirline_jr2_*	rwcp-tatami-small	RWCP-SSD micarray index: JR2, "Tatami-floored room (S)", a smaller room than JR1
+RWCP_type4_rir_*	rwcp-type4	left and right channels at angles, not in the micarray index; no source here names its room, so it gets an id of its own

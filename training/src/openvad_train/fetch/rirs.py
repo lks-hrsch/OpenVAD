@@ -10,9 +10,13 @@ and the noises of RIRS_NOISES are not wanted. The fetcher writes `index.tsv`, on
 measured in, so the dataset stage never walks the tree.
 """
 
+import csv
+import fnmatch
 import re
 import tarfile
 import zipfile
+from collections import Counter
+from functools import cache
 from pathlib import Path
 
 from openvad_train.fetch.common import cache_dir, download_ranges, raw_dir, tar_filter, write_manifest
@@ -35,26 +39,56 @@ OPENSLR_MD5 = "e6f48e257286e05de56413b4779d8ffb"
 _BUT_RIR = re.compile(r"(?:\./)?[^/]+/[^/]+/[^/]+/[^/]+/RIR/[^/]+\.wav")
 _REAL = "RIRS_NOISES/real_rirs_isotropic_noises/"
 # The 325 real RIRs of RIRS_NOISES come from three databases (AIR, the 2014 REVERB challenge, RWCP) and carry no
-# room column, so the room is read off the file name: the position, angle and microphone numbers are dropped.
-_OPENSLR_ROOMS = (
-    ("air", re.compile(r"air_type1_air_(?:binaural|phone)_(?:bt_)?(.+?)(?:\d?_(?:hhp|hfrp)|(?:_\d+)+)\.wav")),
-    ("rvb", re.compile(r"RVB2014_type\d_rir_(\w+?room\d)_(?:near|far)_\w+\.wav")),
-    ("rwcp", re.compile(r"RWCP_type\d_rir_(?:circle|cirline)_([a-z0-9]+)_imp\w*\.wav")),
-    ("rwcp", re.compile(r"RWCP_(type4)_rir_\w+\.wav")),
-)
+# physical room: the committed table maps each file name pattern to a room, with its source on every line. The
+# room-id of the archive's own `rir_list` is not used: it is a Kaldi grouping, and it splits RWCP's E1A to E1C.
+OPENSLR_ROOMS = Path(__file__).with_name("openslr28_rooms.tsv")
+# What a complete extraction holds, from the archives pinned above: RIRs per room, rooms prefixed with their set.
+EXPECTED_ROOMS: dict[str, int] = {
+    "but-Hotel_SkalskyDvur_ConferenceRoom2": 124,
+    "but-Hotel_SkalskyDvur_Room112": 155,
+    "but-VUT_FIT_C236": 310,
+    "but-VUT_FIT_D105": 434,
+    "but-VUT_FIT_E112": 62,
+    "but-VUT_FIT_L207": 465,
+    "but-VUT_FIT_L212": 186,
+    "but-VUT_FIT_L227": 434,
+    "but-VUT_FIT_Q301": 155,
+    "openslr28-air-aula-carolina": 11,
+    "openslr28-air-bathroom": 2,
+    "openslr28-air-booth": 6,
+    "openslr28-air-corridor": 3,
+    "openslr28-air-kitchen": 2,
+    "openslr28-air-lecture": 16,
+    "openslr28-air-meeting": 12,
+    "openslr28-air-office": 9,
+    "openslr28-air-stairway": 46,
+    "openslr28-rvb2014": 36,
+    "openslr28-rwcp-anechoic": 41,
+    "openslr28-rwcp-conference": 15,
+    "openslr28-rwcp-echo": 67,
+    "openslr28-rwcp-tatami-large": 14,
+    "openslr28-rwcp-tatami-small": 7,
+    "openslr28-rwcp-type4": 38,
+}
+
+
+@cache
+def _room_patterns() -> list[tuple[str, str]]:
+    with OPENSLR_ROOMS.open() as f:
+        return [(row["pattern"], row["room"]) for row in csv.DictReader(f, delimiter="\t")]
 
 
 def openslr_room(name: str) -> str | None:
     """The room of a file of `real_rirs_isotropic_noises`, None for a noise or a list.
 
-    A RIR of no known pattern is an error, so a changed upstream cannot slip a room in unnoticed.
+    A RIR that matches no pattern or more than one is an error, so a changed upstream cannot slip a room in.
     """
     if "_noise_" in name or not name.endswith(".wav"):
         return None
-    for database, pattern in _OPENSLR_ROOMS:
-        if m := pattern.fullmatch(name):
-            return f"{database}-{m[1]}"
-    raise ValueError(f"{name}: cannot tell which room this RIR was measured in")
+    rooms = {room for pattern, room in _room_patterns() if fnmatch.fnmatchcase(name, pattern)}
+    if len(rooms) != 1:
+        raise ValueError(f"{name}: expected exactly one room in {OPENSLR_ROOMS.name}, got {sorted(rooms)}")
+    return rooms.pop()
 
 
 def _download(url: str, dest: Path, size: int, *, md5: str | None = None, sha256: str | None = None) -> Path:
@@ -94,6 +128,24 @@ def rir_index(out: Path) -> list[tuple[str, str]]:
     return rows
 
 
+def _check_complete(index: list[tuple[str, str]]) -> None:
+    """The index holds exactly the RIRs and rooms of the pinned archives, else no manifest is written.
+
+    A short extraction would otherwise be recorded as the set, and the room split, which ranks the rooms present,
+    would move for every sample.
+    """
+    found = Counter(room for _, room in index)
+    if found != EXPECTED_ROOMS:
+        wrong = sorted(
+            f"{room}: {found[room]} of {EXPECTED_ROOMS.get(room, 0)}"
+            for room in found | EXPECTED_ROOMS
+            if found[room] != EXPECTED_ROOMS.get(room, 0)
+        )
+        raise RuntimeError(
+            f"the RIR tree is not the pinned set (found of expected): {'; '.join(wrong)}; delete it to refetch"
+        )
+
+
 def fetch_rirs() -> None:
     out = raw_dir("rirs")
     out.mkdir(parents=True, exist_ok=True)
@@ -112,6 +164,7 @@ def fetch_rirs() -> None:
             extract(archive, out / subdir)
             marker.touch()
     index = rir_index(out)
+    _check_complete(index)
     (out / "index.tsv").write_text("path\troom\n" + "".join(f"{path}\t{room}\n" for path, room in index))
     rooms: dict[str, set[str]] = {"but": set(), "openslr28": set()}
     for _, room in index:
