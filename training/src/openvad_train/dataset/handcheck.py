@@ -11,7 +11,9 @@ label blind in Praat, a 16 kHz WAV and an empty TextGrid (one tier `speech`, not
 (ADR 0024), under `work/<config>/handcheck/`:
 
 - `clips/`: the only folder the labeller opens. Files are named `h001.wav` and `h001.TextGrid`, numbered in `rank`
-  order across languages, so a name carries neither the language, the source nor the score.
+  order across languages, so a name carries no MFA boundary and no score (the spec asks for labels blind to MFA).
+  The order can group languages: a language whose clips have high ranks (Italian in the pilot, h056 to h075) comes
+  last. The language is audible anyway.
 - `key.json`: file id to clip, language, score, and the MFA intervals and mask that scoring needs; not in `clips/`.
 - `report.json`: the output of `handcheck-score`.
 """
