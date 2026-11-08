@@ -23,7 +23,7 @@ import pytest
 
 from align_support import FIXTURES, Killed, install, make_clip
 from mfa_source_support import make_sc_tree
-from openvad_train.dataset import align, index
+from openvad_train.dataset import align, index, lexicon
 from openvad_train.dataset.align import (
     DropRules,
     MfaFailedError,
@@ -36,7 +36,7 @@ from openvad_train.dataset.align import (
     run_align,
     walk_cap,
 )
-from openvad_train.dataset.config import SLICE, work_dir
+from openvad_train.dataset.config import PILOT, SLICE, work_dir
 from openvad_train.dataset.models import load_models
 from openvad_train.dataset.parquet_io import read_parquet, write_parquet
 from openvad_train.dataset.schema import Clip, Timing, rank
@@ -1067,6 +1067,7 @@ def test_models_are_downloaded_by_version_once_and_their_versions_are_read_from_
         ("dictionary", "german_mfa", "3.0.0"),
         ("g2p", "german_mfa", "3.0.0"),
     ]
+    assert models.dictionary is not None
     assert models.dictionary.name == "german_mfa.dict"
     assert models.acoustic.parent.parts[-2:] == ("german_mfa", "3.0.0")
     assert models.info["acoustic"]["version"] == "read-acoustic"
@@ -1077,6 +1078,19 @@ def test_models_are_downloaded_by_version_once_and_their_versions_are_read_from_
     align.fetch_models(tools, spec)
     assert len(downloads) == 3
     assert "g2p" not in align.fetch_models(tools, load_models()["it"]).info
+
+
+def test_a_model_without_a_dictionary_is_fetched_alone(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENVAD_DATA_DIR", str(tmp_path))
+    placed = tmp_path / "models/mfa/acoustic/vx_model/rev1/vx_model.zip"
+    placed.parent.mkdir(parents=True)
+    with zipfile.ZipFile(placed, "w") as z:
+        z.writestr("vx_model/meta.json", json.dumps({"version": "2.0.0"}))
+    monkeypatch.setattr(align, "_mfa", lambda *a: pytest.fail("nothing to download"))
+    spec = dataclasses.replace(load_models()["ca"], acoustic="vx_model", acoustic_version="rev1")
+    models = align.fetch_models(align.Tools(Path("/repo"), "3.4.3", "a" * 40), spec)
+    assert (models.acoustic, models.dictionary, models.g2p) == (placed, None, None)
+    assert set(models.info) == {"acoustic"}
 
 
 # ---------------------------------------------------------------------------------------------------- the pilot
@@ -1102,3 +1116,71 @@ def test_the_clip_limit_takes_the_calibration_selection_and_is_part_of_the_state
     for other in (6, None):
         with pytest.raises(StateMismatchError):
             run_align(stage.cfg, ["de"], max_clips=other)
+
+
+def fake_epitran(word: str) -> list[str]:
+    return list(word)
+
+
+@pytest.fixture
+def pilot(stage, monkeypatch):
+    """The stage with the pilot configuration, an override model on disk whose inventory is `a` and `b`, and a
+    fetch that gives it no dictionary; `seen` collects the dictionary text of every MFA run.
+    """
+    stage.cfg = dataclasses.replace(PILOT, sources=("fake",))
+    acoustic = stage.root / "models/mfa/acoustic/vx_model/rev1/vx_model.zip"
+    acoustic.parent.mkdir(parents=True)
+    with zipfile.ZipFile(acoustic, "w") as z:
+        z.writestr("vx_model/meta.json", json.dumps({"version": "2.0.0", "phones": ["a", "b"]}))
+
+    def fetch(_tools, spec):
+        stage.fetched.append((spec.language, spec.acoustic, spec.acoustic_version, spec.dictionary))
+        info = {"acoustic": {"name": spec.acoustic, "release": spec.acoustic_version, "version": "2.0.0"}}
+        return align.Models(acoustic, None, None, info)
+
+    stage.seen = []
+
+    def run(tools, models, *rest):
+        stage.seen.append(models.dictionary.read_text(encoding="utf-8"))
+        stage.fake(tools, models, *rest)
+
+    monkeypatch.setattr(align, "fetch_models", fetch)
+    monkeypatch.setattr(align, "_run_mfa", run)
+    monkeypatch.setattr(lexicon, "_epitran", lambda language: fake_epitran)
+    monkeypatch.setattr(lexicon, "epitran_release", lambda: "1.26.0")
+    return stage
+
+
+def test_an_override_without_a_dictionary_aligns_with_a_lexicon_built_from_the_clips(pilot):
+    clips = [make_clip(pilot.root, f"s{i}/c0", f"s{i}", t, language="ca") for i, t in enumerate(["Ab ba", "ab CC"])]
+    write_index(pilot, clips)
+    run_align(pilot.cfg, ["ca"], models={"ca": ("vx_model", "rev1")})
+    assert pilot.fetched == [("ca", "vx_model", "rev1", "")]
+    # Lower-cased as MFA reads the corpus; `cc` has a phone outside the inventory and is left out.
+    assert set(pilot.seen) == {"ab\ta b\nba\tb a\n"}
+    lexicon_file = work_dir(pilot.cfg) / "words/fake/ca/lexicon.dict"
+    assert lexicon_file.read_text(encoding="utf-8") == pilot.seen[0]
+    rows = [r for rows in tables(pilot)["words"].values() for r in rows]
+    models = json.loads(rows[0]["provenance"])["models"]
+    assert models["acoustic"]["override"] is True
+    assert models["dictionary"]["name"] == "epitran:cat-Latn"
+    assert models["dictionary"]["release"] == "1.26.0"
+    assert (models["dictionary"]["words"], models["dictionary"]["left_out"]) == (2, 1)
+    assert len(models["dictionary"]["sha256"]) == 64
+    state = json.loads((work_dir(pilot.cfg) / "words/fake/ca/state.json").read_text())
+    assert json.loads(state["provenance"])["models"] == models
+    assert manifest(pilot)["model_overrides"] == {"ca": "vx_model@rev1"}
+    assert manifest(pilot)["per_source"]["fake"]["ca"]["models"] == models
+
+
+def test_a_model_override_is_refused_outside_the_pilot_and_without_the_model_on_disk(pilot):
+    write_index(pilot, [make_clip(pilot.root, "s0/c0", "s0", "ab", language="ca")])
+    pilot.cfg = dataclasses.replace(pilot.cfg, name="openvad-v1")
+    with pytest.raises(ValueError, match="only for the pilot"):
+        run_align(pilot.cfg, ["ca"], models={"ca": ("vx_model", "rev1")})
+    pilot.cfg = dataclasses.replace(PILOT, sources=("fake",))
+    with pytest.raises(FileNotFoundError, match="Hugging Face"):
+        run_align(pilot.cfg, ["ca"], models={"ca": ("vx_model", "rev2")})
+    with pytest.raises(ValueError, match="no row for language 'xx'"):
+        run_align(pilot.cfg, ["ca"], models={"xx": ("vx_model", "rev1")})
+    assert pilot.fake.calls == []

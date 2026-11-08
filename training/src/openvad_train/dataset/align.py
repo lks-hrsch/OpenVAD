@@ -43,8 +43,9 @@ import numpy as np
 import polars as pl
 import soundfile as sf
 
+from openvad_train.dataset import lexicon
 from openvad_train.dataset.codecs import DecodeError, decode_16k
-from openvad_train.dataset.config import CONFIGS, SPEAKER_CAP_HOURS, BuildConfig, work_dir
+from openvad_train.dataset.config import CONFIGS, PILOT, SPEAKER_CAP_HOURS, BuildConfig, work_dir
 from openvad_train.dataset.index import SOURCES
 from openvad_train.dataset.labels import SAMPLES_PER_FRAME, apply_gap_rule, speech_ratio
 from openvad_train.dataset.models import MODELS_TSV, ModelSpec, load_models, spec_for
@@ -169,7 +170,7 @@ def _mfa(tools: Tools, mfa_root: Path, *args: str) -> None:
 
 class Models(NamedTuple):
     acoustic: Path
-    dictionary: Path
+    dictionary: Path | None  # None for a model without one, which gets a rule-based lexicon in `_align_language`
     g2p: Path | None
     info: dict  # name, release, version (as read from the model, None for a dictionary) and SHA-256 of each
 
@@ -203,7 +204,7 @@ def _model_version(path: Path) -> str | None:
 def fetch_models(tools: Tools, spec: ModelSpec) -> Models:
     wanted = {
         "acoustic": (spec.acoustic, spec.acoustic_version),
-        "dictionary": (spec.dictionary, spec.dictionary_version),
+        **({"dictionary": (spec.dictionary, spec.dictionary_version)} if spec.dictionary else {}),
         **({"g2p": (spec.g2p, spec.g2p_version)} if spec.g2p and spec.g2p_version else {}),
     }
     paths = {kind: _fetch_model(tools, kind, name, release) for kind, (name, release) in wanted.items()}
@@ -216,7 +217,7 @@ def fetch_models(tools: Tools, spec: ModelSpec) -> Models:
         }
         for kind, (name, release) in wanted.items()
     }
-    return Models(paths["acoustic"], paths["dictionary"], paths.get("g2p"), info)
+    return Models(paths["acoustic"], paths.get("dictionary"), paths.get("g2p"), info)
 
 
 def _provenance(tools: Tools, models: Models) -> str:
@@ -821,6 +822,35 @@ def _limited(clips: list[Clip], max_clips: int | None) -> list[Clip]:
     return clips if max_clips is None else calibration_clips(clips, max_clips)
 
 
+def _with_lexicon(models: Models, clips: Iterable[Clip], language: str, words_dir: Path) -> Models:
+    """`models` with a rule-based lexicon (`lexicon.build_lexicon`) for an acoustic model without a dictionary, built
+    from the words of every clip given, as `prepare_transcript` sends them and lower-cased as MFA reads them, and
+    limited to the model's phone inventory. It is written beside the words tables, since it is made from the
+    transcripts (ADR 0024), and the same clips give the same file, so a resumed run sees the same provenance.
+    """
+    words = sorted(
+        {
+            w.lower()
+            for c in clips
+            for w in (prepare_transcript(c.transcript or "", language) or "").split()
+            if w != "<unk>"
+        }
+    )
+    left_out: list[str] = []
+    entries = lexicon.build_lexicon(words, language, lexicon.model_phones(models.acoustic), left_out=left_out)
+    path = words_dir / "lexicon.dict"
+    _write_atomically(path, "".join(f"{w}\t{p}\n" for w, p in sorted(entries.items())))
+    info = {
+        "name": f"epitran:{lexicon.EPITRAN_CODES[language]}",
+        "release": lexicon.epitran_release(),
+        "version": None,
+        "sha256": file_hash(path, "sha256"),
+        "words": len(entries),
+        "left_out": len(left_out),
+    }
+    return models._replace(dictionary=path, info=models.info | {"dictionary": info})
+
+
 def _align_language(
     cfg: BuildConfig,
     source: str,
@@ -829,7 +859,8 @@ def _align_language(
     tools: Tools,
     models: Models,
     max_clips: int | None = None,
-) -> None:
+) -> Models:
+    """Align one language of one source; returns the models it used, with the lexicon if it built one."""
     base = work_dir(cfg)
     words_dir = base / "words" / source / language
     # Reserved speakers feed babble and competing talkers only and are never foreground (R-i), so they are not aligned.
@@ -845,6 +876,8 @@ def _align_language(
     ]
     batches = list(make_batches(first_round, BATCH_HOURS))
     calibration = calibration_clips(c for group in full.values() for c in group)
+    if models.dictionary is None:
+        models = _with_lexicon(models, (c for group in full.values() for c in group), language, words_dir)
     provenance = _provenance(tools, models)
     state = {
         "provenance": provenance,
@@ -871,22 +904,48 @@ def _align_language(
 
     rules = _calibrate(source, language, calibration, words_dir, run) if batches else None
     if rules is None:
-        return
+        return models
     for i, batch in enumerate(batches):
         name = f"{i:05d}"
         if (words_dir / f"{name}.parquet").is_file():
             log.info("%s/%s batch %s is finished", source, language, name)
             continue
         _align_batch(batch, full, name, source, language, words_dir, rules, run)
+    return models
 
 
-def run_align(cfg: BuildConfig, languages: list[str] | None = None, max_clips: int | None = None) -> None:
+def run_align(
+    cfg: BuildConfig,
+    languages: list[str] | None = None,
+    max_clips: int | None = None,
+    models: dict[str, tuple[str, str]] | None = None,
+) -> None:
     """Align the MFA sources of `cfg`, one MFA run per batch, resumable per batch; see the module docstring.
 
     `max_clips` limits every language to that many clips, taken as the calibration batch takes them, for the pilot.
+    `models` maps a language to an acoustic model and release that replace its row of `mfa_models.tsv`, for the pilot
+    only and never a change of that row; such a model has no dictionary and gets a rule-based lexicon. It is not
+    fetched by `mfa model download` (VoxCommunis models are on Hugging Face), so it must already be in place under
+    `models/mfa/acoustic/<name>/<release>/`.
     """
+    models = models or {}
+    if models and cfg.name != PILOT.name:
+        raise ValueError(f"a model override is only for the pilot ({PILOT.name}), not {cfg.name}")
     tools = check_tools()
     table = load_models()
+    if bad := [lang for lang in models if lang not in table]:
+        raise ValueError(f"no row for language {bad[0]!r} in {MODELS_TSV.name}; have {sorted(table)}")
+    for name, release in models.values():
+        if not (data_dir() / "models/mfa/acoustic" / name / release).is_dir():
+            raise FileNotFoundError(
+                f"{name} {release} is not in {data_dir() / 'models/mfa/acoustic'}: download it from Hugging Face first"
+            )
+    overrides = {
+        lang: dataclasses.replace(
+            table[lang], acoustic=name, acoustic_version=release, dictionary="", g2p=None, g2p_version=None
+        )
+        for lang, (name, release) in models.items()
+    }
     unknown = [n for n in cfg.sources if n not in SOURCES]
     if unknown:
         raise ValueError(f"no index adapter for source {unknown[0]!r}; have {sorted(SOURCES)}")
@@ -900,28 +959,39 @@ def run_align(cfg: BuildConfig, languages: list[str] | None = None, max_clips: i
             if languages is None or c.language in languages:
                 by_language[c.language].append(c)
         per_source[name] = dict(by_language)
-    specs = {lang: spec_for(table, lang) for by_language in per_source.values() for lang in by_language}
+    specs = {
+        lang: overrides[lang] if lang in overrides else spec_for(table, lang)
+        for by_language in per_source.values()
+        for lang in by_language
+    }
     if languages is not None and (bad := [lang for lang in languages if lang not in table]):
         raise ValueError(f"no row for language {bad[0]!r} in {MODELS_TSV.name}; have {sorted(table)}")
 
     fetched: dict[str, Models] = {}
+    used: dict[tuple[str, str], Models] = {}  # per source and language, with the lexicon where one was built
     try:
         for name, by_language in per_source.items():
             for language in sorted(by_language):
                 if language not in fetched:
-                    fetched[language] = fetch_models(tools, specs[language])
-                _align_language(cfg, name, language, by_language[language], tools, fetched[language], max_clips)
+                    m = fetch_models(tools, specs[language])
+                    if language in overrides:
+                        m = m._replace(info=m.info | {"acoustic": m.info["acoustic"] | {"override": True}})
+                    fetched[language] = m
+                used[(name, language)] = _align_language(
+                    cfg, name, language, by_language[language], tools, fetched[language], max_clips
+                )
     finally:
         _build_dropped(base)
-    _write_manifest(cfg, tools, per_source, fetched, max_clips)
+    _write_manifest(cfg, tools, per_source, used, max_clips, models)
 
 
 def _write_manifest(
     cfg: BuildConfig,
     tools: Tools,
     per_source: dict[str, dict[str, list[Clip]]],
-    fetched: dict[str, Models],
+    used: dict[tuple[str, str], Models],
     max_clips: int | None,
+    overrides: dict[str, tuple[str, str]],
 ) -> None:
     base = work_dir(cfg)
     dropped = _read_tables(_dropped_files(base), DROPPED_SCHEMA)
@@ -952,7 +1022,7 @@ def _write_manifest(
                 "not_aligned_too_few_to_calibrate": unaligned if too_few else 0,
                 "calibration": calibration,
                 "rules": rules,
-                "models": fetched[language].info if language in fetched else None,
+                "models": used[(source, language)].info if (source, language) in used else None,
             }
     out = base / "words"
     out.mkdir(parents=True, exist_ok=True)
@@ -963,9 +1033,18 @@ def _write_manifest(
             "config": cfg.name,
             "aligner": {"mfa": tools.version, "commit": tools.commit},
             "max_clips": max_clips,
+            "model_overrides": {lang: f"{name}@{release}" for lang, (name, release) in overrides.items()},
             "per_source": summary,
         },
     )
+
+
+def _override(text: str) -> tuple[str, tuple[str, str]]:
+    language, _, model = text.partition("=")
+    name, _, release = model.partition("@")
+    if not (language and name and release):
+        raise argparse.ArgumentTypeError(f"expected <language>=<model>@<release>, got {text!r}")
+    return language, (name, release)
 
 
 def main(args: list[str]) -> None:
@@ -977,10 +1056,18 @@ def main(args: list[str]) -> None:
         "row in mfa_models.tsv is `open` until the owner decides, so name the others here",
     )
     parser.add_argument("--max-clips", type=int, help="per language, taken as the calibration batch takes them")
+    parser.add_argument(
+        "--model",
+        type=_override,
+        action="append",
+        help="<language>=<model>@<release>: an acoustic model already under models/mfa/acoustic/ in place of the "
+        "language's row, with a rule-based lexicon; only with --config pilot",
+    )
     ns = parser.parse_args(args)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     run_align(
         CONFIGS[ns.config],
         ns.languages.split(",") if ns.languages else None,
         max_clips=ns.max_clips,
+        models=dict(ns.model) if ns.model else None,
     )

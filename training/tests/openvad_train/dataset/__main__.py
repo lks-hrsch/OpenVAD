@@ -52,15 +52,17 @@ def test_align_is_registered_and_takes_a_config_and_languages(monkeypatch):
     monkeypatch.setattr(align, "run_align", lambda c, languages, **kw: seen.append((c.name, languages, kw)))
     cli.main(["align", "--config", "slice", "--languages", "de,fr"])
     cli.main(["align", "--config", "full"])
-    none = {"max_clips": None}
+    none = {"max_clips": None, "models": None}
     assert seen == [(SLICE.name, ["de", "fr"], none), ("openvad-v1", None, none)]
 
 
-def test_align_takes_the_pilot_with_a_clip_limit(monkeypatch):
+def test_align_takes_the_pilot_with_a_clip_limit_and_a_model_override(monkeypatch):
     seen = []
     monkeypatch.setattr(align, "run_align", lambda c, languages, **kw: seen.append((c, languages, kw)))
-    cli.main(["align", "--config", "pilot", "--languages", "ca", "--max-clips", "200"])
-    assert seen == [(PILOT, ["ca"], {"max_clips": 200})]
+    cli.main(["align", "--config", "pilot", "--languages", "ca", "--max-clips", "200", "--model", "ca=vx@rev1"])
+    assert seen == [(PILOT, ["ca"], {"max_clips": 200, "models": {"ca": ("vx", "rev1")}})]
+    with pytest.raises(SystemExit):
+        cli.main(["align", "--config", "pilot", "--model", "ca=vx"])
 
 
 def test_index_and_the_hand_check_take_the_pilot(monkeypatch, tmp_path):

@@ -12,6 +12,7 @@ its model is what the quality bar and the failure rule judge, and a mapping woul
 """
 
 import importlib
+import importlib.metadata
 import json
 import zipfile
 from collections.abc import Callable, Collection, Iterable
@@ -49,6 +50,11 @@ def _epitran(language: str) -> Callable[[str], list[str]]:
     except ImportError as e:
         raise EpitranMissingError(f"Epitran is not installed: run `{SYNC_COMMAND}`") from e
     return epitran.Epitran(EPITRAN_CODES[language]).trans_list
+
+
+def epitran_release() -> str:
+    """The installed Epitran's version, for the provenance of a lexicon it built."""
+    return importlib.metadata.version("epitran")
 
 
 def build_lexicon(
