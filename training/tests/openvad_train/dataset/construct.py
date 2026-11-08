@@ -26,6 +26,7 @@ from scipy import signal
 
 from openvad_train.dataset import codecs, construct
 from openvad_train.dataset.audio import load_audio
+from openvad_train.dataset.channel import RirPool
 from openvad_train.dataset.codecs import DecodeError, MissingCodec
 from openvad_train.dataset.config import SLICE, BuildConfig, dataset_root, work_dir
 from openvad_train.dataset.construct import OutOfSpace, PlanMismatch, construct_sample, run_construct, write_shard
@@ -36,7 +37,7 @@ from openvad_train.dataset.parquet_io import read_parquet, write_parquet
 from openvad_train.dataset.plan import PLAN_SCHEMA, draw_sample
 from openvad_train.dataset.schema import Clip, Timing
 from openvad_train.fetch.common import cache_dir, data_dir, take_share_lock, write_manifest
-from rir_support import synthetic_rir
+from rir_support import make_rir_tree, synthetic_rir
 
 
 GB = 1_000_000_000
@@ -291,6 +292,29 @@ def test_the_reverb_tail_is_non_speech(raw):
     assert np.abs(audio[speech_end : speech_end + 4000]).max() > 1e-3  # the tail is in the audio
     assert (labels[speech_end // 160 + 21 :] == 0).all()  # G = 200 ms closes no gap after the last word
     assert labels.tolist() == construct_sample(impulse_row(), raw)[1].tolist()
+
+
+@needs_ffmpeg
+def test_slice_rows_draw_the_whole_chain_and_every_codec_and_all_construct(raw):
+    for codec in ("g722", "opus", "amr_wb", "amr_nb"):
+        need_encoder(codec)
+    rirs = RirPool(make_rir_tree(raw / "datasets/raw/rirs"))
+    path = speech_file(tone(3 * 16000))
+    rows = []
+    for i in range(80):
+        clip = Clip(f"s{i}", "swc", "de", "s", "train", path, 0.0, 3.0, "CC0", None)
+        drawn = draw_sample(clip, Timing(f"s{i}", "word", [(500, 2500)], [], None, "test"), SLICE, rirs=rirs)
+        # The noise pool is not wired here: the condition is the only thing replaced, and the chain and codec are kept.
+        row = drawn | (CLEAN if drawn["condition"] == "clean" else noisy())
+        assert construct._legs_not_built(row) == []
+        flac, labels = construct_sample(row, raw)
+        assert len(stored(flac)) == row["total_n"]
+        assert len(labels) == round(row["total_n"] / 160)
+        rows.append(row)
+    assert {r["room"] for r in rows} == {True, False}
+    for leg in ("handset", "agc", "clip_drive_db", "suppression"):
+        assert {r[leg] is not None for r in rows} == {True, False}, leg
+    assert {r["codec"] for r in rows} == set(SLICE.codec_shares)
 
 
 def test_a_room_row_without_a_rir_is_refused(raw):
