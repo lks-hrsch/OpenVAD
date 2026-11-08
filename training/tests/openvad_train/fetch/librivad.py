@@ -7,11 +7,12 @@ import json
 import subprocess
 import sys
 import zipfile
+from pathlib import Path
 
 import pytest
 
 from fetch_support import assert_manifest_shape
-from librivad_support import make_upstream, tree_digest
+from librivad_support import FAIL_PAIR_ENV, SHORT_LABEL_WAVS, make_upstream, tree_digest
 from openvad_train.dataset.sources import librivad as librivad_source
 from openvad_train.fetch import common, librivad
 
@@ -306,13 +307,64 @@ def test_val_replaces_what_a_killed_run_left(fake_upstream):
     assert not list(out.rglob("old.*"))
 
 
-def test_val_stops_when_upstream_loses_a_conversion(fake_upstream, monkeypatch):
-    # Upstream prints a failed conversion and goes on, so the script compares the counts itself.
-    flac = next(common.raw_dir("librispeech").rglob("*.flac"))
-    flac.write_text("not a number")
+def _fails_with(capfd, message: str) -> None:
+    """The run stops on a guard of the upstream script (its `SystemExit` text goes to stderr) and leaves no manifest."""
     with pytest.raises(subprocess.CalledProcessError):
         librivad.fetch_librivad_val()
+    assert message in capfd.readouterr().err
     assert common.read_manifest(common.raw_dir("librivad-val")) is None
+
+
+# Upstream prints a failed conversion, pair or missing alignment and goes on, so each is checked by a guard.
+def test_val_stops_when_upstream_loses_a_conversion(fake_upstream, capfd):
+    next(common.raw_dir("librispeech").rglob("*.flac")).write_text("not a number")
+    _fails_with(capfd, "5 wav files for 6 flac files")
+
+
+def test_val_stops_when_upstream_loses_a_concatenated_pair(fake_upstream, monkeypatch, capfd):
+    monkeypatch.setenv(FAIL_PAIR_ENV, "1-2-0000")
+    _fails_with(capfd, "2 concatenated wav files for 6 utterances, expected 3")
+
+
+def test_val_stops_when_upstream_loses_a_label(fake_upstream, capfd):
+    grid = "Files/Forced_alignments/librispeech_alignments/dev-clean/2/2/2-2-0000.TextGrid"
+    (common.raw_dir("librivad") / "repo" / grid).unlink()
+    _fails_with(capfd, "LibriSpeech: 5 labels for 6 wav files")
+
+
+def test_val_stops_when_the_generator_writes_nothing(fake_upstream):
+    (common.raw_dir("librivad") / "repo/create_LibriVAD.py").write_text("")
+    with pytest.raises(RuntimeError, match="no wav files generated for LibriSpeech/dev-clean, LibriSpeechConcat"):
+        librivad.fetch_librivad_val()
+    assert common.read_manifest(common.raw_dir("librivad-val")) is None
+
+
+def test_val_refuses_a_librivad_setup_without_the_silence_file(fake_upstream):
+    (common.raw_dir("librivad") / "repo/Files/Datasets/LibriSpeech/train100_silence.wav").unlink()
+    with pytest.raises(RuntimeError, match=r"train100_silence\.wav is missing"):
+        librivad.fetch_librivad_val()
+    assert not common.raw_dir("librivad-val").exists()
+
+
+@pytest.mark.parametrize("dev_clean_entries", [0, 2], ids=["none", "two"])
+def test_val_refuses_before_generating_when_the_librispeech_manifest_lacks_one_dev_clean_source(
+    fake_upstream, monkeypatch, dev_clean_entries
+):
+    root = common.raw_dir("librispeech")
+    m = common.read_manifest(root)
+    assert m is not None
+    other = [s for s in m["sources"] if not s["url"].endswith("/dev-clean.tar.gz")]
+    common.write_manifest(root, {**m, "sources": other + [{"url": "https://x/dev-clean.tar.gz"}] * dev_clean_entries})
+    monkeypatch.setattr(librivad.subprocess, "run", lambda *_, **__: pytest.fail("must not generate"))
+    with pytest.raises(RuntimeError, match=f"lists {dev_clean_entries} sources for dev-clean"):
+        librivad.fetch_librivad_val()
+    assert not common.raw_dir("librivad-val").exists()
+
+
+def test_val_refuses_a_manifest_that_does_not_parse(fake_upstream):
+    (common.raw_dir("librispeech") / "manifest.json").write_text("{")
+    with pytest.raises(RuntimeError, match="just fetch librispeech"):
+        librivad.fetch_librivad_val()
 
 
 def test_val_output_is_what_the_librivad_adapter_reads(fake_upstream):
@@ -322,9 +374,14 @@ def test_val_output_is_what_the_librivad_adapter_reads(fake_upstream):
     found = list(librivad_source.clips(raw, report=report))
     wavs = sorted(common.raw_dir("librivad-val").glob("generated/*/dev-clean/*/*/*.wav"))
     assert len(wavs) == 36
-    assert sorted(c.path for c in found) == sorted(w.relative_to(common.data_dir()).as_posix() for w in wavs)
+    # The pairs across chapters or speakers have a label too short for their wav, as upstream writes them: the
+    # adapter drops them and counts them. Every other wav gives a clip.
+    assert report["label_length_mismatch"] == {"validation": SHORT_LABEL_WAVS}
+    kept = {c.path for c in found}
+    dropped = {w.relative_to(common.data_dir()).as_posix() for w in wavs} - kept
+    assert len(dropped) == SHORT_LABEL_WAVS
+    assert {Path(p).name for p in dropped} == {"1-2-0000_+_2-1-0000.wav", "2-1-0001_+_2-0000.wav"}
     assert {c.split for c in found} == {"validation"}
-    assert report["label_length_mismatch"] == {}
     timings = list(librivad_source.timings(raw, found))
-    assert len(timings) == len(found)
+    assert len(timings) == len(found) == 36 - SHORT_LABEL_WAVS
     assert all(t.kind == "frame" and t.speech_ms for t in timings)

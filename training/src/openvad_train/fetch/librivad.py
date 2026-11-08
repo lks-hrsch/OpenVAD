@@ -158,10 +158,13 @@ def fetch_librivad_small() -> None:
     (out / ".generate-done").unlink(missing_ok=True)
 
 
-# Upstream converts, concatenates and labels only train-clean-100 and test-clean (create_LibriSpeech_wav.py:81 lists
-# the splits, create_LibriSpeechConcat.py:204 has the dev-clean call commented out, and create_labels.py:132 sits in
-# the code that labels whatever is in its tree), so this calls its functions on dev-clean alone. Paths stay relative
-# to the working copy because upstream finds the label folder by the first `LibriSpeech` in a path.
+# Upstream converts and concatenates only train-clean-100 and test-clean (create_LibriSpeech_wav.py:81 lists the
+# splits, create_LibriSpeechConcat.py:204 has the dev-clean call commented out), so this calls its functions on
+# dev-clean alone. Paths stay relative to the working copy because upstream finds the label folder by the first
+# `LibriSpeech` in a path.
+# The label of a concatenated pair `A_+_B` sits in the folder of B, and create_labels.py looks for A there too, so a
+# pair across chapters or speakers gets a label too short for its wav. That is kept, so validation matches train and
+# test: the adapter drops those clips and counts them under `label_length_mismatch`.
 # The conversion and the pair writer print a failure and go on, so the counts are checked here.
 LIBRIVAD_VAL_SCRIPT = """
 import sys
@@ -178,6 +181,10 @@ if len(plain) != len(flacs):
     raise SystemExit(f"{len(plain)} wav files for {len(flacs)} flac files")
 silence = datasets / "LibriSpeech/train100_silence.wav"
 create_LibriSpeechConcat.create_LibriSpeechConcat([str(p) for p in plain], silence)
+# Upstream drops the last utterance of an odd list and writes one file per pair.
+pairs = len(list((datasets / "LibriSpeechConcat/dev-clean").rglob("*.wav")))
+if pairs != len(plain) // 2:
+    raise SystemExit(f"{pairs} concatenated wav files for {len(plain)} utterances, expected {len(plain) // 2}")
 for dataset in ("LibriSpeech", "LibriSpeechConcat"):
     wavs = sorted((datasets / dataset / "dev-clean").rglob("*.wav"))
     for wav in wavs:
@@ -197,8 +204,14 @@ def fetch_librivad_val() -> None:
     """
     medium, librispeech = raw_dir("librivad"), raw_dir("librispeech")
     for name, root in (("librivad", medium), ("librispeech", librispeech)):
-        if read_manifest(root) is None:
+        # A manifest that does not parse reads as `{}`, which is no finished fetch either.
+        if not read_manifest(root):
             raise RuntimeError(f"LibriVAD val reads the {name} fetch in {root}; run `just fetch {name}` first")
+    # Resolved before the hours of generation, so a manifest without it cannot end in a tree without a manifest.
+    sources = (read_manifest(librispeech) or {}).get("sources", [])
+    dev_clean = [s for s in sources if s["url"].endswith("/dev-clean.tar.gz")]
+    if len(dev_clean) != 1:
+        raise RuntimeError(f"{librispeech / 'manifest.json'} lists {len(dev_clean)} sources for dev-clean, not one")
     repo = medium / "repo"
     silence = repo / "Files/Datasets/LibriSpeech/train100_silence.wav"
     if not silence.exists():
@@ -226,7 +239,6 @@ def fetch_librivad_val() -> None:
     os.replace(work / "generated", out / "generated")
     os.replace(work / "Files/Labels", out / "labels")
     shutil.rmtree(work)
-    dev_clean = [s for s in (read_manifest(librispeech) or {})["sources"] if s["url"].endswith("/dev-clean.tar.gz")]
     info = {
         "dataset": "librivad-val",
         "licence": "CC BY-NC-SA 4.0",
