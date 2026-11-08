@@ -96,7 +96,9 @@ def apply_cap_rank(
 
 # An adapter has `clips(raw, languages)` and the constant `MFA_ALIGNED`. One that is not forced-aligned by MFA also has
 # `timings(raw, clips)` and is capped here. An MFA adapter may have `timings` too, for its clips without a transcript
-# (Speech Commands background noise), whose labels are fixed.
+# (Speech Commands background noise), whose labels are fixed. An adapter with `REPORTS = True` takes a third argument,
+# a dict it fills with what it left out and why (duplicates, held-out speakers, skipped languages), which the index
+# manifest records under `adapter`.
 SOURCES: dict[str, ModuleType] = {m.SOURCE: m for m in (swc, commonvoice, mls, fleurs, voxpopuli, speechcommands)}
 
 _SCHEMA = {
@@ -131,12 +133,14 @@ def _speech_s(timings: Iterable[Timing]) -> dict[str, float]:
 
 def _index_source(
     name: str, module: ModuleType, languages: tuple[str, ...] | None
-) -> tuple[list[Clip], dict[str, float] | None, dict[str, int]]:
-    """The clips of one source that survive its rules, their speech seconds (non-MFA sources), and how many
-    were dropped for which reason.
+) -> tuple[list[Clip], dict[str, float] | None, dict[str, int], dict]:
+    """The clips of one source that survive its rules, their speech seconds (non-MFA sources), how many
+    were dropped for which reason, and the adapter's own report of what it left out.
     """
     raw = raw_dir(name)
-    clips = list(module.clips(raw, None if languages is None else set(languages)))
+    report: dict = {}
+    wanted = None if languages is None else set(languages)
+    clips = list(module.clips(raw, wanted, report) if getattr(module, "REPORTS", False) else module.clips(raw, wanted))
     for c in clips:
         guard_path(c.path, c.split)
     speech_s = None
@@ -149,8 +153,8 @@ def _index_source(
         capped = list(apply_cap_rank(with_speech, speech_s=speech_s))
         dropped = {"no_aligned_word": len(clips) - len(with_speech), "over_cap": len(with_speech) - len(capped)}
         clips = capped
-    log.info("%s: %d clips, dropped %s", name, len(clips), dropped)
-    return clips, speech_s, dropped
+    log.info("%s: %d clips, dropped %s, adapter report %s", name, len(clips), dropped, report)
+    return clips, speech_s, dropped, report
 
 
 def _totals(clips: list[Clip], speech_s: dict[str, float] | None) -> dict:
@@ -164,7 +168,18 @@ def _totals(clips: list[Clip], speech_s: dict[str, float] | None) -> dict:
     return totals
 
 
-def _source_manifest(name: str, clips: list[Clip], speech_s: dict[str, float] | None, dropped: dict[str, int]) -> dict:
+def _raw_manifest_hash(name: str) -> str | None:
+    """The fetch writes the raw manifest last, so a source that is still being fetched has none."""
+    path = raw_dir(name) / MANIFEST
+    if not path.is_file():
+        log.warning("%s: no %s yet, so the raw manifest hash is null", name, MANIFEST)
+        return None
+    return file_hash(path, "sha256")
+
+
+def _source_manifest(
+    name: str, clips: list[Clip], speech_s: dict[str, float] | None, dropped: dict[str, int], report: dict
+) -> dict:
     by_split = {split: [c for c in clips if c.split == split] for split in sorted({c.split for c in clips})}
     by_language = {lang: [c for c in clips if c.language == lang] for lang in sorted({c.language for c in clips})}
     return {
@@ -172,7 +187,8 @@ def _source_manifest(name: str, clips: list[Clip], speech_s: dict[str, float] | 
         "by_split": {split: _totals(cs, speech_s) for split, cs in by_split.items()},
         "by_language": {lang: _totals(cs, speech_s) for lang, cs in by_language.items()},
         "dropped": dropped,
-        "raw_manifest_sha256": file_hash(raw_dir(name) / MANIFEST, "sha256"),
+        "adapter": report,
+        "raw_manifest_sha256": _raw_manifest_hash(name),
     }
 
 
@@ -183,11 +199,12 @@ def run_index(cfg: BuildConfig) -> None:
         if name not in SOURCES:
             raise ValueError(f"no index adapter for source {name!r}; have {sorted(SOURCES)}")
         indexed[name] = _index_source(name, SOURCES[name], cfg.languages)
+    per_source = {name: _source_manifest(name, *parts) for name, parts in indexed.items()}  # before any file exists
     out = work_dir(cfg) / "index"
     out.mkdir(parents=True, exist_ok=True)
     frames = {
-        out / f"{name}.parquet": _frame(clips, reserve_speakers(clips, cfg.reserved_share))
-        for name, (clips, _, _) in indexed.items()
+        out / f"{name}.parquet": _frame(parts[0], reserve_speakers(parts[0], cfg.reserved_share))
+        for name, parts in indexed.items()
     }
     asyncio.run(write_parquet(frames))
     write_manifest(
@@ -197,7 +214,7 @@ def run_index(cfg: BuildConfig) -> None:
             "config": cfg.name,
             "sources": list(cfg.sources),
             "languages": None if cfg.languages is None else list(cfg.languages),
-            "per_source": {name: _source_manifest(name, *parts) for name, parts in indexed.items()},
+            "per_source": per_source,
         },
     )
 

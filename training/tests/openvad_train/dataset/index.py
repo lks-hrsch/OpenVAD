@@ -231,7 +231,7 @@ def test_run_index_counts_speech_seconds_and_drops_clips_without_any(caplog):
         timings=lambda _raw, cs: (Timing(c.clip_id, "word", speech[c.clip_id], [], None, "t") for c in cs),
     )
     with caplog.at_level("INFO", logger=index.log.name):
-        kept, speech_s, dropped = index._index_source("swc", cast(ModuleType, fake), None)
+        kept, speech_s, dropped, _ = index._index_source("swc", cast(ModuleType, fake), None)
     assert {c.clip_id for c in kept} == {"c2", "c4"}
     assert dropped == {"no_aligned_word": 1, "over_cap": 2}
     assert speech_s is not None
@@ -293,3 +293,31 @@ def test_every_adapter_is_registered_under_its_raw_folder_and_says_whether_mfa_l
         assert isinstance(module.MFA_ALIGNED, bool)
         assert callable(module.clips)
         assert hasattr(module, "timings") == (not module.MFA_ALIGNED or name == "speech-commands")
+
+
+def test_a_source_without_a_raw_manifest_yet_is_indexed_with_a_null_hash_and_a_warning(data_dir, monkeypatch, caplog):
+    (data_dir / "datasets/raw/swc/manifest.json").unlink()
+    with caplog.at_level("WARNING", logger=index.log.name):
+        run_index(SLICE)
+    manifest = json.loads((data_dir / "datasets/processed/work/openvad-slice/index/manifest.json").read_text())
+    assert manifest["per_source"]["swc"]["raw_manifest_sha256"] is None
+    assert "no manifest.json yet" in caplog.text
+    assert _read(data_dir).height > 0
+
+
+def test_a_failing_manifest_leaves_no_index_file_behind(data_dir, monkeypatch):
+    monkeypatch.setattr(index, "_source_manifest", lambda *a: 1 / 0)
+    with pytest.raises(ZeroDivisionError):
+        run_index(SLICE)
+    assert not list((data_dir / "datasets/processed/work").glob("**/*.parquet"))
+
+
+def test_what_a_reporting_adapter_left_out_is_in_the_manifest(data_dir, monkeypatch):
+    def clips(_raw, _languages, report):
+        report["duplicates_removed"] = 3
+        return iter([clip(id="a", language="de", source="swc")])
+
+    monkeypatch.setitem(index.SOURCES, "swc", SimpleNamespace(MFA_ALIGNED=True, REPORTS=True, clips=clips))
+    run_index(SLICE)
+    manifest = json.loads((data_dir / "datasets/processed/work/openvad-slice/index/manifest.json").read_text())
+    assert manifest["per_source"]["swc"]["adapter"] == {"duplicates_removed": 3}
