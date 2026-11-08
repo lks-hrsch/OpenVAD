@@ -7,7 +7,7 @@ from itertools import pairwise
 
 import pytest
 
-from openvad_train.dataset.cutting import Chunk, cut_long, rebase
+from openvad_train.dataset.cutting import Chunk, cut_long, rebase, split_over
 from openvad_train.dataset.labels import apply_gap_rule
 from openvad_train.dataset.schema import Timing
 
@@ -149,3 +149,39 @@ def test_unsorted_and_overlapping_words_count_once():
 def test_rebase_cuts_at_the_bounds_and_counts_from_the_start():
     assert rebase([(0, 100), (150, 250), (400, 500)], 100, 200) == [(50, 100)]
     assert rebase([(90, 110)], 100, 200) == [(0, 10)]
+
+
+def test_split_over_keeps_a_clip_under_the_limit_whole_up_to_its_last_word():
+    assert split_over(timing(words(30, gap=500, first=2000)), max_s=60.0) == [Chunk(0, 2000 + 29 * 1000 + 500)]
+
+
+def test_split_over_tiles_the_timeline_with_chunks_within_the_limit_and_whole_words():
+    t = timing(words(150, length=400, gap=300, first=500))  # 105 s
+    chunks = split_over(t)
+    assert chunks[0].start_ms == 0
+    assert chunks[-1].end_ms == t.speech_ms[-1][1]
+    assert all(left.end_ms == right.start_ms for left, right in pairwise(chunks))
+    assert all(c.end_ms - c.start_ms <= 30_000 for c in chunks)
+    for s, e in t.speech_ms:
+        assert sum(c.start_ms <= s and e <= c.end_ms for c in chunks) == 1
+
+
+def test_split_over_cuts_at_the_midpoint_of_the_longest_gap_in_the_second_half_of_the_window():
+    # Gaps of 2 s at 11 s (first half), 1 s at 20.5 s and 1.5 s at 25.75 s: the last is the longest in the late half.
+    t = timing([(0, 10_000), (12_000, 20_000), (21_000, 25_000), (26_500, 35_000)])
+    assert split_over(t) == [Chunk(0, 25_750), Chunk(25_750, 35_000)]
+
+
+def test_split_over_falls_back_to_the_first_half_when_the_second_has_no_gap():
+    t = timing([(0, 5000), (6000, 35_000), (35_001, 40_000)])
+    assert split_over(t)[0] == Chunk(0, 5500)
+
+
+def test_split_over_runs_on_to_the_next_gap_when_none_lies_within_the_limit():
+    t = timing([(0, 34_000), (35_000, 36_000)])
+    assert split_over(t) == [Chunk(0, 34_500), Chunk(34_500, 36_000)]
+
+
+def test_split_over_leaves_a_single_long_word_whole_and_a_timing_without_speech_empty():
+    assert split_over(timing([(1000, 50_000)])) == [Chunk(0, 50_000)]
+    assert split_over(timing([], [(0, 5000)])) == []

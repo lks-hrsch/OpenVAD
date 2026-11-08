@@ -81,3 +81,31 @@ def cut_long(timing: Timing, max_speech_s: float = 6.6, gap_ms: int = 200, max_s
         starts, ends = [max(0, group[0][0] - margin), *cuts], [*cuts, group[-1][1] + margin]
         chunks += [Chunk(s, e) for s, e in zip(starts, ends, strict=True)]
     return chunks
+
+
+def split_over(timing: Timing, max_s: float = 30.0) -> list[Chunk]:
+    """Chunks of at most `max_s` that tile the timeline from 0 to the end of the last word, for sources that are
+    kept as they are (no padding, so no audio is left out). Each cut is the midpoint of a gap between two words.
+
+    A cut goes to the longest gap in the second half of the `max_s` after a chunk's start, or in the first half if
+    the second has none. If no gap lies within `max_s`, the chunk runs on to the next gap, and with no gap at all
+    it stays whole. The first chunk starts at 0 and the last ends at the last word; the caller extends it to the
+    clip's end. A timing without speech has no chunks.
+    """
+    words = apply_gap_rule(timing.speech_ms, 0)
+    if not words:
+        return []
+    max_ms = round(max_s * 1000)
+    gaps = [((right[0] - left[1]), (left[1] + right[0]) // 2) for left, right in pairwise(words)]
+    chunks: list[Chunk] = []
+    start = 0
+    while words[-1][1] - start > max_ms:
+        within = [(length, cut) for length, cut in gaps if start < cut <= start + max_ms]
+        late = [g for g in within if g[1] > start + max_ms // 2] or within
+        after = [cut for _, cut in gaps if cut > start + max_ms]
+        if not (late or after):
+            break
+        cut = max(late)[1] if late else after[0]
+        chunks.append(Chunk(start, cut))
+        start = cut
+    return [*chunks, Chunk(start, words[-1][1])]
