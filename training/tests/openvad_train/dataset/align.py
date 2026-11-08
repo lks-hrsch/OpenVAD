@@ -14,7 +14,6 @@ import zipfile
 from collections import Counter
 from collections.abc import Collection
 from contextlib import closing
-from importlib import resources
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -30,16 +29,15 @@ from openvad_train.dataset.align import (
     StateMismatchError,
     ToolsNotBuiltError,
     check_tools,
-    load_models,
     make_batches,
     parse_textgrid,
     prepare_transcript,
     read_alignment,
     run_align,
-    spec_for,
     walk_cap,
 )
 from openvad_train.dataset.config import SLICE, work_dir
+from openvad_train.dataset.models import load_models
 from openvad_train.dataset.parquet_io import read_parquet, write_parquet
 from openvad_train.dataset.schema import Clip, Timing, rank
 
@@ -81,46 +79,6 @@ def test_format_characters_at_a_word_edge_go_and_a_lone_combining_mark_is_no_wor
 def test_chinese_and_japanese_digit_runs_become_unk_inside_a_token():
     assert prepare_transcript("我有12只狗", "zh") == "我有 <unk> 只狗"
     assert prepare_transcript("12", "ja") is None
-
-
-# ---------------------------------------------------------------------------------------------------- the models table
-
-
-def test_models_table_ships_with_the_package_and_loads():
-    packaged = resources.files("openvad_train.dataset").joinpath("mfa_models.tsv")
-    assert packaged.is_file()
-    models = load_models(Path(str(packaged)))
-    assert models == load_models()
-    assert {"en", "de", "fr", "es", "it", "nl", "pl", "pt", "ja", "zh", "kk"} <= models.keys()
-
-
-def test_a_short_row_is_refused(tmp_path):
-    table = tmp_path / "models.tsv"
-    header = "\t".join(f.name for f in dataclasses.fields(align.ModelSpec))
-    table.write_text(f"{header}\nde\tgerman_mfa\t3.0.0\tgerman_mfa\t3.0.0\t\t\tnote\n")
-    with pytest.raises(ValueError, match="fewer cells"):
-        load_models(table)
-
-
-def test_italian_and_dutch_have_no_g2p_and_others_do():
-    models = load_models()
-    assert models["it"].g2p is None
-    assert models["nl"].g2p is None
-    assert models["de"].g2p == "german_mfa"
-    assert models["de"].g2p_version == "3.0.0"
-
-
-def test_every_row_says_how_far_it_is_verified_and_open_choices_stay_open():
-    models = load_models()
-    assert {m.status for m in models.values()} <= {"downloaded", "listed", "open"}
-    assert {lang for lang, m in models.items() if m.status == "downloaded"} == {"de"}
-    for language in ("cs", "bg", "uk", "ca"):
-        assert models[language].status == "open"
-        assert not models[language].acoustic
-        with pytest.raises(ValueError, match="no MFA model is chosen"):
-            spec_for(models, language)
-    with pytest.raises(ValueError, match="no row for language 'xx'"):
-        spec_for(models, "xx")
 
 
 # ---------------------------------------------------------------------------------------------------- the tools
