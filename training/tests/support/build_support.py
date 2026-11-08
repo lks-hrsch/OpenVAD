@@ -70,12 +70,75 @@ def write_plan(cfg: BuildConfig, rows: list[dict]) -> None:
     write_manifest(out, {"stage": "plan", "plan_version": cfg.plan_version, "global_seed": cfg.global_seed})
 
 
+WHAM_FILE = "datasets/raw/wham/wham_noise/tr/a.wav"
+MUSAN_FILE = "datasets/raw/musan/musan/noise/sound-bible/noise-sound-bible-0003.wav"
+DONORS = [f"datasets/raw/mls/d{i}.wav" for i in range(6)]
+
+
+def write_noise_kinds(root: Path) -> list[dict]:
+    """The raw files, manifests and mls index of the noise kinds, and the rows that use them: city (WHAM!), a MUSAN
+    file, babble, SSN and a competing talker, each with a transient. Needs the RIR of `room=True`.
+    """
+    rng = np.random.default_rng(11)
+    for path, channels in ((WHAM_FILE, 2), (MUSAN_FILE, 1), *((d, 1) for d in DONORS)):
+        (root / path).parent.mkdir(parents=True, exist_ok=True)
+        sf.write(root / path, 0.1 * rng.standard_normal((48000, channels)).astype(np.float32), 16000, subtype="PCM_16")
+    for name, licence in (("wham", "CC BY-NC 4.0"), ("musan", "per file"), ("mls", "CC BY 4.0")):
+        (root / f"datasets/raw/{name}/manifest.json").write_text(f'{{"dataset": "{name}", "licence": "{licence}"}}')
+    index = work_dir(dataclasses.replace(SLICE, name="test-build")) / "index"
+    index.mkdir(parents=True, exist_ok=True)
+    clips = pl.DataFrame({"path": DONORS, "licence": ["CC BY 4.0"] * 6})
+    asyncio.run(write_parquet({index / "mls.parquet": clips.lazy()}))
+    click = [{"kind": "click", "offset_n": 100, "peak_db": -6.0}]
+    segment = {
+        "clip_id": "mls/d0",
+        "start_n": 0,
+        "end_n": 20000,
+        "rir_id": RIR_FILE,
+        "lowpass_hz": 2000.0,
+        "source_path": DONORS[0],
+        "source_offset_n": 0,
+    }
+    snr = {"snr_db": 5.0, "dither_dbfs": None}
+    return [
+        _row(root, "swc", "k0", "train", "t1", 3.0, [(500, 2500)], **snr, condition="city", transients=click)
+        | {"noise_source_ids": [WHAM_FILE + "#1"], "noise_offsets": [100], "shard": "train/00002"},
+        _row(root, "swc", "k1", "train", "t1", 3.0, [(500, 2500)], **snr, condition="nature", transients=click)
+        | {"noise_source_ids": [MUSAN_FILE], "noise_offsets": [100], "shard": "train/00002"},
+        _row(root, "swc", "k2", "train", "t1", 3.0, [(500, 2500)], **snr, condition="babble", transients=click)
+        | {"noise_source_ids": DONORS, "noise_offsets": [0] * 6, "shard": "train/00002"},
+        _row(root, "swc", "k3", "train", "t1", 3.0, [(500, 2500)], **snr, condition="ssn", transients=click)
+        | {"noise_source_ids": DONORS[:1], "noise_offsets": [0], "shard": "train/00002"},
+        _row(
+            root,
+            "swc",
+            "k4",
+            "train",
+            "t1",
+            3.0,
+            [(500, 2500)],
+            condition="competing",
+            snr_db=None,
+            dither_dbfs=-80.0,
+            transients=click,
+        )
+        | {"segments": [segment], "tir_db": 6.0, "shard": "train/00002"},
+    ]
+
+
 def make_build(
-    root: Path, *, as_is: bool = False, val: bool = False, room: bool = False, name: str = "test-build"
+    root: Path,
+    *,
+    as_is: bool = False,
+    val: bool = False,
+    room: bool = False,
+    kinds: bool = False,
+    name: str = "test-build",
 ) -> BuildConfig:
     """Write the raw files and the plan under `root`, which must be `$OPENVAD_DATA_DIR`.
 
-    `room` puts a RIR, with a raw manifest, under `datasets/raw/rirs` and gives the first row a room.
+    `room` puts a RIR, with a raw manifest, under `datasets/raw/rirs` and gives the first row a room. `kinds` also
+    adds a row of each noise kind (`write_noise_kinds`) and needs `room`.
     """
     noise = root / NOISE_FILE
     noise.parent.mkdir(parents=True)
@@ -97,6 +160,8 @@ def make_build(
         _row(root, "swc", "c3", "validation", "v1", 2.0, [(200, 1500)]) | {"shard": "validation/00000"},
         _row(root, "swc", "c4", "test", "x1", 2.0, [(200, 1500)]) | {"shard": "test/00000"},
     ]
+    if kinds:
+        rows += write_noise_kinds(root)
     if as_is:
         rows += [
             _row(root, "ami", "a0", "train", "ma", 4.0, [(500, 1500), (2000, 3000)]),

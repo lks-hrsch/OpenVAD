@@ -193,8 +193,9 @@ def _publish(cfg: BuildConfig) -> None:
         sources.add(VAL_SOURCE)
     if _rir_ids(rows):
         sources.add("rirs")
+    noise = _noise_licences(rows)
     talkers = _talker_paths(rows)
-    sources |= {path.split("/")[2] for path in talkers}
+    sources |= {key.removeprefix("noise/") for key in noise} | {path.split("/")[2] for path in talkers}
     sources = sorted(sources)
     manifest_paths = {name: raw_dir(name) / "manifest.json" for name in sources}
     if absent := [name for name, path in manifest_paths.items() if not path.exists()]:
@@ -229,7 +230,7 @@ def _publish(cfg: BuildConfig) -> None:
             "licences": {
                 s: sorted(rows.filter(pl.col("source") == s)["licence"].unique()) for s in sorted(set(rows["source"]))
             }
-            | _noise_licences(rows)
+            | noise
             | _rir_licences(rows)
             | _talker_licences(work, talkers),
             "raw_sources": {name: file_hash(path, "sha256") for name, path in manifest_paths.items()},

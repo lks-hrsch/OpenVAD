@@ -37,10 +37,10 @@ def test_slice_is_swc_german_demand_with_every_codec():
     assert sum(SLICE.condition_shares.values()) == pytest.approx(1.0)
 
 
-def test_slice_has_the_full_chain_except_for_the_transients_that_are_not_built():
-    chain = ("room_p", "handset_p", "agc_p", "clip_p", "suppression_p")
+def test_slice_has_the_full_chain_and_the_transients():
+    chain = ("room_p", "handset_p", "agc_p", "clip_p", "suppression_p", "transient_p")
     assert [getattr(SLICE, p) for p in chain] == [getattr(FULL, p) for p in chain]
-    assert SLICE.transient_p == 0.0
+    assert SLICE.transient_p == 0.3
 
 
 def test_dataset_root_follows_data_dir(monkeypatch, tmp_path):

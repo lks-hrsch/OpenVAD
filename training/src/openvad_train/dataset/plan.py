@@ -27,7 +27,7 @@ from openvad_train.dataset.cutting import Chunk, cut_long, rebase, split_over
 from openvad_train.dataset.index import SOURCES, apply_cap_rank
 from openvad_train.dataset.labels import apply_gap_rule, rasterise, speech_ratio
 from openvad_train.dataset.mix import padded_length
-from openvad_train.dataset.noise import NoisePool
+from openvad_train.dataset.noise import NoisePool, TalkerPool, talker_offset
 from openvad_train.dataset.parquet_io import read_parquet, write_parquet
 from openvad_train.dataset.schema import Clip, Timing, rank, sample_seed
 from openvad_train.fetch.common import data_dir, raw_dir, write_manifest
@@ -41,8 +41,14 @@ _CLIPS_PER_BATCH = 1024
 _ROWS_PER_FRAME = 50_000
 
 AUGMENTED_SOURCES = {"common-voice", "mls", "fleurs", "swc"}
-# Competing talker, babble and SSN need reserved clips and city needs WHAM!, which a later task adds to the draws.
-_CONDITIONS_WITH_A_DRAW = {"clean", *DEMAND_CATEGORIES}
+# The noise set a condition draws its file from (MUSAN only adds to the DEMAND categories), and the conditions whose
+# audio is reserved speakers.
+_NOISE_SET_OF = {"city": "wham"} | dict.fromkeys(DEMAND_CATEGORIES, "demand")
+_TALKER_CONDITIONS = ("babble", "ssn", "competing")
+_CONDITIONS = {"clean", *_NOISE_SET_OF, *_TALKER_CONDITIONS}
+# The reserved talkers and the RIRs of competing segments draw from a stream of their own next to the main one
+# (`default_rng([seed, n])`), so a pool or a RIR tree that is absent never moves another draw.
+_TALKER_STREAM = 10
 
 _INTERVALS = pl.List(pl.List(pl.Int64))
 PLAN_SCHEMA = {
@@ -101,6 +107,8 @@ PLAN_SCHEMA = {
                 "end_n": pl.Int64,
                 "rir_id": pl.String,
                 "lowpass_hz": pl.Float64,
+                "source_path": pl.String,
+                "source_offset_n": pl.Int64,
             }
         )
     ),
@@ -148,7 +156,8 @@ def _draw_mix_and_chain(cfg: BuildConfig, total_n: int, rng: np.random.Generator
     condition = str(rng.choice(list(cfg.condition_shares), p=list(cfg.condition_shares.values())))
     clean = condition == "clean"
     snr_db = None if clean or condition == "competing" else float(rng.choice(cfg.snr_grid_db))
-    dither_dbfs = float(rng.uniform(*cfg.dither_dbfs)) if clean else None
+    # Padding is never digital silence: a competing talker covers only its segments.
+    dither_dbfs = float(rng.uniform(*cfg.dither_dbfs)) if clean or condition == "competing" else None
     transients = (
         [
             {
@@ -190,6 +199,40 @@ def _draw_mix_and_chain(cfg: BuildConfig, total_n: int, rng: np.random.Generator
     }
 
 
+def _draw_segments(
+    clip: Clip, total_n: int, cfg: BuildConfig, talkers: TalkerPool, rirs: RirPool | None, rng: np.random.Generator
+) -> list[dict]:
+    """The competing-talker segments of one sample (ADR 0022): `competing_segments` of them, not overlapping, their
+    union covering `competing_coverage` of the whole sample, each a different reserved talker with its own low-pass
+    and, from the clip's split, its own RIR. The RIRs are drawn last, so a missing tree moves nothing else.
+    """
+    low, high = cfg.competing_coverage
+    cover = round(rng.uniform(low, high) * total_n)
+    cover = int(np.clip(cover, math.ceil(low * total_n), math.floor(high * total_n)))
+    k = min(int(rng.integers(cfg.competing_segments[0], cfg.competing_segments[1] + 1)), cover)
+    lengths = np.diff([0, *np.sort(rng.choice(np.arange(1, cover), k - 1, replace=False)), cover])
+    # Sorted cuts through the free samples put k blocks in order with a gap (maybe none) before each.
+    cuts = np.sort(rng.integers(0, total_n - cover + 1, k))
+    starts = cuts + np.cumsum(lengths) - lengths
+    donors = talkers.draw(clip.language, clip.split, k, rng)
+    segments = [
+        {
+            "clip_id": f"{c.source}/{c.clip_id}",
+            "start_n": int(start),
+            "end_n": int(start + length),
+            "rir_id": None,
+            "lowpass_hz": float(rng.uniform(*cfg.competing_lowpass_hz)),
+            "source_path": c.path,
+            "source_offset_n": round(c.offset_s * SAMPLE_RATE) + talker_offset(c, int(length), rng),
+        }
+        for c, start, length in zip(donors, starts, lengths, strict=True)
+    ]
+    if rirs is not None:
+        for segment in segments:
+            segment["rir_id"] = rirs.draw(clip.split, rng).file.relative_to(data_dir()).as_posix()
+    return segments
+
+
 def draw_sample(
     clip: Clip,
     timing: Timing,
@@ -197,14 +240,17 @@ def draw_sample(
     pool: NoisePool | None = None,
     chunk: Chunk | None = None,
     rirs: RirPool | None = None,
+    talkers: TalkerPool | None = None,
 ) -> dict:
     """The plan row of `clip`, or of its `chunk`; its draws come only from the seed of its sample id.
 
     The row's columns are the spec's split columns plus what construction reads: `source_path`, `source_offset_n`
     and `source_n` say which audio is the foreground, `speech_offset_n` where it goes inside `total_n`, and
     `speech_ms` and `mask_ms` hold the intervals counted from the foreground's start.
-    Without `pool` a noise condition is named but has no noise source, and without `rirs` a room has no `rir_id`,
-    for tests that look only at the draws. The RIR is drawn from the rooms of the clip's split, after the noise.
+    Without `pool` a noise condition is named but has no noise source, without `rirs` a room has no `rir_id`, and
+    without `talkers` babble, SSN and competing talkers have no donor, for tests that look only at the draws. The RIR
+    is drawn from the rooms of the clip's split, after the noise; the donors of the reserved-talker conditions come
+    from the split's reserved speakers and are drawn from their own stream.
     """
     sample_id = f"{clip.source}/{clip.clip_id}" + ("" if chunk is None else f"@{chunk.start_ms}")
     seed = sample_seed(cfg.global_seed, cfg.plan_version, sample_id)
@@ -279,12 +325,16 @@ def draw_sample(
     # Later tasks add their draws after these, so the values drawn so far stay. A whole-ms offset keeps labels exact.
     speech_offset_n = SAMPLES_PER_MS * int(rng.integers((total_n - source_n) // SAMPLES_PER_MS + 1))
     drawn = _draw_mix_and_chain(cfg, total_n, rng)
-    if pool is not None and drawn["condition"] in DEMAND_CATEGORIES:
+    if pool is not None and drawn["condition"] in _NOISE_SET_OF:
         noise = pool.draw(drawn["condition"], clip.split, rng)
-        row["noise_source_ids"] = [noise.file.relative_to(data_dir()).as_posix()]
+        row["noise_source_ids"] = [noise.source_id(data_dir())]
         row["noise_offsets"] = [noise.offset_n]
     if rirs is not None and drawn["room"]:
         row["rir_id"] = rirs.draw(clip.split, rng).file.relative_to(data_dir()).as_posix()
+    if talkers is not None and drawn["condition"] in _TALKER_CONDITIONS:
+        row |= _draw_talkers(
+            clip, drawn["condition"], total_n, cfg, talkers, rirs, np.random.default_rng([seed, _TALKER_STREAM])
+        )
     return (
         row
         | {
@@ -299,6 +349,30 @@ def draw_sample(
         }
         | drawn
     )
+
+
+def _draw_talkers(
+    clip: Clip,
+    condition: str,
+    total_n: int,
+    cfg: BuildConfig,
+    talkers: TalkerPool,
+    rirs: RirPool | None,
+    rng: np.random.Generator,
+) -> dict:
+    """The row columns of a reserved-talker condition. Babble and SSN name their donor files in `noise_source_ids`
+    with the sample each is read from in `noise_offsets`; a competing talker has `segments` and a TIR.
+    """
+    if condition == "competing":
+        return {
+            "tir_db": float(rng.uniform(*cfg.competing_tir_db)),
+            "segments": _draw_segments(clip, total_n, cfg, talkers, rirs, rng),
+        }
+    donors = talkers.draw(clip.language, clip.split, cfg.babble_talkers if condition == "babble" else 1, rng)
+    return {
+        "noise_source_ids": [c.path for c in donors],
+        "noise_offsets": [round(c.offset_s * SAMPLE_RATE) + talker_offset(c, total_n, rng) for c in donors],
+    }
 
 
 def _has_speech_frame(timing: Timing, start_ms: int, end_ms: int) -> bool:
@@ -330,6 +404,7 @@ def clip_rows(
     pool: NoisePool | None = None,
     counts: Counter | None = None,
     rirs: RirPool | None = None,
+    talkers: TalkerPool | None = None,
 ) -> list[dict]:
     """The rows of one clip: none if it is reserved, and an augmented sample only if a frame of it is speech.
 
@@ -344,7 +419,11 @@ def clip_rows(
             return _split_rows(clip, timing, cfg, pool, duration_ms)
         return [draw_sample(clip, timing, cfg, pool)]
     if _cutting(clip.source) != "cut_long":
-        return [draw_sample(clip, timing, cfg, pool, rirs=rirs)] if _has_speech_frame(timing, 0, duration_ms) else []
+        return (
+            [draw_sample(clip, timing, cfg, pool, rirs=rirs, talkers=talkers)]
+            if _has_speech_frame(timing, 0, duration_ms)
+            else []
+        )
     # Inside the clip: the adapter's timeline may round a millisecond past it.
     inside = dataclasses.replace(
         timing, speech_ms=rebase(timing.speech_ms, 0, duration_ms), mask_ms=rebase(timing.mask_ms, 0, duration_ms)
@@ -360,7 +439,7 @@ def clip_rows(
         elif not _has_speech_frame(inside, *chunk):
             counts["masked_chunks"] += 1
         else:
-            rows.append(draw_sample(clip, inside, cfg, pool, chunk, rirs))
+            rows.append(draw_sample(clip, inside, cfg, pool, chunk, rirs, talkers))
     return rows
 
 
@@ -498,7 +577,9 @@ class _MfaTimings:
             yield self._table[clip.clip_id]
 
 
-def _plan_source(cfg: BuildConfig, name: str, pool: NoisePool, rirs: RirPool | None) -> tuple[list[pl.DataFrame], dict]:
+def _plan_source(
+    cfg: BuildConfig, name: str, pool: NoisePool, rirs: RirPool | None, talkers: TalkerPool | None
+) -> tuple[list[pl.DataFrame], dict]:
     """The rows of one source as frames, and its counts. Clips, timings and row dicts stay in memory only per batch:
     a dict is about 4 KB, which at 15 M rows would cost over 60 GB.
     """
@@ -525,7 +606,7 @@ def _plan_source(cfg: BuildConfig, name: str, pool: NoisePool, rirs: RirPool | N
         for clip, timing in zip(clips, timings(clips), strict=True):
             if timing.clip_id != clip.clip_id:
                 raise ValueError(f"{name}: timings out of clip order at {clip.clip_id!r}, got {timing.clip_id!r}")
-            sample_rows = clip_rows(clip, timing, cfg, pool, counts, rirs)
+            sample_rows = clip_rows(clip, timing, cfg, pool, counts, rirs, talkers)
             rows += sample_rows
             counts["reserved"] += clip.reserved
             counts["without_sample"] += not sample_rows and not clip.reserved
@@ -534,6 +615,22 @@ def _plan_source(cfg: BuildConfig, name: str, pool: NoisePool, rirs: RirPool | N
                 rows = []
     frames.append(pl.DataFrame(rows, schema=PLAN_SCHEMA))
     return frames, {"clips": index.height, **{k: counts[k] for k in kinds}}
+
+
+def _talker_pool(cfg: BuildConfig) -> TalkerPool:
+    """The reserved clips of the augmented sources of `cfg`, from their index tables. As-is sources are left out:
+    AMI and VoxPopuli clips are spans of recordings with other speakers in them, CallHome audio is not a file, and
+    LibriVAD and VOiCES reserve no speaker.
+    """
+    fields = [f.name for f in dataclasses.fields(Clip)]
+    clips: list[Clip] = []
+    for name in cfg.sources:
+        if name in AUGMENTED_SOURCES:
+            index = asyncio.run(read_parquet(work_dir(cfg) / "index" / f"{name}.parquet", fields))
+            clips += [Clip(**row) for row in index.filter(pl.col("reserved")).iter_rows(named=True)]
+    if not clips:
+        raise ValueError(f"{cfg.name}: babble, SSN or competing talkers need reserved clips and its sources have none")
+    return TalkerPool(clips, cfg.babble_min_speakers)
 
 
 def _print_summary(df: pl.DataFrame, bytes_per_hour: float) -> list[dict]:
@@ -560,19 +657,25 @@ def run_plan(cfg: BuildConfig, limit: str | None = None) -> None:
     tables. `limit`, a sample count or hours such as `1000h`, keeps the lowest ranks, and so does `cfg.max_samples`.
     """
     samples, hours = _parse_limit(limit)
-    missing = sorted(c for c, share in cfg.condition_shares.items() if share > 0 and c not in _CONDITIONS_WITH_A_DRAW)
-    if missing:
-        raise NotImplementedError(f"conditions without a draw yet: {', '.join(missing)}")
+    wanted = {c for c, share in cfg.condition_shares.items() if share > 0}
+    if unknown_conditions := sorted(wanted - _CONDITIONS):
+        raise ValueError(f"no draw for condition {unknown_conditions[0]!r}; have {sorted(_CONDITIONS)}")
+    for condition in sorted(wanted & _NOISE_SET_OF.keys()):
+        if _NOISE_SET_OF[condition] not in cfg.noise:
+            raise ValueError(
+                f"{cfg.name}: condition {condition!r} needs {_NOISE_SET_OF[condition]!r} in its noise sets"
+            )
     unknown = [name for name in cfg.sources if name not in SOURCES]
     if unknown:
         raise ValueError(f"no index adapter for source {unknown[0]!r}; have {sorted(SOURCES)}")
 
-    pool = NoisePool(raw_dir("demand"))
+    pool = NoisePool(*(raw_dir(n) if n in cfg.noise else None for n in ("demand", "wham", "musan")))
     rirs = RirPool(raw_dir("rirs")) if cfg.room_p > 0 else None
+    talkers = _talker_pool(cfg) if wanted & set(_TALKER_CONDITIONS) else None
     frames: list[pl.DataFrame] = []
     per_source: dict[str, dict] = {}
     for name in cfg.sources:
-        source_frames, per_source[name] = _plan_source(cfg, name, pool, rirs)
+        source_frames, per_source[name] = _plan_source(cfg, name, pool, rirs, talkers)
         frames += source_frames
         log.info("%s: %s", name, per_source[name])
 

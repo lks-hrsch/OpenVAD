@@ -32,7 +32,7 @@ from openvad_train.dataset.config import SLICE, BuildConfig, dataset_root, work_
 from openvad_train.dataset.construct import OutOfSpace, PlanMismatch, construct_sample, run_construct, write_shard
 from openvad_train.dataset.cutting import Chunk
 from openvad_train.dataset.labels import apply_gap_rule, rasterise
-from openvad_train.dataset.mix import dither, loop_slice
+from openvad_train.dataset.mix import dither, loop_slice, place, wada_snr
 from openvad_train.dataset.parquet_io import read_parquet, write_parquet
 from openvad_train.dataset.plan import PLAN_SCHEMA, draw_sample
 from openvad_train.dataset.schema import Clip, Timing
@@ -306,7 +306,6 @@ def test_slice_rows_draw_the_whole_chain_and_every_codec_and_all_construct(raw):
         drawn = draw_sample(clip, Timing(f"s{i}", "word", [(500, 2500)], [], None, "test"), SLICE, rirs=rirs)
         # The noise pool is not wired here: the condition is the only thing replaced, and the chain and codec are kept.
         row = drawn | (CLEAN if drawn["condition"] == "clean" else noisy())
-        assert construct._legs_not_built(row) == []
         flac, labels = construct_sample(row, raw)
         assert len(stored(flac)) == row["total_n"]
         assert len(labels) == round(row["total_n"] / 160)
@@ -495,38 +494,49 @@ def test_a_damaged_source_is_a_decode_error(raw):
         construct_sample(row, raw)
 
 
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
-        ("transients", [{"kind": "click", "offset_n": 0, "peak_db": 0.0}]),
-        ("segments", [{"clip_id": "x", "start_n": 0, "end_n": 1, "rir_id": None, "lowpass_hz": 1000.0}]),
-        ("band", "narrow_native"),
-        ("condition", "competing"),
-        ("condition", "babble"),
-        ("condition", "ssn"),
-        ("condition", "city"),
-        ("condition", "as_is"),
-    ],
-)
-def test_a_leg_that_is_not_built_raises_instead_of_being_skipped(raw, field, value):
-    with pytest.raises(NotImplementedError, match=field):
-        construct_sample(make_row(**{field: value}), raw)
+@pytest.mark.parametrize("condition", ["as_is", "music"])
+def test_a_condition_without_a_noise_source_is_refused_instead_of_being_mixed_as_clean(raw, condition):
+    with pytest.raises(ValueError, match="no noise for condition"):
+        construct_sample(
+            make_row(condition=condition, snr_db=5.0, noise_source_ids=[NOISE_FILE], noise_offsets=[0]), raw
+        )
 
 
-@pytest.mark.parametrize("extra", [CLEAN, noisy()], ids=["clean", "noisy"])
-def test_common_voice_waits_for_its_wada_snr_step(raw, extra):
-    with pytest.raises(NotImplementedError, match="baseline_snr_db"):
-        construct_sample(make_row(**extra, source="common-voice"), raw)
+def speech_like(n: int, seed: int = 1) -> np.ndarray:
+    """Gamma(0.4) amplitudes with random signs at about -20 dBFS: the amplitude model WADA-SNR assumes."""
+    g = np.random.default_rng(seed).gamma(0.4, 1, n) * np.random.default_rng(seed + 1).choice([-1, 1], n)
+    return np.clip(0.1 * g / np.std(g), -0.9, 0.9).astype(np.float32)
 
 
-def test_every_slice_row_names_only_legs_that_are_built_and_a_rir_that_exists(raw):
+def place_speech(row: dict) -> np.ndarray:
+    """The foreground of `row` where construction puts it, before any mix."""
+    speech = codecs.decode_16k(str(data_dir() / row["source_path"]), 0.0, row["source_n"] / 16000)
+    return place(speech, row["total_n"], row["speech_offset_n"])
+
+
+def test_a_common_voice_clip_is_mixed_against_its_wada_snr_speech_power_and_records_it(raw):
+    speech = speech_like(3 * 16000)
+    row = make_row(speech, **noisy(snr_db=0.0), source="common-voice")
+    baseline = wada_snr(speech)
+    assert -20 <= baseline <= 100
+    flac, _, recorded = construct._build(row, raw)
+    assert recorded == baseline
+    other = make_row(speech, **noisy(snr_db=0.0))
+    assert construct._build(other, raw)[2] is None
+    # Only the speech share of the clip counts as speech: the noise is that much quieter than for another source.
+    ratio = 10 ** (baseline / 10) / (1 + 10 ** (baseline / 10))
+    mixed_cv, mixed_other = stored(flac), stored(construct_sample(other, raw)[0])
+    noise_cv, noise_other = mixed_cv - place_speech(row), mixed_other - place_speech(other)
+    assert rms(noise_cv) / rms(noise_other) == pytest.approx(np.sqrt(ratio), rel=0.02)
+
+
+def test_every_slice_row_names_a_rir_that_exists(raw):
     # Drawn with a RIR pool, as `run_plan` does: a room row without a `rir_id` would be refused by construct_sample.
     rirs = RirPool(make_rir_tree(raw / "datasets/raw/rirs"))
     rows = []
     for i in range(500):
         clip = Clip(f"c{i}", "swc", "de", "s", "train", "a.ogg", 0.0, 10.0, "CC-BY-SA", None)
         row = draw_sample(clip, Timing(f"c{i}", "word", [(100, 900)], [], None, "test"), SLICE, rirs=rirs)
-        assert construct._legs_not_built(row) == []
         assert row["room"] == (row["rir_id"] is not None)
         assert row["rir_id"] is None or (raw / row["rir_id"]).is_file()
         rows.append(row)
@@ -804,7 +814,7 @@ def test_a_source_that_exists_but_cannot_be_read_aborts(rows, raw, tmp_path):
 
 
 def test_a_transient_decode_failure_is_retried_and_keeps_the_row(rows, raw, tmp_path, monkeypatch):
-    real, calls = construct.construct_sample, []
+    real, calls = construct._build, []
 
     def fails_once(row, root):
         calls.append(row["sample_id"])
@@ -812,7 +822,7 @@ def test_a_transient_decode_failure_is_retried_and_keeps_the_row(rows, raw, tmp_
             raise DecodeError("a transient failure")
         return real(row, root)
 
-    monkeypatch.setattr(construct, "construct_sample", fails_once)
+    monkeypatch.setattr(construct, "_build", fails_once)
     result = write_shard(rows, tmp_path / "s.tar", tmp_path / "s.parquet", raw)
     assert (result.n_ok, result.n_failed) == (3, 0)
     assert calls[:2] == [rows[0]["sample_id"]] * 2
@@ -820,13 +830,13 @@ def test_a_transient_decode_failure_is_retried_and_keeps_the_row(rows, raw, tmp_
 
 
 def test_a_row_is_tried_twice_before_it_is_logged(rows_with_corrupt_clip, raw, tmp_path, monkeypatch):
-    real, calls = construct.construct_sample, []
+    real, calls = construct._build, []
 
     def counting(row, root):
         calls.append(row["sample_id"])
         return real(row, root)
 
-    monkeypatch.setattr(construct, "construct_sample", counting)
+    monkeypatch.setattr(construct, "_build", counting)
     write_shard(rows_with_corrupt_clip, tmp_path / "s.tar", tmp_path / "s.parquet", raw)
     assert calls.count(rows_with_corrupt_clip[0]["sample_id"]) == 2
     assert calls.count(rows_with_corrupt_clip[1]["sample_id"]) == 1
@@ -841,20 +851,20 @@ def test_a_broken_setup_aborts_the_shard(rows, raw, tmp_path, monkeypatch, error
     def broken(*_args):
         raise error
 
-    monkeypatch.setattr(construct, "construct_sample", broken)
+    monkeypatch.setattr(construct, "_build", broken)
     with pytest.raises(type(error)):
         write_shard(rows, tmp_path / "s.tar", tmp_path / "s.parquet", raw)
     assert finished_looking(tmp_path) == []
 
 
 def test_verification_refuses_labels_that_do_not_match_the_audio(rows, raw, tmp_path, monkeypatch):
-    real = construct.construct_sample
+    real = construct._build
 
     def one_frame_short(row, root):
-        flac, labels = real(row, root)
-        return flac, labels[:-1]
+        flac, labels, baseline = real(row, root)
+        return flac, labels[:-1], baseline
 
-    monkeypatch.setattr(construct, "construct_sample", one_frame_short)
+    monkeypatch.setattr(construct, "_build", one_frame_short)
     with pytest.raises(RuntimeError, match="labels"):
         write_shard(rows, tmp_path / "s.tar", tmp_path / "s.parquet", raw)
     assert finished_looking(tmp_path) == []
@@ -1068,11 +1078,9 @@ def test_a_failed_shard_leaves_a_hole_and_a_rerun_fills_only_it(cfg, monkeypatch
     assert sorted(built + in_process_pool) == [f"train/{i:05d}" for i in range(5)]
 
 
-def test_a_row_asking_for_an_unbuilt_leg_aborts_through_the_workers(cfg, planned_rows):
-    write_plan(
-        cfg, [planned_rows[0] | {"transients": [{"kind": "click", "offset_n": 0, "peak_db": 0.0}]}, *planned_rows[1:]]
-    )
-    with pytest.raises(NotImplementedError, match="transients"):
+def test_a_row_with_a_condition_nothing_builds_aborts_through_the_workers(cfg, planned_rows):
+    write_plan(cfg, [planned_rows[0] | {"condition": "music", "snr_db": 5.0}, *planned_rows[1:]])
+    with pytest.raises(ValueError, match="no noise for condition"):
         run_construct(cfg, workers=1)
     assert not (work_dir(cfg) / "fragments/train/00000.parquet").exists()
 
@@ -1216,3 +1224,180 @@ def test_a_run_without_failures_records_zero_and_stays_quiet(cfg, caplog):
     run_construct(cfg, workers=1)
     assert json.loads((work_dir(cfg) / "fragments/manifest.json").read_text())["n_failed"] == 0
     assert not [record for record in caplog.records if record.levelname == "WARNING"]
+
+
+def donor(name: str, seconds: float = 4.0, seed: int = 0, silent: bool = False) -> str:
+    """A reserved talker's file under raw, as a path relative to the data root."""
+    path = data_dir() / "datasets/raw/mls" / f"{name}.wav"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    n = round(seconds * 16000)
+    sf.write(path, np.zeros(n, np.float32) if silent else speech_like(n, seed), 16000, subtype="PCM_16")
+    return path.relative_to(data_dir()).as_posix()
+
+
+def snr_of(flac: bytes, row: dict, start: int = 0, stop: int | None = None) -> float:
+    """Speech over (mixed - speech) in dB over the row's word union, with the foreground put back where it was."""
+    speech, mixed = place_speech(row), stored(flac)
+    active = np.zeros(row["total_n"], bool)
+    active[row["speech_offset_n"] + 500 * 16 : row["speech_offset_n"] + 2500 * 16] = True
+    return db(rms(speech[active]) / rms((mixed - speech)[active]))
+
+
+def test_city_noise_takes_the_channel_named_in_its_id(raw):
+    wham = raw / "datasets/raw/wham/wham_noise/tt/a.wav"
+    wham.parent.mkdir(parents=True)
+    two = 0.1 * np.random.default_rng(3).standard_normal((NOISE_N, 2)).astype(np.float32)
+    sf.write(wham, two, 16000, subtype="FLOAT")
+    results = {}
+    for channel in (0, 1):
+        row = make_row(**noisy(5.0) | {"condition": "city", "noise_source_ids": [f"{wham.relative_to(raw)}#{channel}"]})
+        flac, _ = construct_sample(row, raw)
+        results[channel] = stored(flac) - place_speech(row)
+        assert snr_of(flac, row) == pytest.approx(5.0, abs=0.3)
+    assert (
+        abs(np.corrcoef(results[0][1000:], two[1000 : len(results[0]), 0] if False else results[0][1000:])[0, 1]) == 1
+    )
+    # The noise comes from the named channel: it correlates with that channel and not with the other.
+    n = len(results[0]) - 1000
+    for channel in (0, 1):
+        own = np.corrcoef(results[channel][1000:], two[1000 + 1000 : 1000 + 1000 + n, channel])[0, 1]
+        other = np.corrcoef(results[channel][1000:], two[1000 + 1000 : 1000 + 1000 + n, 1 - channel])[0, 1]
+        assert abs(own) > 0.99 > abs(other) + 0.9
+
+
+def test_a_two_channel_noise_file_needs_a_channel_and_a_mono_one_must_not_have_one(raw):
+    wham = raw / "datasets/raw/wham/a.wav"
+    wham.parent.mkdir(parents=True)
+    sf.write(wham, np.ones((16000, 2), np.float32) * 0.1, 16000, subtype="FLOAT")
+    with pytest.raises(ValueError, match="2 channels"):
+        construct_sample(
+            make_row(**noisy()) | {"condition": "city", "noise_source_ids": [str(wham.relative_to(raw))]}, raw
+        )
+    with pytest.raises(ValueError, match="1 channels"):
+        construct_sample(make_row(**noisy()) | {"noise_source_ids": [NOISE_FILE + "#0"]}, raw)
+
+
+def babble_row(n_talkers: int = 6, **extra) -> dict:
+    ids = [donor(f"t{i}", seed=i) for i in range(n_talkers)]
+    return make_row(
+        **noisy(5.0) | {"condition": "babble", "noise_source_ids": ids, "noise_offsets": [0] * n_talkers} | extra
+    )
+
+
+def test_babble_is_six_talkers_mixed_at_the_drawn_snr(raw):
+    row = babble_row()
+    flac, _ = construct_sample(row, raw)
+    assert snr_of(flac, row) == pytest.approx(5.0, abs=0.3)
+    assert construct_sample(row, raw)[0] == flac
+
+
+def test_babble_needs_several_talkers_and_a_silent_talker_is_a_decode_error(raw):
+    with pytest.raises(ValueError, match="several talkers"):
+        construct_sample(babble_row(1), raw)
+    row = babble_row(3)
+    row["noise_source_ids"][1] = donor("zero", silent=True)
+    with pytest.raises(DecodeError, match="silence"):
+        construct_sample(row, raw)
+
+
+def test_ssn_follows_its_own_stream_at_the_drawn_snr(raw):
+    row = make_row(**noisy(10.0) | {"condition": "ssn", "noise_source_ids": [donor("s")], "noise_offsets": [0]})
+    flac, _ = construct_sample(row, raw)
+    assert snr_of(flac, row) == pytest.approx(10.0, abs=0.3)
+    assert construct_sample(row, raw)[0] == flac
+    assert construct_sample(row | {"seed": row["seed"] + 1}, raw)[0] != flac
+    with pytest.raises(ValueError, match="one talker"):
+        construct_sample(row | {"noise_source_ids": [donor("s"), donor("u")], "noise_offsets": [0, 0]}, raw)
+
+
+def competing_row(**extra) -> dict:
+    rir = "datasets/raw/rirs/openslr28/room01_0.wav"
+    make_rir_tree(data_dir() / "datasets/raw/rirs")
+    segments = [
+        {
+            "clip_id": "mls/a",
+            "start_n": 0,
+            "end_n": 20000,
+            "rir_id": rir,
+            "lowpass_hz": 3000.0,
+            "source_path": donor("a"),
+            "source_offset_n": 0,
+        },
+        {
+            "clip_id": "mls/b",
+            "start_n": 30000,
+            "end_n": 40000,
+            "rir_id": rir,
+            "lowpass_hz": 1500.0,
+            "source_path": donor("b", seed=2),
+            "source_offset_n": 2000,
+        },
+    ]
+    return make_row(
+        **CLEAN
+        | {"condition": "competing", "segments": segments, "tir_db": 8.0, "dither_dbfs": -80.0, "speech_offset_n": 8000}
+        | extra
+    )
+
+
+def test_a_competing_talker_is_added_at_the_drawn_tir_and_the_labels_stay_those_of_the_foreground(raw):
+    row = competing_row()
+    flac, labels = construct_sample(row, raw)
+    speech, mixed = place_speech(row), stored(flac)
+    track = mixed - speech
+    covered = np.zeros(row["total_n"], bool)
+    for s in row["segments"]:
+        covered[s["start_n"] : s["end_n"]] = True
+    active = np.zeros(row["total_n"], bool)
+    active[row["speech_offset_n"] + 500 * 16 : row["speech_offset_n"] + 2500 * 16] = True
+    assert db(rms(speech[active]) / rms(track[covered])) == pytest.approx(8.0, abs=0.5)
+    assert np.abs(track[~covered]).max() < 1e-3  # padding outside the segments is the dither
+    assert rms(track[~covered]) == pytest.approx(10 ** (-80 / 20), rel=0.1)
+    assert labels.tolist() == construct_sample(make_row(speech_offset_n=8000), raw)[1].tolist()
+    assert construct_sample(row, raw)[0] == flac
+
+
+def test_a_competing_row_needs_its_rirs_and_a_tir(raw):
+    row = competing_row()
+    with pytest.raises(ValueError, match="rir_id"):
+        construct_sample(row | {"segments": [row["segments"][0] | {"rir_id": None}]}, raw)
+    with pytest.raises(ValueError, match="at least one segment"):
+        construct_sample(row | {"segments": []}, raw)
+
+
+def test_a_transient_lands_at_its_offset_and_peak_ratio_on_the_mix(raw):
+    event = {"kind": "click", "offset_n": 100, "peak_db": -6.0}
+    plain, with_click = make_row(), make_row(transients=[event])
+    a, b = stored(construct_sample(plain, raw)[0]), stored(construct_sample(with_click, raw)[0])
+    added = b - a
+    assert not added[:100].any()
+    assert not added[100 + 81 :].any()
+    assert np.abs(added).max() == pytest.approx(np.abs(a).max() * 10 ** (-6 / 20), rel=0.02)
+    assert construct_sample(with_click, raw)[1].tolist() == construct_sample(plain, raw)[1].tolist()
+    assert construct_sample(with_click, raw)[0] == construct_sample(with_click, raw)[0]
+
+
+def test_no_constructed_sample_passes_full_scale_with_a_transient_added_at_the_loudest_peak(raw, monkeypatch):
+    written = []
+    real_write = sf.write
+    monkeypatch.setattr(
+        construct.sf, "write", lambda f, x, *a, **k: (written.append(np.array(x)), real_write(f, x, *a, **k))[1]
+    )
+    loud = make_row(tone(3 * 16000, 0.95))
+    loud["transients"] = [{"kind": "dtmf", "offset_n": loud["speech_offset_n"] + 24000, "peak_db": 0.0}]
+    written.clear()  # the speech file of the row
+    flac, _ = construct_sample(loud, raw)
+    assert np.abs(written[0]).max() == pytest.approx(1.0, abs=1e-6)  # scaled down by protect_peak, not clipped
+    audio = stored(flac)
+    assert np.abs(audio).max() <= 1.0
+    assert np.count_nonzero(np.abs(audio) >= 0.9999) < 5
+    # The sum would have reached 1.9: the peak was divided after the click was added.
+    assert np.abs(audio[: loud["speech_offset_n"] + 16000]).max() < 0.6
+
+
+def test_the_baseline_of_a_common_voice_clip_reaches_its_fragment(raw, tmp_path):
+    cv = make_row(speech_like(3 * 16000), **noisy(0.0), source="common-voice")
+    other = make_row(speech_like(3 * 16000), **noisy(0.0), name="c1")
+    write_shard([cv, other], tmp_path / "s.tar", tmp_path / "s.parquet", raw)
+    got = {r["clip_id"]: r["baseline_snr_db"] for r in read_fragment(tmp_path / "s.parquet")}
+    assert got == {"c0": wada_snr(speech_like(3 * 16000)), "c1": None}

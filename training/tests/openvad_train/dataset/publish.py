@@ -506,3 +506,22 @@ def test_the_rirs_of_competing_segments_are_listed_with_those_of_rooms(data):
         ("clean", [], [], "datasets/raw/rirs/but/Q/rir.wav"),
     )
     assert _rir_licences(rows) == {"rirs/but": ["CC BY 4.0"], "rirs/openslr28": ["Apache-2.0"]}
+
+
+def test_a_build_with_every_noise_kind_lists_every_set_and_talker_source_with_its_licence(data):
+    cfg = build(data, room=True, kinds=True)
+    m = read_manifest(dataset_root(cfg))
+    assert m is not None
+    assert m["licences"] == {
+        "noise/demand": ["CC BY-SA 3.0"],
+        "noise/musan": [musan_licences()["noise-sound-bible-0003"]],
+        "noise/wham": ["CC BY-NC 4.0"],
+        "rirs/but": ["CC BY 4.0"],
+        "swc": ["CC0"],
+        "talkers/mls": ["CC BY 4.0"],
+    }
+    assert {"demand", "musan", "wham", "mls", "rirs"} <= set(m["raw_sources"])
+    assert m["samples"]["train"] == 8
+    train = frame(cfg, "train")
+    assert {"city", "nature", "babble", "ssn", "competing"} <= set(train["condition"])
+    assert all(len(r["transients"]) == 1 for r in train.iter_rows(named=True) if r["sample_id"] >= "swc/k")

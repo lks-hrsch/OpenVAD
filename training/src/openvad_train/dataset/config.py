@@ -112,8 +112,6 @@ SLICE = BuildConfig(
     languages=("de",),
     condition_shares=_slice_shares(),
     max_samples=500,
-    # The transient leg arrives with Task 18.
-    transient_p=0.0,
 )
 
 # The MFA pilot that sets the quality bar (spec section "Quality bar"): Common Voice alone, in the languages it aligns.

@@ -8,6 +8,7 @@ import dataclasses
 import json
 from collections import Counter
 from itertools import pairwise
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Literal
 
@@ -18,6 +19,7 @@ import pytest
 from as_is_support import make_ami_tree, make_callhome_tree, make_librivad_tree, make_voices_tree
 from demand_support import make_demand_tree
 from mfa_source_support import make_sc_tree
+from noise_support import make_musan_tree, make_wham_tree, talker
 from openvad_train.dataset import __main__ as cli
 from openvad_train.dataset import align, index
 from openvad_train.dataset import plan as plan_module
@@ -26,13 +28,13 @@ from openvad_train.dataset.config import DEMAND_CATEGORIES, FULL, SLICE, work_di
 from openvad_train.dataset.cutting import Chunk
 from openvad_train.dataset.index import run_index
 from openvad_train.dataset.labels import rasterise
-from openvad_train.dataset.noise import NoisePool, demand_channels
+from openvad_train.dataset.noise import NoisePool, TalkerPool, demand_channels, musan_noise_categories
 from openvad_train.dataset.parquet_io import read_parquet, write_parquet
 from openvad_train.dataset.plan import assign_shards, clip_rows, draw_sample, run_plan
 from openvad_train.dataset.schema import Clip, Timing, rank, sample_seed
 from openvad_train.fetch.common import data_dir
 from rir_support import make_rir_tree
-from swc_support import make_swc_tree
+from swc_support import add_article, make_swc_tree
 
 
 Split = Literal["train", "validation", "test"]
@@ -404,13 +406,14 @@ def test_an_amr_range_without_a_mode_is_an_error_not_a_uniform_draw():
         plan_module._draw_bitrate("amr_nb", cfg, np.random.default_rng(0))
 
 
-def test_slice_draws_every_codec_and_the_chain_but_only_its_conditions():
+def test_slice_draws_every_codec_the_chain_and_the_transients_but_only_its_conditions():
     rows = rows_of(SLICE, 500)
     assert {r["codec"] for r in rows} == set(FULL.codec_shares)
     assert {r["condition"] for r in rows} == {"clean", *DEMAND_CATEGORIES}
     assert share(rows, "room", True) == pytest.approx(0.5, abs=0.06)
     assert share_set(rows, "handset") == pytest.approx(0.7, abs=0.06)
-    assert not any(r["transients"] for r in rows)
+    assert sum(bool(r["transients"]) for r in rows) / len(rows) == pytest.approx(0.3, abs=0.06)
+    assert SLICE.transient_p == FULL.transient_p
 
 
 def test_transients_share_and_ranges():
@@ -692,9 +695,25 @@ def test_manifest_counts_samples_after_the_limit(data):
     assert manifest["per_source"]["swc"]["clips"] == 5
 
 
-def test_full_refuses_conditions_without_a_draw_before_any_work(data):
-    with pytest.raises(NotImplementedError, match="babble"):
-        run_plan(FULL)
+def test_a_condition_whose_noise_set_the_config_lacks_is_refused_before_any_work(data):
+    with pytest.raises(ValueError, match="'city' needs 'wham'"):
+        run_plan(dataclasses.replace(FULL, noise=("demand", "musan")))
+    with pytest.raises(ValueError, match="'office' needs 'demand'"):
+        run_plan(dataclasses.replace(SLICE, noise=("wham",), condition_shares={"clean": 0.5, "office": 0.5}))
+
+
+def test_a_condition_nobody_draws_is_refused_before_any_work(data):
+    with pytest.raises(ValueError, match="no draw for condition 'music'"):
+        run_plan(dataclasses.replace(SLICE, condition_shares={"clean": 0.5, "music": 0.5}))
+
+
+def test_talker_conditions_need_reserved_clips_in_the_index(data):
+    cfg = dataclasses.replace(CONFIG, condition_shares={"clean": 0.5, "babble": 0.5})
+    run_index(cfg)
+    index = data / "datasets/processed/work/openvad-slice/index/swc.parquet"
+    asyncio.run(write_parquet({index: asyncio.run(read_parquet(index)).with_columns(reserved=pl.lit(False)).lazy()}))
+    with pytest.raises(ValueError, match="need reserved clips"):
+        run_plan(cfg)
 
 
 def test_an_mfa_source_without_word_tables_names_them(data, monkeypatch):
@@ -712,7 +731,9 @@ def test_a_source_without_adapter_is_named(data):
 def test_a_repeated_sample_id_is_refused(data, monkeypatch):
     run_index(CONFIG)
     monkeypatch.setattr(
-        plan_module, "clip_rows", lambda c, t, cfg, pool, counts, rirs: [draw_sample(c, t, cfg, pool, Chunk(0, 1))] * 2
+        plan_module,
+        "clip_rows",
+        lambda c, t, cfg, pool, counts, rirs, talkers: [draw_sample(c, t, cfg, pool, Chunk(0, 1))] * 2,
     )
     with pytest.raises(ValueError, match="repeated"):
         run_plan(CONFIG)
@@ -985,3 +1006,314 @@ def test_the_index_manifest_records_what_the_as_is_adapters_dropped(as_is_data):
         "label_length_mismatch": {"test": 4, "train": 4, "validation": 4},
         "label_one_sample_short": {},
     }
+
+
+@pytest.fixture
+def noise_trees(tmp_path, monkeypatch) -> dict[str, Path]:
+    monkeypatch.setenv("OPENVAD_DATA_DIR", str(tmp_path))
+    raw = tmp_path / "datasets/raw"
+    return {
+        "demand": make_demand_tree(raw / "demand"),
+        "wham": make_wham_tree(raw / "wham"),
+        "musan": make_musan_tree(raw / "musan"),
+    }
+
+
+@pytest.fixture
+def full_pool(noise_trees) -> NoisePool:
+    return NoisePool(noise_trees["demand"], noise_trees["wham"], noise_trees["musan"])
+
+
+def reserved_talkers(split_sizes: dict[str, dict[str, int]]) -> TalkerPool:
+    """Reserved clips: `split_sizes[split][language]` speakers each, one clip per speaker."""
+    clips = [
+        talker(f"{split}-{lang}-{i}", lang, split)
+        for split, languages in split_sizes.items()
+        for lang, n in languages.items()
+        for i in range(n)
+    ]
+    return TalkerPool(clips, FULL.babble_min_speakers)
+
+
+ALL_SPLITS = {s: {"de": 60, "ja": 60, "kk": 3, "fr": 60} for s in ("train", "validation", "test")}
+ONLY = {"clean": 0.0, "competing": 0.0, "babble": 0.0, "ssn": 0.0, "city": 0.0} | dict.fromkeys(DEMAND_CATEGORIES, 0.0)
+
+
+def only(condition: str):
+    """`FULL` with every row of one `condition`."""
+    return dataclasses.replace(FULL, condition_shares=ONLY | {condition: 1.0})
+
+
+def rows_with(cfg, n=200, split: Split = "train", language="de", **kwargs):
+    return [
+        draw_sample(dataclasses.replace(clip(f"c{i}", split=split), language=language), timing(f"c{i}"), cfg, **kwargs)
+        for i in range(n)
+    ]
+
+
+def donors(row, pool_clips: dict[str, Clip]) -> list[Clip]:
+    return [pool_clips[p] for p in row["noise_source_ids"]]
+
+
+@pytest.fixture
+def talkers() -> TalkerPool:
+    return reserved_talkers(ALL_SPLITS)
+
+
+def by_path(split_sizes: dict) -> dict[str, Clip]:
+    return {
+        c.path: c
+        for split, languages in split_sizes.items()
+        for lang, n in languages.items()
+        for c in (talker(f"{split}-{lang}-{i}", lang, split) for i in range(n))
+    }
+
+
+@pytest.mark.parametrize(("split", "folder"), [("train", "tr"), ("validation", "cv"), ("test", "tt")])
+def test_city_noise_is_a_wham_file_of_the_rows_split_with_its_channel(full_pool, split, folder):
+    rows = rows_with(only("city"), 60, split, pool=full_pool)
+    for r in rows:
+        [path], [offset] = r["noise_source_ids"], r["noise_offsets"]
+        file, _, channel = path.partition("#")
+        assert file.startswith(f"datasets/raw/wham/wham_noise/{folder}/")
+        assert channel in ("0", "1")
+        assert 0 <= offset < 1600
+
+
+def test_tt_never_reaches_train(full_pool):
+    for split in ("train", "validation"):
+        rows = rows_with(only("city"), 100, split, pool=full_pool)
+        assert not any("/tt/" in p for r in rows for p in r["noise_source_ids"])
+
+
+def test_musan_files_reach_the_demand_categories_of_their_table_row(full_pool):
+    categories = musan_noise_categories()
+    seen = set()
+    for category in ("nature", "street"):
+        for r in rows_with(only(category), 400, pool=full_pool):
+            [path] = r["noise_source_ids"]
+            if "/musan/" in path:
+                seen.add(category)
+                assert categories[path.rpartition("/")[2].removesuffix(".wav")] == category
+    assert seen == {"nature", "street"}
+
+
+def test_babble_has_six_different_reserved_talkers_of_the_rows_language_and_split(talkers):
+    clips = by_path(ALL_SPLITS)
+    for split in ("train", "validation", "test"):
+        rows = rows_with(only("babble"), 60, split, talkers=talkers)
+        assert {len(r["noise_source_ids"]) for r in rows} == {6}
+        for r in rows:
+            picked = donors(r, clips)
+            assert {c.split for c in picked} == {split}
+            assert {c.language for c in picked} == {"de"}
+            assert len({c.speaker for c in picked}) == 6
+            assert all(c.reserved for c in picked)
+            assert len(r["noise_offsets"]) == 6
+            assert all(o == 0 for o in r["noise_offsets"])
+
+
+def test_babble_offsets_start_inside_a_donor_longer_than_the_sample(talkers):
+    long = TalkerPool([dataclasses.replace(talker(f"l{i}"), duration_s=60.0) for i in range(10)], 1)
+    rows = rows_with(only("babble"), 50, talkers=long)
+    offsets = [o for r in rows for o in r["noise_offsets"]]
+    assert all(0 <= o <= (60 * 16000 - r["total_n"]) for r in rows for o in r["noise_offsets"])
+    assert max(offsets) > 16000
+
+
+def test_babble_japanese_takes_any_language_half_the_time(talkers):
+    clips = by_path(ALL_SPLITS)
+    rows = rows_with(only("babble"), 600, language="ja", talkers=talkers)
+    same = [all(c.language == "ja" for c in donors(r, clips)) for r in rows]
+    assert sum(same) / len(same) == pytest.approx(0.5, abs=0.05)
+
+
+def test_a_small_language_borrows_its_babble_from_every_language(talkers):
+    clips = by_path(ALL_SPLITS)
+    picked = [c for r in rows_with(only("babble"), 60, language="kk", talkers=talkers) for c in donors(r, clips)]
+    assert {c.language for c in picked} == {"de", "ja", "kk", "fr"}
+
+
+def test_ssn_is_fitted_to_one_reserved_talker(talkers):
+    clips = by_path(ALL_SPLITS)
+    for split in ("train", "test"):
+        for r in rows_with(only("ssn"), 30, split, talkers=talkers):
+            [c] = donors(r, clips)
+            assert (c.split, c.language, c.reserved) == (split, "de", True)
+
+
+def test_competing_rules(talkers, rirs):
+    clips = by_path(ALL_SPLITS)
+    rows = rows_with(only("competing"), 300, talkers=talkers, rirs=rirs)
+    for r in rows:
+        segments = r["segments"]
+        assert 1 <= len(segments) <= 3
+        covered = np.zeros(r["total_n"], bool)
+        for s in segments:
+            assert 0 <= s["start_n"] < s["end_n"] <= r["total_n"]
+            assert not covered[s["start_n"] : s["end_n"]].any()
+            covered[s["start_n"] : s["end_n"]] = True
+            assert 1000 <= s["lowpass_hz"] <= 4000
+            assert s["rir_id"]
+            donor = clips[s["source_path"]]
+            assert donor.reserved
+            assert (donor.split, donor.language) == ("train", "de")
+            assert 0 <= s["source_offset_n"] <= max(0, round(donor.duration_s * 16000) - (s["end_n"] - s["start_n"]))
+        assert 0.10 <= covered.mean() <= 0.50
+        assert 0 <= r["tir_db"] <= 15
+        assert r["snr_db"] is None
+        assert -90 <= r["dither_dbfs"] <= -70
+        assert r["noise_source_ids"] == []
+
+
+def test_competing_coverage_and_tir_spread_over_their_ranges(talkers, rirs):
+    rows = rows_with(only("competing"), 400, talkers=talkers, rirs=rirs)
+    coverage = [sum(s["end_n"] - s["start_n"] for s in r["segments"]) / r["total_n"] for r in rows]
+    assert min(coverage) < 0.15
+    assert max(coverage) > 0.45
+    assert {len(r["segments"]) for r in rows} == {1, 2, 3}
+    tir = [r["tir_db"] for r in rows]
+    assert min(tir) < 1.5
+    assert max(tir) > 13.5
+
+
+@pytest.mark.parametrize("split", ["train", "validation", "test"])
+def test_every_competing_segment_has_a_rir_of_its_own_split_and_rooms_stay_disjoint(talkers, rirs, split):
+    rooms = {
+        s: {
+            rirs.room_of(data_dir() / seg["rir_id"])
+            for r in rows_with(only("competing"), 150, s, talkers=talkers, rirs=rirs)
+            for seg in r["segments"]
+        }
+        for s in ("train", "validation", "test")
+    }
+    assert rooms[split]
+    assert rooms[split] <= set(rirs.rooms(split))
+    assert all(rooms[a].isdisjoint(rooms[b]) for a in rooms for b in rooms if a < b)
+
+
+def test_reserved_talkers_do_not_move_any_other_draw(talkers, rirs, full_pool):
+    for cfg in (only("babble"), only("competing"), FULL):
+        a = rows_with(cfg, 20, pool=full_pool, rirs=rirs)
+        b = rows_with(cfg, 20, pool=full_pool, rirs=rirs, talkers=talkers)
+        for x, y in zip(a, b, strict=True):
+            talker_columns = {"noise_source_ids", "noise_offsets", "segments", "tir_db"}
+            moved = {k for k in x if x[k] != y[k]}
+            assert moved <= talker_columns
+            if x["condition"] not in ("babble", "ssn", "competing"):
+                assert not moved
+
+
+def test_a_missing_rir_tree_moves_nothing_in_the_talker_draws(talkers, rirs):
+    with_rirs = rows_with(only("competing"), 30, talkers=talkers, rirs=rirs)
+    without = rows_with(only("competing"), 30, talkers=talkers)
+    for x, y in zip(with_rirs, without, strict=True):
+        assert [s | {"rir_id": None} for s in x["segments"]] == y["segments"]
+        assert {k: v for k, v in x.items() if k not in ("segments", "rir_id")} == {
+            k: v for k, v in y.items() if k not in ("segments", "rir_id")
+        }
+
+
+def test_a_pool_without_talkers_names_the_condition_and_leaves_its_donors_empty():
+    for condition in ("babble", "ssn", "competing"):
+        for r in rows_with(only(condition), 5):
+            assert r["noise_source_ids"] == []
+            assert r["segments"] == []
+            assert r["tir_db"] is None
+
+
+def test_the_talker_conditions_have_no_snr_unless_they_are_noise():
+    competing = rows_with(only("competing"), 5)
+    assert all(r["snr_db"] is None for r in competing)
+    assert all(r["snr_db"] in FULL.snr_grid_db for r in rows_with(only("babble"), 20))
+
+
+def test_slice_rows_carry_transients_and_still_plan_and_repeat(pool):
+    rows = [draw_sample(clip(f"c{i}"), timing(f"c{i}"), SLICE, pool) for i in range(300)]
+    with_transients = [r for r in rows if r["transients"]]
+    assert 0.2 < len(with_transients) / len(rows) < 0.4
+    assert rows[0] == draw_sample(clip("c0"), timing("c0"), SLICE, pool)
+
+
+@pytest.fixture
+def all_conditions_data(tmp_path, monkeypatch):
+    """A SWC tree of many articles by many readers, with DEMAND, WHAM!, MUSAN and RIR trees beside it."""
+    monkeypatch.setenv("OPENVAD_DATA_DIR", str(tmp_path))
+    raw = tmp_path / "datasets/raw"
+    raw.mkdir(parents=True)
+    (raw / "swc").mkdir()
+    (raw / "swc/manifest.json").write_text('{"dataset": "swc"}')
+    for i in range(90):
+        add_article(raw / "swc", "german", f"Art{i:02d}", f"Reader{i % 30:02d}")
+    make_demand_tree(raw / "demand")
+    make_wham_tree(raw / "wham")
+    make_musan_tree(raw / "musan")
+    make_rir_tree(raw / "rirs")
+    return tmp_path
+
+
+FULL_CONDITIONS = dataclasses.replace(
+    FULL,
+    name="openvad-slice",  # the work directory the helpers above read
+    sources=("swc",),
+    languages=("de",),
+    babble_min_speakers=3,
+)
+
+
+def test_run_plan_builds_every_condition_from_reserved_clips_of_the_index(all_conditions_data):
+    cfg = FULL_CONDITIONS
+    run_index(cfg)
+    run_plan(cfg)
+    plan = plan_of(all_conditions_data)
+    index = asyncio.run(read_parquet(all_conditions_data / "datasets/processed/work/openvad-slice/index/swc.parquet"))
+    reserved = index.filter(pl.col("reserved"))
+    assert reserved.height >= 3
+    assert set(plan["condition"]) == {"clean", "competing", "babble", "ssn", "city", *DEMAND_CATEGORIES}
+    # Reserved speakers are never foreground, and are the only talkers.
+    assert not set(plan["speaker"]) & set(reserved["speaker"])
+    reserved_paths = set(reserved["path"])
+    for r in plan.filter(pl.col("condition").is_in(["babble", "ssn"])).iter_rows(named=True):
+        assert set(r["noise_source_ids"]) <= reserved_paths
+        assert len(r["noise_source_ids"]) == (6 if r["condition"] == "babble" else 1)
+    for r in plan.filter(pl.col("condition") == "competing").iter_rows(named=True):
+        assert {s["source_path"] for s in r["segments"]} <= reserved_paths
+    for r in plan.filter(pl.col("condition").is_in(["city", *DEMAND_CATEGORIES])).iter_rows(named=True):
+        assert (all_conditions_data / r["noise_source_ids"][0].partition("#")[0]).is_file()
+    assert plan.filter(pl.col("transients").list.len() > 0).height > 0
+
+
+def test_a_rerun_of_the_full_condition_plan_is_identical(all_conditions_data):
+    run_index(FULL_CONDITIONS)
+    run_plan(FULL_CONDITIONS)
+    first = plan_of(all_conditions_data)
+    run_plan(FULL_CONDITIONS)
+    assert plan_of(all_conditions_data).equals(first)
+
+
+def test_only_reserved_clips_of_the_augmented_sources_become_talkers(as_is_data):
+    cfg = dataclasses.replace(
+        AS_IS_CONFIG,
+        name="openvad-slice",
+        sources=("swc", "ami", "librivad"),
+        condition_shares={"babble": 0.5, "competing": 0.5},
+        room_p=0.0,
+    )
+    run_index(cfg)
+    index_dir = as_is_data / "datasets/processed/work/openvad-slice/index"
+    # Even a LibriVAD or AMI clip that is flagged reserved is not a talker: the first is not reserved by design, the
+    # second is a span of a recording with other speakers in it.
+    for name, flagged in (
+        ("swc", pl.col("clip_id") == "english/Aaa"),
+        ("ami", pl.lit(True)),
+        ("librivad", pl.lit(True)),
+    ):
+        frame = asyncio.run(read_parquet(index_dir / f"{name}.parquet")).with_columns(reserved=flagged)
+        asyncio.run(write_parquet({index_dir / f"{name}.parquet": frame.lazy()}))
+    run_plan(cfg)
+    rows = plan_of(as_is_data).filter(pl.col("source") == "swc")
+    donors = {p for ids in rows["noise_source_ids"] for p in ids} | {
+        s["source_path"] for ss in rows["segments"] for s in ss
+    }
+    assert donors
+    assert all(p.startswith("datasets/raw/swc/") and p.endswith("english/Aaa/audio.ogg") for p in donors)

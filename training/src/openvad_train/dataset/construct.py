@@ -36,7 +36,18 @@ from openvad_train.dataset.codecs import (
 from openvad_train.dataset.config import DEMAND_CATEGORIES, FULL, SLICE, BuildConfig, dataset_root, work_dir
 from openvad_train.dataset.cutting import rebase
 from openvad_train.dataset.labels import SAMPLES_PER_FRAME, SAMPLES_PER_MS, apply_gap_rule, rasterise
-from openvad_train.dataset.mix import SAMPLE_RATE, dither, loop_slice, mix_at_snr, place, protect_peak
+from openvad_train.dataset.mix import (
+    SAMPLE_RATE,
+    add_transients,
+    dither,
+    loop_slice,
+    mix_at_snr,
+    place,
+    protect_peak,
+    read_span,
+    wada_snr,
+)
+from openvad_train.dataset.noise import Segment, build_babble, build_ssn, fit_lpc, mix_competing
 from openvad_train.dataset.parquet_io import read_parquet, write_parquet
 from openvad_train.dataset.plan import PLAN_SCHEMA
 from openvad_train.fetch.common import (
@@ -56,7 +67,10 @@ _SPACE_MARGIN_BYTES = 50_000_000_000
 _MAX_FAILED_SHARE = 0.05
 # Words quieter than this are digital silence with labels on it: a real SWC "word" of 3.39 s sat at -83.6 dBFS.
 _MIN_WORD_DBFS = -70.0
-_CONDITIONS_BUILT = {"clean", *DEMAND_CATEGORIES}
+# The noise-file conditions; babble and SSN are built from reserved talkers, and a competing talker from segments.
+_FILE_CONDITIONS = {"city", *DEMAND_CATEGORIES}
+# Seeds of the construction streams next to the plan's (`default_rng([seed, n])`): dither, SSN and transients.
+_DITHER_STREAM, _SSN_STREAM, _TRANSIENT_STREAM = 1, 2, 3
 
 
 class OutOfSpace(Exception):  # noqa: N818 (the name is the plan's interface)
@@ -67,34 +81,46 @@ class PlanMismatch(Exception):  # noqa: N818 (the name is the plan's interface)
     """The plan, its version or the ffmpeg differ from what the shards already built came from."""
 
 
-def _legs_not_built(row: dict) -> list[str]:
-    """The fields of `row` that ask for a leg construction does not have yet: Task 18 adds them."""
-    asked = {
-        "baseline_snr_db": row["source"] == "common-voice",  # WADA-SNR on each clip, spec "Common Voice baseline"
-        "transients": bool(row["transients"]),
-        "segments": bool(row["segments"]),
-        "band": row["band"] not in ("wide", "narrow_leg"),
-        "condition": row["condition"] not in _CONDITIONS_BUILT,
-    }
-    return [field for field, wanted in asked.items() if wanted]
-
-
-def _read_noise(path: Path, offset_n: int, n: int) -> np.ndarray:
-    """What `loop_slice` gives on the whole file, reading only the part it needs unless the slice wraps around."""
+def _read_noise(path: Path, offset_n: int, n: int, channel: int | None = None) -> np.ndarray:
+    """What `loop_slice` gives on the whole file, reading only the part it needs unless the slice wraps around.
+    A two-channel file (WHAM!) gives its `channel`.
+    """
     with sf.SoundFile(path) as f:
         if f.samplerate != SAMPLE_RATE:
             raise ValueError(f"{path}: noise must be 16 kHz, got {f.samplerate}")
+        if (channel is None) != (f.channels == 1):
+            raise ValueError(f"{path}: {f.channels} channels and channel {channel}")
+        column = channel or 0
         if offset_n + n <= f.frames:
             f.seek(offset_n)
-            return f.read(n, dtype="float32")
-        return loop_slice(f.read(dtype="float32"), offset_n, n)
+            return np.ascontiguousarray(f.read(n, dtype="float32", always_2d=True)[:, column])
+        return loop_slice(np.ascontiguousarray(f.read(dtype="float32", always_2d=True)[:, column]), offset_n, n)
 
 
 def _noise_of(row: dict, raw: Path) -> np.ndarray:
-    files, offsets = row["noise_source_ids"], row["noise_offsets"]
-    if len(files) != 1 or len(offsets) != 1:
-        raise ValueError(f"{row['sample_id']}: a {row['condition']} row needs one noise, got {files} at {offsets}")
-    return _read_noise(raw / files[0], offsets[0], row["total_n"])
+    """The noise of a row over its whole sample: a file of a pool, babble from six talkers, or speech-shaped noise
+    fitted to one. Babble and SSN are made from reserved speakers, so their `noise_source_ids` are speech files.
+    """
+    files, offsets, n = row["noise_source_ids"], row["noise_offsets"], row["total_n"]
+    if len(files) != len(offsets):
+        raise ValueError(f"{row['sample_id']}: {len(files)} noise files and {len(offsets)} offsets")
+    match row["condition"]:
+        case "babble":
+            if len(files) < 2:
+                raise ValueError(f"{row['sample_id']}: babble needs several talkers, got {files}")
+            return build_babble(files, offsets, n, raw)
+        case "ssn":
+            if len(files) != 1:
+                raise ValueError(f"{row['sample_id']}: SSN is fitted to one talker, got {files}")
+            lpc = fit_lpc(read_span(str(raw / files[0]), offsets[0], n))
+            return build_ssn(lpc, n, np.random.default_rng([row["seed"], _SSN_STREAM]))
+        case c if c in _FILE_CONDITIONS:
+            if len(files) != 1:
+                raise ValueError(f"{row['sample_id']}: a {c} row needs one noise, got {files} at {offsets}")
+            file, _, channel = files[0].partition("#")
+            return _read_noise(raw / file, offsets[0], n, int(channel) if channel else None)
+        case c:
+            raise ValueError(f"{row['sample_id']}: no noise for condition {c!r}")
 
 
 def _channel(x: np.ndarray, row: dict, raw: Path) -> np.ndarray:
@@ -125,19 +151,25 @@ def codec_delay_ms(row: dict) -> int:
 def construct_sample(row: dict, raw: Path) -> tuple[bytes, np.ndarray]:
     """16-bit 16 kHz mono FLAC and one label per 10 ms frame for a plan row.
 
-    `raw` is the root the row's paths are relative to, `$OPENVAD_DATA_DIR` in a build. The only draw made here is
-    the dither of a clean row: its `total_n` normals from `default_rng([row["seed"], 1])`, a stream apart from the
-    one the plan drew from. The chain and the codec leg draw nothing: their parameters are in the row. Bytes then
-    depend only on the row, its source files (the RIR included) and the ffmpeg version.
+    `raw` is the root the row's paths are relative to, `$OPENVAD_DATA_DIR` in a build. The draws made here come from
+    streams apart from the one the plan drew from, `default_rng([row["seed"], n])`: the dither of a clean or
+    competing row (n = 1), the white noise of SSN (2) and the transients (3). The chain and the codec leg draw
+    nothing: their parameters are in the row. Bytes then depend only on the row, its source files (the RIRs and
+    talkers included) and the ffmpeg version.
 
     Labels come from the audio produced, never from file metadata. `DecodeError` means this clip cannot be built: a
     damaged file, a decode further than one 10 ms frame from `source_n`, or words under -70 dBFS RMS. A decode can
-    run long only by `decode_16k` breaking its contract, because it stops at `source_n`. `NotImplementedError` names
-    the fields of a row asking for a leg that does not exist yet, and nothing is skipped silently.
+    run long only by `decode_16k` breaking its contract, because it stops at `source_n`.
+
+    Transients are overlaid on the acoustic mix, so the chain treats them like the rest, and `protect_peak` follows
+    the chain: nothing passes full scale. A Common Voice clip is mixed against its WADA-SNR speech power, and
+    the `baseline_snr_db` of its built row is that estimate.
     """
-    missing = _legs_not_built(row)
-    if missing:
-        raise NotImplementedError(f"{row['sample_id']} asks for legs not built yet: {', '.join(missing)}")
+    return _build(row, raw)[:2]
+
+
+def _build(row: dict, raw: Path) -> tuple[bytes, np.ndarray, float | None]:
+    """`construct_sample` and the WADA-SNR baseline of a Common Voice clip (None for any other source)."""
     offset_n, total_n, source_n = row["speech_offset_n"], row["total_n"], row["source_n"]
     if offset_n % SAMPLES_PER_MS:
         raise ValueError(f"{row['sample_id']}: padding offset {offset_n} is off the millisecond grid labels use")
@@ -157,13 +189,19 @@ def construct_sample(row: dict, raw: Path) -> tuple[bytes, np.ndarray]:
         active[offset_n + start * SAMPLES_PER_MS : offset_n + end * SAMPLES_PER_MS] = True
     if not active.any() or np.sqrt(np.mean(np.square(x[active], dtype=np.float64))) < 10 ** (_MIN_WORD_DBFS / 20):
         raise DecodeError(f"{path}: silent under the words of {row['sample_id']}: under {_MIN_WORD_DBFS} dBFS")
-    if row["condition"] == "clean":
-        x = x + dither(total_n, row["dither_dbfs"], np.random.default_rng([row["seed"], 1]))
-    else:
+    baseline = wada_snr(speech) if row["source"] == "common-voice" else None
+    condition = row["condition"]
+    if condition == "competing":
+        x = mix_competing(x, active, [Segment(**s) for s in row["segments"]], row["tir_db"], raw, baseline)
+    elif condition != "clean":
         noise = _noise_of(row, raw)
         if not noise[active].any():
             raise DecodeError(f"{row['noise_source_ids'][0]}: silent under the words of {row['sample_id']}")
-        x = mix_at_snr(x, noise, active, row["snr_db"])
+        x = mix_at_snr(x, noise, active, row["snr_db"], baseline)
+    if condition in ("clean", "competing"):
+        x = x + dither(total_n, row["dither_dbfs"], np.random.default_rng([row["seed"], _DITHER_STREAM]))
+    if row["transients"]:
+        x = add_transients(x, row["transients"], np.random.default_rng([row["seed"], _TRANSIENT_STREAM]))
     x = _channel(x, row, raw)
     x = protect_peak(x)  # after the chain, which may raise the peak; before the codec, which takes [-1, 1]
     if row["codec"] != "none":
@@ -173,7 +211,7 @@ def construct_sample(row: dict, raw: Path) -> tuple[bytes, np.ndarray]:
     labels = rasterise(apply_gap_rule(speech_ms, row["gap_ms"]), mask_ms, len(x), shift_ms)
     flac = io.BytesIO()
     sf.write(flac, x, SAMPLE_RATE, format="FLAC", subtype="PCM_16")
-    return flac.getvalue(), labels
+    return flac.getvalue(), labels, baseline
 
 
 class ShardResult(NamedTuple):
@@ -182,18 +220,18 @@ class ShardResult(NamedTuple):
     sha256: str
 
 
-def _construct_with_a_retry(row: dict, raw: Path) -> tuple[bytes, np.ndarray]:
-    """`construct_sample`, tried once more on `DecodeError` so a transient failure does not drop the row for good.
+def _construct_with_a_retry(row: dict, raw: Path) -> tuple[bytes, np.ndarray, float | None]:
+    """`_build`, tried once more on `DecodeError` so a transient failure does not drop the row for good.
 
     After the second failure the source must still give one byte: an `OSError` here means the share is failing, not
     the clip, and aborts the run. ffmpeg reports both the same way.
     """
     try:
-        return construct_sample(row, raw)
+        return _build(row, raw)
     except DecodeError as e:
         log.info("%s: retrying after %s", row["sample_id"], e)
     try:
-        return construct_sample(row, raw)
+        return _build(row, raw)
     except DecodeError:
         with (raw / row["source_path"]).open("rb") as f:
             f.read(1)
@@ -208,7 +246,7 @@ def _write_tar(rows: list[dict], tar_path: Path, failures_path: Path, raw: Path)
     with tarfile.open(tar_path, "w") as tar, failures_path.open("w") as failures:
         for row in rows:
             try:
-                flac, labels = _construct_with_a_retry(row, raw)
+                flac, labels, baseline = _construct_with_a_retry(row, raw)
             except DecodeError as e:
                 log.warning("%s: %s", row["sample_id"], e)
                 failure = {"sample_id": row["sample_id"], "source_path": row["source_path"], "error": str(e)}
@@ -218,7 +256,9 @@ def _write_tar(rows: list[dict], tar_path: Path, failures_path: Path, raw: Path)
             member = tarfile.TarInfo(f"{row['sample_id']}.flac")
             member.size = len(flac)
             tar.addfile(member, io.BytesIO(flac))
-            built.append(row | {"labels": labels.tolist(), "codec_delay_ms": codec_delay_ms(row)})
+            built.append(
+                row | {"labels": labels.tolist(), "codec_delay_ms": codec_delay_ms(row), "baseline_snr_db": baseline}
+            )
     return built, n_failed
 
 
