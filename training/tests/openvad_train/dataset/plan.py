@@ -920,3 +920,12 @@ def test_librivad_and_voices_reserve_no_speaker_and_plan_keeps_every_clip(as_is_
 
 def test_ami_keeps_the_default_of_reserving_speakers():
     assert getattr(index.SOURCES["ami"], "RESERVES_SPEAKERS", True) is True
+
+
+def test_the_index_manifest_records_what_the_as_is_adapters_dropped(as_is_data):
+    cfg = dataclasses.replace(AS_IS_CONFIG, sources=("librivad",))
+    run_index(cfg)
+    manifest = json.loads((work_dir(cfg) / "index/manifest.json").read_text())
+    assert manifest["per_source"]["librivad"]["adapter"] == {
+        "label_length_mismatch": {"test": 4, "train": 4, "validation": 4}
+    }

@@ -5,13 +5,15 @@
 
 """LibriVAD `medium`: every generated mixture, labelled by the per-sample speech labels of its clean utterance.
 
-Adapter contract: `MFA_ALIGNED`, `clips(raw, languages)` and `timings(raw, clips)`. `raw` is `datasets/raw/librivad`.
+Adapter contract: `MFA_ALIGNED`, `REPORTS`, `RESERVES_SPEAKERS`, `clips(raw, languages, report)` and
+`timings(raw, clips)`. `raw` is `datasets/raw/librivad`.
 The splits follow the LibriSpeech folder an utterance comes from: `train-clean-100` is train, `test-clean` test
 (`raw/generated`), and `dev-clean` validation, which only `datasets/raw/librivad-val` holds (the `librivad-val`
 fetcher generates it in the same layout, with its labels in `labels/` beside `generated/`). Nothing here reads
 LibriSpeech itself.
 """
 
+from collections import Counter
 from collections.abc import Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
@@ -21,11 +23,13 @@ import numpy as np
 
 from openvad_train.dataset.labels import FRAME_MS, SAMPLES_PER_FRAME
 from openvad_train.dataset.schema import Clip, Split, Timing
+from openvad_train.dataset.sources import wav_durations
 
 
 SOURCE = "librivad"
 CUTTING = None
 MFA_ALIGNED = False
+REPORTS = True
 # The spec keeps every file of this source, so none of its speakers is reserved for babble.
 RESERVES_SPEAKERS = False
 LICENCE = "CC BY-NC-SA 4.0"
@@ -76,11 +80,14 @@ def _n_samples(path: Path) -> int:
     return int(np.load(path, mmap_mode="r").shape[0])
 
 
-def clips(raw: Path, languages: set[str] | None = None) -> Iterator[Clip]:
+def clips(raw: Path, languages: set[str] | None = None, report: dict | None = None) -> Iterator[Clip]:
     """One clip per generated wav of `train-clean-100` and `test-clean` under `raw`, and of `dev-clean` under the
-    sibling `librivad-val` when it exists. A mixture is as long as its utterance's label file, which has one value
-    per sample; the 54 mixtures of an utterance (nine noises at six SNRs) share it. The speaker is the LibriSpeech
-    speaker (of the first utterance of a concatenated pair), whom the folders keep in one split.
+    sibling `librivad-val` when it exists. The length is the wav's header. The 54 mixtures of an utterance (nine
+    noises at six SNRs) share its label file, which has one value per sample, so a label whose length is not the
+    wav's frame count belongs to another signal and the clip is dropped, never trimmed or stretched: the pairs of
+    two chapters or speakers in `LibriSpeechConcat` are such (about 1,890 clips). `report["label_length_mismatch"]`
+    counts them per split. The speaker is the LibriSpeech speaker (of the first utterance of a concatenated pair),
+    whom the folders keep in one split.
     """
     if languages is not None and LANGUAGE not in languages:
         return
@@ -92,11 +99,16 @@ def clips(raw: Path, languages: set[str] | None = None) -> Iterator[Clip]:
         for dataset in DATASETS:
             for folder in folders:
                 for wav in sorted((tree / "generated" / dataset / folder).glob("*/*/*.wav")):
-                    found.append((tree, tree / labels, dataset, folder, wav))
-    needed = sorted({_label_of(labels, dataset, folder, w.stem) for _, labels, dataset, folder, w in found})
+                    found.append((tree, dataset, folder, wav, _label_of(tree / labels, dataset, folder, wav.stem)))
+    needed = sorted({label for *_, label in found})
     with ThreadPoolExecutor(_THREADS) as pool:
         lengths = dict(zip(needed, pool.map(_n_samples, needed), strict=True))
-    for tree, labels, dataset, folder, wav in found:
+    durations = wav_durations([wav for _, _, _, wav, _ in found])
+    mismatched: Counter[str] = Counter()
+    for (tree, dataset, folder, wav, label), duration in zip(found, durations, strict=True):
+        if round(duration * SAMPLE_RATE) != lengths[label]:
+            mismatched[SPLITS[folder]] += 1
+            continue
         noise, snr = wav.parent.parent.name, wav.parent.name
         yield Clip(
             clip_id=f"{dataset}/{folder}/{noise}/{snr}/{wav.stem}",
@@ -106,10 +118,12 @@ def clips(raw: Path, languages: set[str] | None = None) -> Iterator[Clip]:
             split=SPLITS[folder],
             path=(Path("datasets/raw") / tree.name / wav.relative_to(tree)).as_posix(),
             offset_s=0.0,
-            duration_s=lengths[_label_of(labels, dataset, folder, wav.stem)] / SAMPLE_RATE,
+            duration_s=duration,
             licence=LICENCE,
             transcript=None,
         )
+    if report is not None:
+        report["label_length_mismatch"] = dict(sorted(mismatched.items()))
 
 
 @lru_cache(maxsize=8192)

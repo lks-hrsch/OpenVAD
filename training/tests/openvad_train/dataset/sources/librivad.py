@@ -31,6 +31,28 @@ def test_librivad_maps_each_split(librivad_tree):
     assert any("Concat" not in c.path for c in clips)
 
 
+def test_a_pair_whose_label_is_not_as_long_as_its_wav_is_dropped_and_counted_by_split(librivad_tree):
+    report: dict = {}
+    clips = list(librivad.clips(librivad_tree, None, report))
+    assert report["label_length_mismatch"] == {"test": 4, "train": 4, "validation": 4}
+    assert not any("1089-134686-0001_+_1188-133604-0016" in c.clip_id for c in clips)
+    # A pair of two chapters whose label has the wav's length stays, and so does a pair of one chapter.
+    assert any("1188-133604-0016_+_1089-134686-0001" in c.clip_id for c in clips)
+    assert any("1089-134686-0000_+_0001" in c.clip_id for c in clips)
+
+
+def test_the_length_is_the_wav_header_not_the_label(librivad_tree):
+    c = next(c for c in librivad.clips(librivad_tree) if "1089-134686-0000_+_0001" in c.clip_id)
+    assert c.duration_s == 56000 / 16000
+    wav = librivad_tree / "generated/LibriSpeechConcat/train-clean-100/Babble_noise/5/1089-134686-0000_+_0001.wav"
+    sf.write(wav, np.zeros(30000, np.float32), 16000, subtype="PCM_16")  # now shorter than its label
+    report: dict = {}
+    ids = {c.clip_id for c in librivad.clips(librivad_tree, None, report)}
+    assert "LibriSpeechConcat/train-clean-100/Babble_noise/5/1089-134686-0000_+_0001" not in ids
+    assert "LibriSpeechConcat/train-clean-100/Babble_noise/10/1089-134686-0000_+_0001" in ids
+    assert report["label_length_mismatch"]["train"] == 4 + 1  # the short-label pair and this wav
+
+
 def test_every_mixture_is_a_clip_and_passes_the_split_guard(librivad_tree):
     clips = list(librivad.clips(librivad_tree))
     # 3 LibriSpeech and 2 concatenated utterances, in 2 noises at 2 SNRs, in 3 splits.

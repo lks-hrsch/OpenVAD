@@ -215,14 +215,17 @@ def save_samplewise_labels(folder: Path, labels: list[int], name: str = "labels.
 LIBRIVAD_CONCAT_FOLDERS = {
     "1089-134686-0000_+_0001": ("1089", "134686"),
     "1188-133604-0016_+_1089-134686-0001": ("1089", "134686"),
+    "1089-134686-0001_+_1188-133604-0016": ("1188", "133604"),
 }
+# Upstream's labels of some pairs of two chapters or speakers are shorter than their wavs (35 of 35 checked).
+LIBRIVAD_SHORT_LABELS = {"1089-134686-0001_+_1188-133604-0016": 40000}
 
 
 def make_librivad_tree(raw: Path, with_val: bool = True) -> Path:
     """`train-clean-100` and `test-clean` under `raw` (labels in `repo/Files/Labels`) and, when `with_val`, the layout
     the `librivad-val` fetcher is to write beside it: `dev-clean` under `generated/` and labels under `labels/`.
     Each utterance is mixed with two noises at two SNRs. A label is speech from its 3rd to its 7th tenth of a second,
-    and the wav holds as many samples as its label.
+    and the wav holds as many samples as its label, except for the pairs in `LIBRIVAD_SHORT_LABELS`.
     """
     trees: list[tuple[Path, str, tuple[str, ...]]] = [(raw, "repo/Files/Labels", ("train-clean-100", "test-clean"))]
     if with_val:
@@ -236,7 +239,7 @@ def make_librivad_tree(raw: Path, with_val: bool = True) -> Path:
             for folder in folders:
                 for stem, (speaker, chapter) in stems.items():
                     n = LIBRIVAD_SAMPLES.get(stem, 56000)
-                    label = np.zeros(n, np.int16)
+                    label = np.zeros(LIBRIVAD_SHORT_LABELS.get(stem, n), np.int16)
                     label[4800 : 4800 + 6400] = 1
                     save_samplewise_labels(
                         tree / labels / dataset / folder / speaker / chapter, label.tolist(), f"{stem}.npy"
