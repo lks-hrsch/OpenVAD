@@ -3,11 +3,12 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-"""The DEMAND noise pool: scene categories, split channels and reproducible draws.
+"""The noise pools: DEMAND scene categories and split channels, the MUSAN category table and reproducible draws.
 
-City, babble, SSN and MUSAN join the pool in a later task.
+City, babble and SSN join the pool in the next commits.
 """
 
+import csv
 from pathlib import Path
 from typing import NamedTuple
 
@@ -24,6 +25,8 @@ _CATEGORIES = {
     "S": "street",
     "T": "transport",
 }
+# The hand-reviewed sort of the MUSAN noise files into the nine categories (spec, "Acoustic mix").
+MUSAN_CATEGORIES = Path(__file__).with_name("musan_noise_categories.tsv")
 # Channels 1 to 12 train, 13 and 14 validation, 15 and 16 test (owner, 2026-11-06).
 _CHANNELS = {"train": range(1, 13), "validation": range(13, 15), "test": range(15, 17)}
 
@@ -38,6 +41,12 @@ def category_of_demand(scene: str) -> str:
     if scene[:1] not in _CATEGORIES:
         raise ValueError(f"not a DEMAND scene: {scene!r}")
     return _CATEGORIES[scene[0]]
+
+
+def musan_noise_categories() -> dict[str, str]:
+    """Category of every MUSAN noise file ID, or `unused`."""
+    with MUSAN_CATEGORIES.open() as f:
+        return {row["file"]: row["category"] for row in csv.DictReader(f, delimiter="\t")}
 
 
 def demand_channels(split: str) -> range:
