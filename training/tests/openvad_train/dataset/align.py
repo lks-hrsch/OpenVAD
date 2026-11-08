@@ -22,6 +22,7 @@ import polars as pl
 import pytest
 
 from align_support import FIXTURES, Killed, install, make_clip
+from mfa_source_support import make_sc_tree
 from openvad_train.dataset import align, index
 from openvad_train.dataset.align import (
     DropRules,
@@ -40,6 +41,7 @@ from openvad_train.dataset.config import SLICE, work_dir
 from openvad_train.dataset.models import load_models
 from openvad_train.dataset.parquet_io import read_parquet, write_parquet
 from openvad_train.dataset.schema import Clip, Timing, rank
+from openvad_train.dataset.sources import speechcommands
 
 
 # ---------------------------------------------------------------------------------------------------- transcripts
@@ -623,6 +625,23 @@ def test_clips_without_a_transcript_never_reach_mfa_and_are_counted(stage):
     summary = json.loads((work_dir(stage.cfg) / "words/manifest.json").read_text())["per_source"]["fake"]["de"]
     assert (summary["index_clips"], summary["kept"], summary["no_transcript_not_aligned"]) == (5, 4, 1)
     assert summary["over_cap_not_aligned"] == 0
+
+
+def test_speech_commands_background_noise_never_reaches_mfa(stage):
+    raw = stage.root / "datasets/raw/speech-commands"
+    make_sc_tree(raw)
+    clips = list(speechcommands.clips(raw))
+    assert any(c.transcript is None for c in clips)
+    cfg = dataclasses.replace(stage.cfg, sources=("speech-commands",))
+    out = work_dir(cfg) / "index"
+    out.mkdir(parents=True, exist_ok=True)
+    asyncio.run(write_parquet({out / "speech-commands.parquet": index._frame(clips, set())}))
+    run_align(cfg, ["en"])
+    sent = [text for call in stage.fake.calls for text in call]
+    assert sent
+    assert set(sent) <= {"yes", "no"}  # the labels of the spoken clips, never the noise file
+    kept = {r["clip_id"] for t in tables(stage)["words"].values() for r in t}
+    assert kept == {c.clip_id for c in clips if c.transcript is not None}
 
 
 def test_reserved_speakers_are_never_aligned(stage):

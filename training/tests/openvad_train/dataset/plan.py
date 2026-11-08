@@ -15,9 +15,11 @@ import polars as pl
 import pytest
 
 from demand_support import make_demand_tree
+from mfa_source_support import make_sc_tree
 from openvad_train.dataset import __main__ as cli
+from openvad_train.dataset import align, index
 from openvad_train.dataset import plan as plan_module
-from openvad_train.dataset.config import DEMAND_CATEGORIES, FULL, SLICE
+from openvad_train.dataset.config import DEMAND_CATEGORIES, FULL, SLICE, work_dir
 from openvad_train.dataset.cutting import Chunk
 from openvad_train.dataset.index import run_index
 from openvad_train.dataset.labels import rasterise
@@ -637,3 +639,131 @@ def test_cli_passes_config_and_limit(monkeypatch):
 
 def test_plan_is_a_registered_stage():
     assert cli.STAGES["plan"] is plan_module.main
+
+
+# ---------------------------------------------------------------------------------------------------- MFA sources
+
+
+@pytest.fixture
+def mfa_data(data, monkeypatch):
+    monkeypatch.setitem(index.SOURCES, "fake", SimpleNamespace(MFA_ALIGNED=True, SOURCE="fake"))
+    return data
+
+
+MFA_CONFIG = dataclasses.replace(SLICE, name="mfa-test", sources=("fake",), languages=None)
+
+
+def fake_clip(clip_id, speaker="x", language="de", hours=1.0, **kw) -> Clip:
+    return Clip(
+        clip_id, "fake", language, speaker, "train", f"datasets/raw/fake/{clip_id}.wav", 0.0, hours * 3600, "CC0",
+        "a b", **kw,
+    )  # fmt: skip
+
+
+def hour_of_speech(clip_id) -> Timing:
+    return Timing(clip_id, "word", [(0, 3_600_000)], [], {"n_words": 1}, "mfa")
+
+
+def write_mfa_tables(cfg, source, clips, kept, dropped=(), reserved=()):
+    """The index of `clips` and, per language, one words table of the clip IDs in `kept` and one drop table."""
+    out = work_dir(cfg) / "index"
+    out.mkdir(parents=True, exist_ok=True)
+    asyncio.run(write_parquet({out / f"{source}.parquet": index._frame(clips, set(reserved))}))
+    words = work_dir(cfg) / "words" / source
+    for language in sorted({c.language for c in clips}):
+        folder = words / language
+        (folder / "dropped").mkdir(parents=True, exist_ok=True)
+        mine = [hour_of_speech(c.clip_id) for c in clips if c.language == language and c.clip_id in kept]
+        drops = [
+            align.Drop(c.clip_id, "low_loglik", None) for c in clips if c.clip_id in dropped and c.language == language
+        ]
+        asyncio.run(
+            write_parquet(
+                {
+                    folder / "00000.parquet": align._table(mine),
+                    folder / "dropped" / "00000.parquet": align._drop_table(source, language, "00000", drops),
+                }
+            )
+        )
+
+
+def test_a_speaker_with_25_h_in_each_of_two_languages_keeps_30_h_in_plan(mfa_data):
+    clips = [fake_clip(f"{lang}{i}", language=lang) for lang in ("de", "en") for i in range(25)]
+    clips += [fake_clip(f"other{i}", speaker="y") for i in range(2)]
+    write_mfa_tables(MFA_CONFIG, "fake", clips, kept={c.clip_id for c in clips})
+    run_plan(MFA_CONFIG)
+    df = asyncio.run(read_parquet(work_dir(MFA_CONFIG) / "plan/plan.parquet"))
+    mine = df.filter(pl.col("speaker") == "x")
+    assert mine.height == 30
+    ranked = sorted((c.clip_id for c in clips if c.speaker == "x"), key=lambda i: (rank(i), i))
+    assert set(mine["clip_id"]) == set(ranked[:30])
+    assert set(mine["language"]) == {"de", "en"}  # the cap walks both languages together
+    assert df.filter(pl.col("speaker") == "y").height == 2
+    manifest = json.loads((work_dir(MFA_CONFIG) / "plan/manifest.json").read_text())
+    assert manifest["per_source"]["fake"]["over_cap"] == 20
+
+
+def test_clips_without_a_surviving_timing_are_skipped_and_counted_by_reason(mfa_data):
+    clips = [
+        fake_clip("kept", speaker="a"),
+        fake_clip("dropped", speaker="b"),
+        fake_clip("over_align_cap", speaker="c"),
+        fake_clip("unaligned_language", speaker="d", language="fr"),
+        fake_clip("reserved", speaker="r"),
+    ]
+    write_mfa_tables(MFA_CONFIG, "fake", clips, kept={"kept"}, dropped={"dropped"}, reserved={("train", "de", "r")})
+    (work_dir(MFA_CONFIG) / "words/fake/fr").rename(work_dir(MFA_CONFIG) / "words/fake-fr-removed")
+    run_plan(MFA_CONFIG)
+    df = asyncio.run(read_parquet(work_dir(MFA_CONFIG) / "plan/plan.parquet"))
+    assert df["clip_id"].to_list() == ["kept"]
+    per = json.loads((work_dir(MFA_CONFIG) / "plan/manifest.json").read_text())["per_source"]["fake"]
+    assert (per["clips"], per["samples"], per["reserved"], per["dropped_by_align"], per["not_aligned"]) == (
+        5,
+        1,
+        1,
+        1,
+        2,
+    )
+    assert (per["over_cap"], per["without_sample"]) == (0, 0)
+
+
+def test_a_row_carries_the_timing_of_its_own_clip_whatever_the_language_order(mfa_data):
+    clips = [
+        fake_clip(f"{lang}{i}", speaker=f"{lang}{i}", language=lang) for i in range(3) for lang in ("en", "de", "en")
+    ]
+    clips = list({c.clip_id: c for c in clips}.values())
+    write_mfa_tables(MFA_CONFIG, "fake", clips, kept={c.clip_id for c in clips})
+    run_plan(MFA_CONFIG)
+    df = asyncio.run(read_parquet(work_dir(MFA_CONFIG) / "plan/plan.parquet"))
+    assert df.height == len(clips)
+    assert df["speech_ms"].to_list() == [[[0, 3_600_000]]] * len(clips)
+    assert (df["aligner"] == "mfa").all()
+
+
+def test_background_noise_comes_out_of_plan_as_non_speech_and_has_no_words_row(data):
+    make_sc_tree(data / "datasets/raw/speech-commands")
+    (data / "datasets/raw/speech-commands/manifest.json").write_text('{"dataset": "speech-commands"}')
+    cfg = dataclasses.replace(SLICE, name="sc-test", sources=("speech-commands",), languages=None)
+    run_index(cfg)
+    fields = [f.name for f in dataclasses.fields(Clip)]
+    clips = [
+        Clip(**r)
+        for r in asyncio.run(read_parquet(work_dir(cfg) / "index/speech-commands.parquet", fields)).iter_rows(
+            named=True
+        )
+    ]
+    spoken = [c for c in clips if c.transcript is not None]
+    folder = work_dir(cfg) / "words/speech-commands/en"
+    folder.mkdir(parents=True)
+    timings = [Timing(c.clip_id, "word", [(100, 900)], [], {"n_words": 1}, "mfa") for c in spoken]
+    asyncio.run(write_parquet({folder / "00000.parquet": align._table(timings)}))
+    run_plan(cfg)
+    df = asyncio.run(read_parquet(work_dir(cfg) / "plan/plan.parquet"))
+    noise = df.filter(pl.col("clip_id").str.contains("_background_noise_"))
+    assert noise.height == 1
+    assert noise["speech_ms"].to_list() == [[]]
+    assert noise["speech_ratio"].to_list() == [0.0]
+    assert noise["aligner"].to_list() == ["speech-commands:background-noise"]
+    assert not any(c.reserved for c in clips if c.transcript is None)  # it feeds no babble
+    assert df.height == sum(not c.reserved for c in clips)
+    assert df.filter(pl.col("clip_id") != noise["clip_id"][0])["speech_ms"].list.len().min() == 1

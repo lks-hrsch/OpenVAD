@@ -8,19 +8,22 @@
 import argparse
 import asyncio
 import dataclasses
+import json
 import logging
 import math
-from collections import Counter
-from collections.abc import Iterable
+from collections import Counter, defaultdict
+from collections.abc import Callable, Iterable, Iterator
+from pathlib import Path
 from types import ModuleType
 
 import numpy as np
 import polars as pl
 
+from openvad_train.dataset.align import WORDS_SCHEMA
 from openvad_train.dataset.codecs import AMR_MODES_BPS
 from openvad_train.dataset.config import DEMAND_CATEGORIES, FULL, SLICE, BuildConfig, work_dir
 from openvad_train.dataset.cutting import Chunk, cut_long, rebase
-from openvad_train.dataset.index import SOURCES
+from openvad_train.dataset.index import SOURCES, apply_cap_rank
 from openvad_train.dataset.labels import apply_gap_rule, rasterise, speech_ratio
 from openvad_train.dataset.mix import padded_length
 from openvad_train.dataset.noise import NoisePool
@@ -371,27 +374,124 @@ def _lowest_ranks(frame: pl.DataFrame, samples: int | None, hours: float | None)
     return frame.filter(pl.col("duration").cum_sum() <= hours * 3600)
 
 
-def _timings(cfg: BuildConfig, name: str, module: ModuleType, clips: list[Clip]) -> Iterable[Timing]:
-    if not module.MFA_ALIGNED:
-        return module.timings(raw_dir(name), clips)
+def _read_tables(paths: list[Path], columns: list[str] | None = None) -> pl.DataFrame:
+    async def go() -> list[pl.DataFrame]:
+        return await asyncio.gather(*(read_parquet(p, columns) for p in paths))
+
+    return pl.concat(asyncio.run(go()))
+
+
+def _speech_seconds(words: Path) -> dict[str, float]:
+    """Seconds of speech of every clip `align` kept. MFA's words do not overlap, so their union is their sum."""
+    paths = sorted(words.glob("*/*.parquet"))
+    if not paths:
+        return {}
+    length = pl.element().struct.field("end") - pl.element().struct.field("start")
+    frame = _read_tables(paths, ["clip_id", "speech_ms"]).select(
+        "clip_id", seconds=pl.col("speech_ms").list.eval(length).list.sum() / 1000
+    )
+    return dict(frame.iter_rows())
+
+
+def _surviving_clips(cfg: BuildConfig, name: str, index: pl.DataFrame) -> tuple[list[Clip], Counter]:
+    """The clips of an MFA source that have a timing, in language order, and how many were left out and why.
+
+    `align` caps each speaker per language, which is an upper bound. The cap that counts is `apply_cap_rank` keyed
+    (source, speaker) over the clips that kept a timing, in rank order, counting speech seconds as for SWC. A clip
+    without a transcript has fixed labels from the adapter and needs no table. Reserved clips are counted here:
+    they are never foreground.
+    """
     words = work_dir(cfg) / "words" / name
     if not words.is_dir():
         raise FileNotFoundError(f"{name} is labelled by MFA and {words} does not exist: run the align stage first")
-    raise NotImplementedError(f"reading the MFA word tables under {words} arrives with the align stage")
+    speech_s = _speech_seconds(words)
+    dropped = {
+        clip_id
+        for path in words.glob("*/dropped/*.parquet")
+        for clip_id in asyncio.run(read_parquet(path, ["clip_id"]))["clip_id"]
+    }
+    counts: Counter = Counter()
+    # shortcut: the clips that kept a timing are all held at once for the cap, about 0.5 KB each; batch by speaker
+    # if a source reaches tens of millions of them.
+    labelled: list[Clip] = []
+    for row in index.iter_rows(named=True):
+        clip = Clip(**row)
+        if clip.reserved:
+            counts["reserved"] += 1
+        elif clip.transcript is None or clip.clip_id in speech_s:
+            labelled.append(clip)
+        else:
+            counts["dropped_by_align" if clip.clip_id in dropped else "not_aligned"] += 1
+    capped = list(apply_cap_rank(labelled, speech_s=defaultdict(float, speech_s)))
+    counts["over_cap"] = len(labelled) - len(capped)
+    return sorted(capped, key=lambda c: c.language), counts
+
+
+class _MfaTimings:
+    """The timings of one MFA source: its words tables, one language in memory at a time (clips come in language
+    order), and the adapter's `timings` for the clips without a transcript.
+    """
+
+    def __init__(self, cfg: BuildConfig, name: str, module: ModuleType):
+        self._words, self._name, self._module = work_dir(cfg) / "words" / name, name, module
+        self._language: str | None = None
+        self._table: dict[str, Timing] = {}
+
+    def _load(self, language: str) -> None:
+        paths = sorted((self._words / language).glob("*.parquet"))
+        frame = _read_tables(paths) if paths else pl.DataFrame(schema=WORDS_SCHEMA)
+        self._table = {
+            r["clip_id"]: Timing(
+                r["clip_id"],
+                r["kind"],
+                [(w["start"], w["end"]) for w in r["speech_ms"]],
+                [(m["start"], m["end"]) for m in r["mask_ms"]],
+                json.loads(r["metrics"]),
+                r["provenance"],
+            )
+            for r in frame.iter_rows(named=True)
+        }
+        self._language = language
+
+    def __call__(self, clips: list[Clip]) -> Iterator[Timing]:
+        unlabelled = [c for c in clips if c.transcript is None]
+        if unlabelled and not hasattr(self._module, "timings"):
+            raise ValueError(f"{self._name}: {unlabelled[0].clip_id!r} has no transcript and the adapter no timings")
+        fixed = {t.clip_id: t for t in self._module.timings(raw_dir(self._name), unlabelled)} if unlabelled else {}
+        for clip in clips:
+            if clip.transcript is None:
+                yield fixed[clip.clip_id]
+                continue
+            if clip.language != self._language:
+                self._load(clip.language)
+            yield self._table[clip.clip_id]
 
 
 def _plan_source(cfg: BuildConfig, name: str, pool: NoisePool) -> tuple[list[pl.DataFrame], dict]:
     """The rows of one source as frames, and its counts. Clips, timings and row dicts stay in memory only per batch:
     a dict is about 4 KB, which at 15 M rows would cost over 60 GB.
     """
+    module = SOURCES[name]
     fields = [f.name for f in dataclasses.fields(Clip)]
     index = asyncio.run(read_parquet(work_dir(cfg) / "index" / f"{name}.parquet", fields))
+    counts: Counter = Counter()
+    kinds = ["reserved", "without_sample", "short_chunks", "masked_chunks"]
+    batches: Iterator[list[Clip]]
+    timings: Callable[[list[Clip]], Iterable[Timing]]
+    if module.MFA_ALIGNED:
+        survivors, counts = _surviving_clips(cfg, name, index)
+        batches = (survivors[i : i + _CLIPS_PER_BATCH] for i in range(0, len(survivors), _CLIPS_PER_BATCH))
+        timings = _MfaTimings(cfg, name, module)
+        kinds += ["dropped_by_align", "not_aligned", "over_cap"]
+    else:
+        slices = index.iter_slices(_CLIPS_PER_BATCH)
+        batches = ([Clip(**row) for row in batch.iter_rows(named=True)] for batch in slices)
+        timings = lambda clips: module.timings(raw_dir(name), clips)  # noqa: E731
+
     frames: list[pl.DataFrame] = []
     rows: list[dict] = []
-    counts: Counter = Counter()
-    for batch in index.iter_slices(_CLIPS_PER_BATCH):
-        clips = [Clip(**row) for row in batch.iter_rows(named=True)]
-        for clip, timing in zip(clips, _timings(cfg, name, SOURCES[name], clips), strict=True):
+    for clips in batches:
+        for clip, timing in zip(clips, timings(clips), strict=True):
             if timing.clip_id != clip.clip_id:
                 raise ValueError(f"{name}: timings out of clip order at {clip.clip_id!r}, got {timing.clip_id!r}")
             sample_rows = clip_rows(clip, timing, cfg, pool, counts)
@@ -402,7 +502,6 @@ def _plan_source(cfg: BuildConfig, name: str, pool: NoisePool) -> tuple[list[pl.
                 frames.append(pl.DataFrame(rows, schema=PLAN_SCHEMA))
                 rows = []
     frames.append(pl.DataFrame(rows, schema=PLAN_SCHEMA))
-    kinds = ("reserved", "without_sample", "short_chunks", "masked_chunks")
     return frames, {"clips": index.height, **{k: counts[k] for k in kinds}}
 
 
