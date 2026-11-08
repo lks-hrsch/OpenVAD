@@ -243,6 +243,22 @@ def test_manifest_records_provenance(built_with_as_is, data):
         assert digest == file_hash(data / "datasets/raw" / name / "manifest.json", "sha256")
 
 
+def test_manifest_records_the_librivad_val_hash_when_a_row_reads_that_tree(data):
+    cfg = build(data, as_is=True, val=True)
+    m = read_manifest(dataset_root(cfg))
+    assert m is not None
+    assert set(m["raw_sources"]) == {"ami", "demand", "librivad", "librivad-val", "swc"}
+    assert m["raw_sources"]["librivad-val"] == file_hash(data / "datasets/raw/librivad-val/manifest.json", "sha256")
+    assert "librivad-val" not in m["licences"]
+
+
+def test_a_missing_librivad_val_manifest_fails_when_a_row_reads_that_tree(data):
+    cfg = make_build(data, as_is=True, val=True)
+    (data / "datasets/raw/librivad-val/manifest.json").unlink()
+    with pytest.raises(FileNotFoundError, match="librivad-val"):
+        run_publish(cfg)
+
+
 def test_the_manifest_says_whether_the_working_tree_was_dirty(built):
     m = read_manifest(dataset_root(built))
     assert m is not None

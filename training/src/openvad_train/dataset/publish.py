@@ -185,7 +185,11 @@ def _publish(cfg: BuildConfig) -> None:
         raise ValueError("a sample id is repeated across the fragments and the as-is rows")
     rows = rows.sort("rank", "sample_id")
 
-    sources = sorted(set(rows["source"]) | set(cfg.noise))
+    sources = set(rows["source"]) | set(cfg.noise)
+    # `librivad` rows can read the validation split of `librivad-val`, whose own manifest would otherwise go unrecorded.
+    if rows["source_path"].str.starts_with("datasets/raw/librivad-val/").any():
+        sources.add("librivad-val")
+    sources = sorted(sources)
     manifest_paths = {name: raw_dir(name) / "manifest.json" for name in sources}
     if absent := [name for name, path in manifest_paths.items() if not path.exists()]:
         raise FileNotFoundError(f"no raw manifest for {', '.join(absent)}: fetch them first")

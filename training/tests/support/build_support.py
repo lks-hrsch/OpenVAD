@@ -47,9 +47,10 @@ def _row(
     seconds: float,
     speech,
     kind: Kind = "word",
+    raw: str | None = None,
     **override,
 ):
-    path = root / "datasets/raw" / source / f"{name}.wav"
+    path = root / "datasets/raw" / (raw or source) / f"{name}.wav"
     path.parent.mkdir(parents=True, exist_ok=True)
     sf.write(path, _tone(seconds), 16000, subtype="PCM_16")
     (path.parent / "manifest.json").write_text(f'{{"dataset": "{source}"}}')
@@ -67,7 +68,7 @@ def write_plan(cfg: BuildConfig, rows: list[dict]) -> None:
     write_manifest(out, {"stage": "plan", "plan_version": cfg.plan_version, "global_seed": cfg.global_seed})
 
 
-def make_build(root: Path, *, as_is: bool = False, name: str = "test-build") -> BuildConfig:
+def make_build(root: Path, *, as_is: bool = False, val: bool = False, name: str = "test-build") -> BuildConfig:
     """Write the raw files and the plan under `root`, which must be `$OPENVAD_DATA_DIR`."""
     noise = root / NOISE_FILE
     noise.parent.mkdir(parents=True)
@@ -90,6 +91,11 @@ def make_build(root: Path, *, as_is: bool = False, name: str = "test-build") -> 
             _row(root, "librivad", "l0", "train", None, 3.0, [(300, 1000), (1100, 2700)], kind="frame"),
             _row(root, "librivad", "l1", "test", None, 3.0, [(300, 2700)], kind="frame"),
         ]
+    if val:
+        # A `librivad` row read from the validation tree, which has its own raw manifest.
+        rows.append(
+            _row(root, "librivad", "l2", "validation", None, 3.0, [(300, 2700)], kind="frame", raw="librivad-val")
+        )
     cfg = dataclasses.replace(SLICE, name=name)
     write_plan(cfg, rows)
     return cfg
