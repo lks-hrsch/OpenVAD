@@ -44,7 +44,9 @@ class ForbiddenSource(Exception):  # noqa: N818  (the name the plan and its test
 
 
 # Directories under datasets/raw whose audio never enters the pipeline: benchmarks and LibriSpeech itself.
-_FORBIDDEN_RAW = {"ava-speech", "fearless-steps", "picovoice", "simsamu", "librispeech"}
+# LibriVAD small is for screening apart from OpenVAD Small (ADR 0017, ADR 0023), so it is not read here either.
+_FORBIDDEN_RAW = {"ava-speech", "fearless-steps", "picovoice", "simsamu", "librispeech", "librivad-small"}
+_LIBRIVAD = {"librivad", "librivad-val"}
 # LibriSpeech evaluation folders reach the set through LibriVAD only, and only in their own split; its training
 # folder only in train.
 _SPLIT_FOLDERS = {"dev-clean": "validation", "test-clean": "test", "train-clean-100": "train"}
@@ -52,12 +54,13 @@ _SPLIT_FOLDERS = {"dev-clean": "validation", "test-clean": "test", "train-clean-
 
 def guard_path(path: str, split: str) -> None:
     """Refuse a path ADR 0024 keeps out of `split`. It fails closed: a path that is not under `raw/<source>`, or
-    that has a `..` segment, cannot be judged and is refused, and names are compared without regard to case.
+    that has a `..` or more than one `raw` segment, cannot be judged and is refused, and names are compared without
+    regard to case.
     """
     parts = tuple(p.casefold() for p in PurePosixPath(path).parts)
     if ".." in parts:
         raise ForbiddenSource(f"{path}: a path with a .. segment cannot be checked (ADR 0024)")
-    if "raw" not in parts or parts.index("raw") + 1 >= len(parts):
+    if parts.count("raw") != 1 or parts.index("raw") + 1 >= len(parts):
         raise ForbiddenSource(f"{path}: not a path under raw/<source>, so it cannot be checked (ADR 0024)")
     source = parts[parts.index("raw") + 1]
     if source in _FORBIDDEN_RAW:
@@ -65,7 +68,7 @@ def guard_path(path: str, split: str) -> None:
     if source == "librivad-val" and split != "validation":
         raise ForbiddenSource(f"{path}: LibriVAD val is validation only, not {split} (ADR 0024)")
     for part in parts:
-        if part in _SPLIT_FOLDERS and not source.startswith("librivad"):
+        if part in _SPLIT_FOLDERS and source not in _LIBRIVAD:
             raise ForbiddenSource(f"{path}: {part} is read through LibriVAD only (ADR 0024)")
         if part in _SPLIT_FOLDERS and split != _SPLIT_FOLDERS[part]:
             raise ForbiddenSource(f"{path}: {part} belongs to {_SPLIT_FOLDERS[part]}, not {split} (ADR 0024)")

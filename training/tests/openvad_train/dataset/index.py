@@ -107,6 +107,17 @@ def test_guard_keeps_librivad_train_clean_100_in_train(split):
         guard_path("datasets/raw/librivad/generated/LibriSpeech/train-clean-100/a.wav", split)
 
 
+@pytest.mark.parametrize("split", ["train", "validation", "test"])
+def test_guard_refuses_librivad_small_in_every_split(split):
+    with pytest.raises(ForbiddenSource, match="librivad-small"):
+        guard_path("datasets/raw/librivad-small/generated/LibriSpeech/train-clean-100/a.wav", split)
+
+
+def test_guard_judges_a_librivad_lookalike_as_another_source():
+    with pytest.raises(ForbiddenSource, match="through LibriVAD only"):
+        guard_path("datasets/raw/librivad-extra/generated/LibriSpeech/test-clean/a.wav", "test")
+
+
 def test_guard_keeps_the_train_folder_out_of_other_sources():
     with pytest.raises(ForbiddenSource, match="through LibriVAD only"):
         guard_path("datasets/raw/voices/train-clean-100/a.wav", "train")
