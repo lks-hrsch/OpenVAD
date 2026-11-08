@@ -945,6 +945,10 @@ def run_align(
     models = models or {}
     if models and cfg.name != PILOT.name:
         raise ValueError(f"a model override is only for the pilot ({PILOT.name}), not {cfg.name}")
+    if max_clips is not None and cfg.name != PILOT.name:
+        raise ValueError(f"a clip limit is only for the pilot ({PILOT.name}), not {cfg.name}")
+    if max_clips is not None and max_clips < 1:
+        raise ValueError(f"a clip limit takes at least 1 clip, not {max_clips}")
     tools = check_tools()
     table = load_models()
     if bad := [lang for lang in models if lang not in table]:
@@ -1053,6 +1057,12 @@ def _write_manifest(
     )
 
 
+def _at_least_one(text: str) -> int:
+    if not text.isdigit() or int(text) < 1:
+        raise argparse.ArgumentTypeError(f"expected a whole number of at least 1, got {text!r}")
+    return int(text)
+
+
 def _override(text: str) -> tuple[str, tuple[str, str]]:
     language, _, model = text.partition("=")
     name, _, release = model.partition("@")
@@ -1069,7 +1079,11 @@ def main(args: list[str]) -> None:
         help="comma-separated language codes; default: every language of the index, which stops at a language whose "
         "row in mfa_models.tsv is `open` until the owner decides, so name the others here",
     )
-    parser.add_argument("--max-clips", type=int, help="per language, taken as the calibration batch takes them")
+    parser.add_argument(
+        "--max-clips",
+        type=_at_least_one,
+        help="per language, taken as the calibration batch takes them; only with --config pilot",
+    )
     parser.add_argument(
         "--model",
         type=_override,

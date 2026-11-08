@@ -63,6 +63,9 @@ def test_align_takes_the_pilot_with_a_clip_limit_and_a_model_override(monkeypatc
     assert seen == [(PILOT, ["ca"], {"max_clips": 200, "models": {"ca": ("vx", "rev1")}})]
     with pytest.raises(SystemExit):
         cli.main(["align", "--config", "pilot", "--model", "ca=vx"])
+    for bad in ("0", "-3", "x"):
+        with pytest.raises(SystemExit):
+            cli.main(["align", "--config", "pilot", "--max-clips", bad])
 
 
 def test_index_and_the_hand_check_take_the_pilot(monkeypatch, tmp_path):

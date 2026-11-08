@@ -1100,7 +1100,16 @@ def manifest(stage) -> dict:
     return json.loads((work_dir(stage.cfg) / "words/manifest.json").read_text())
 
 
+def test_a_clip_limit_is_refused_outside_the_pilot_and_below_one(stage):
+    with pytest.raises(ValueError, match="only for the pilot"):
+        run_align(stage.cfg, ["de"], max_clips=5)
+    with pytest.raises(ValueError, match="at least 1"):
+        run_align(dataclasses.replace(PILOT, sources=("fake",)), ["de"], max_clips=0)
+    assert stage.fake.calls == []
+
+
 def test_the_clip_limit_takes_the_calibration_selection_and_is_part_of_the_state(stage, monkeypatch):
+    stage.cfg = dataclasses.replace(PILOT, sources=("fake",))
     monkeypatch.setattr(align, "CALIBRATION_PER_SPEAKER", 2)
     clips = speakers_clips(stage, n=4, per=3)
     write_index(stage, clips)
