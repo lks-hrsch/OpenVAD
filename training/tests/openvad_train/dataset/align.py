@@ -1156,12 +1156,13 @@ def pilot(stage, monkeypatch):
     def fetch(_tools, spec):
         stage.fetched.append((spec.language, spec.acoustic, spec.acoustic_version, spec.dictionary))
         info = {"acoustic": {"name": spec.acoustic, "release": spec.acoustic_version, "version": "2.0.0"}}
-        return align.Models(acoustic, None, None, info)
+        return align.Models(acoustic, Path("d.dict") if spec.dictionary else None, None, info)
 
     stage.seen = []
 
     def run(tools, models, *rest):
-        stage.seen.append(models.dictionary.read_text(encoding="utf-8"))
+        if models.dictionary.is_file():  # the built lexicon; a row's dictionary is a stand-in name
+            stage.seen.append(models.dictionary.read_text(encoding="utf-8"))
         stage.fake(tools, models, *rest)
 
     monkeypatch.setattr(align, "fetch_models", fetch)
@@ -1191,6 +1192,12 @@ def test_an_override_without_a_dictionary_aligns_with_a_lexicon_built_from_the_c
     assert json.loads(state["provenance"])["models"] == models
     assert manifest(pilot)["model_overrides"] == {"ca": "vx_model@rev1"}
     assert manifest(pilot)["per_source"]["fake"]["ca"]["models"] == models
+
+
+def test_the_manifest_lists_only_the_overrides_of_languages_this_run_aligned(pilot):
+    write_index(pilot, [make_clip(pilot.root, "s0/c0", "s0", "ab", language="de")])
+    run_align(pilot.cfg, ["de"], models={"ca": ("vx_model", "rev1")})
+    assert manifest(pilot)["model_overrides"] == {}
 
 
 def test_a_refused_rerun_leaves_the_lexicon_the_state_describes_unchanged(pilot):

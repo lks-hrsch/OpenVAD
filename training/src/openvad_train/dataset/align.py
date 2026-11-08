@@ -1051,7 +1051,12 @@ def _write_manifest(
             "config": cfg.name,
             "aligner": {"mfa": tools.version, "commit": tools.commit},
             "max_clips": max_clips,
-            "model_overrides": {lang: f"{name}@{release}" for lang, (name, release) in overrides.items()},
+            # Only the overrides this run used: one for a language it did not align changed nothing.
+            "model_overrides": {
+                lang: f"{name}@{release}"
+                for lang, (name, release) in overrides.items()
+                if any(lang in by_language for by_language in per_source.values())
+            },
             "per_source": summary,
         },
     )
@@ -1092,6 +1097,8 @@ def main(args: list[str]) -> None:
         "language's row, with a rule-based lexicon; only with --config pilot",
     )
     ns = parser.parse_args(args)
+    if ns.model and len({lang for lang, _ in ns.model}) < len(ns.model):
+        parser.error("--model names a language twice")
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     run_align(
         CONFIGS[ns.config],
