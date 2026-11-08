@@ -8,6 +8,8 @@
 Adapter contract: `MFA_ALIGNED`, `clips(raw, languages)`. `raw` is `datasets/raw/common-voice`.
 """
 
+import json
+import logging
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -16,13 +18,31 @@ from openvad_train.dataset.schema import Clip, Split
 from openvad_train.fetch.commonvoice import CV_LOCALES, read_tsv
 
 
+log = logging.getLogger(__name__)
+
 SOURCE = "common-voice"
 MFA_ALIGNED = True
+REPORTS = True
 RAW_PREFIX = Path("datasets/raw/common-voice")
 LICENCE = "CC0-1.0"
-# A locale is its own language code except these; zh-HK and zh-TW are not the mainland Mandarin of `mandarin_china_mfa`.
-LANGUAGE = {"zh-CN": "zh", "sv-SE": "sv"}
+# A locale is its language code without the region, except these: Cantonese (`zh-HK` and `yue`) and Taiwan Mandarin are
+# not the mainland Mandarin of `mandarin_china_mfa`.
+LANGUAGE = {"zh-CN": "zh", "zh-HK": "yue", "zh-TW": "zh-TW"}
 HELD_OUT: dict[str, Split] = {"dev": "validation", "test": "test"}
+
+
+def language_of(locale: str) -> str:
+    return LANGUAGE.get(locale, locale.split("-")[0])
+
+
+def _complete(raw: Path, locale: str) -> bool:
+    """The fetch writes `.<locale>-extracted` when a locale's clips are out and the raw manifest at the very end. A
+    locale with neither is still being fetched, and its missing MP3s would be dropped for good by `align`.
+    """
+    if (raw / f".{locale}-extracted").exists():
+        return True
+    manifest = raw / "manifest.json"
+    return manifest.is_file() and locale in json.loads(manifest.read_text()).get("locales", {})
 
 
 def _locale_dir(raw: Path, locale: str) -> Path | None:
@@ -75,9 +95,25 @@ def _locale_clips(raw: Path, locale: str, language: str, folder: Path) -> Iterat
         )
 
 
-def clips(raw: Path, languages: set[str] | None = None) -> Iterator[Clip]:
+def _count(folder: Path) -> int:
+    with (folder / "validated.tsv").open("rb") as f:
+        return max(0, sum(1 for _ in f) - 1)
+
+
+def clips(raw: Path, languages: set[str] | None = None, report: dict | None = None) -> Iterator[Clip]:
+    """Locales on disk that are skipped, because their language has no row in `mfa_models.tsv` or because their
+    fetch is not finished, are recorded in `report["skipped"]` with their validated clip counts.
+    """
     wanted = indexed_languages(languages)
+    table = indexed_languages(None)
+    skipped = report.setdefault("skipped", {}) if report is not None else {}
     for locale in CV_LOCALES:
-        language = LANGUAGE.get(locale, locale)
-        if language in wanted and (folder := _locale_dir(raw, locale)) is not None:
+        language = language_of(locale)
+        if (folder := _locale_dir(raw, locale)) is None:
+            continue
+        if language not in table or not _complete(raw, locale):
+            reason = "no row in mfa_models.tsv" if language not in table else "fetch not finished"
+            skipped[locale] = {"reason": reason, "clips": _count(folder)}
+            log.warning("Common Voice %s is skipped: %s", locale, reason)
+        elif language in wanted:
             yield from _locale_clips(raw, locale, language, folder)

@@ -7,7 +7,7 @@ from collections import defaultdict
 
 import pytest
 
-from mfa_source_support import make_vp_tree
+from mfa_source_support import add_vp_table, make_vp_tree
 from openvad_train.dataset.sources import voxpopuli
 
 
@@ -46,9 +46,17 @@ def test_vp_clip_fields(vp_tree):
     assert c.path == "datasets/raw/voxpopuli/raw_audios/original/2014/20140224-0900-PLENARY-3_original.ogg"
 
 
-def test_vp_leaves_out_a_language_without_an_mfa_model_and_one_not_asked_for(vp_tree):
-    assert {c.language for c in voxpopuli.clips(vp_tree)} == {"de"}
+def test_vp_reads_only_the_asked_languages(vp_tree):
+    assert {c.language for c in voxpopuli.clips(vp_tree)} == {"de", "fi"}
     assert list(voxpopuli.clips(vp_tree, {"fr"})) == []
+
+
+def test_a_table_whose_language_has_no_row_is_skipped_and_reported(vp_tree, monkeypatch):
+    monkeypatch.setattr(voxpopuli, "VOXPOPULI_LANGS", (*voxpopuli.VOXPOPULI_LANGS, "xx"))
+    add_vp_table(vp_tree, "xx", [("xx_1", "1", 0.0, 5.0, "train"), ("xx_2", "2", 0.0, 5.0, "train")])
+    report = {}
+    assert not any(c.language == "xx" for c in voxpopuli.clips(vp_tree, None, report))
+    assert report["skipped"] == {"xx": {"reason": "no row in mfa_models.tsv", "clips": 2}}
 
 
 def test_vp_is_an_mfa_source():
@@ -59,7 +67,7 @@ def test_a_repeated_id_gives_one_clip_the_one_in_the_part_file_and_it_is_counted
     report = {}
     clips = [c for c in voxpopuli.clips(vp_tree, None, report) if c.clip_id == "de_dup"]
     assert [(c.offset_s, c.path.rsplit("/", 1)[1]) for c in clips] == [(50.0, "20140224-0900-PLENARY-3_original.ogg")]
-    assert report == {"duplicate_ids_removed": 1}
+    assert report["duplicate_ids_removed"] == 1
 
 
 def test_ids_are_unique(vp_tree):

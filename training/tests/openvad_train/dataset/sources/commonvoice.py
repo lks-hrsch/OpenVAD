@@ -3,10 +3,14 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+import json
+
 import pytest
 
-from mfa_source_support import make_cv_tree
+from mfa_source_support import add_cv_locale, make_cv_tree
+from openvad_train.dataset.models import load_models
 from openvad_train.dataset.sources import commonvoice
+from openvad_train.fetch.commonvoice import CV_LOCALES
 
 
 @pytest.fixture
@@ -54,14 +58,45 @@ def test_cv_clip_fields_and_duration_from_the_durations_file(cv_tree):
     assert by_id(cv_tree)["common_voice_de_short"].duration_s == 1.25
 
 
-def test_locales_without_an_mfa_model_are_left_out_and_mandarin_is_zh(cv_tree):
+def test_mandarin_is_zh_cantonese_is_yue_and_taiwan_is_its_own_language(cv_tree):
     languages = {c.clip_id: c.language for c in commonvoice.clips(cv_tree)}
     assert languages["common_voice_zh-CN_1"] == "zh"
-    assert not any(clip_id in languages for clip_id in ("common_voice_zh-TW_1", "common_voice_kab_1"))
+    assert languages["common_voice_zh-HK_1"] == "yue"
+    assert languages["common_voice_zh-TW_1"] == "zh-TW"
+    assert languages["common_voice_kab_1"] == "kab"  # Kabyle, an open row: indexed for the failure rule
 
 
 def test_a_locale_that_is_not_fetched_yet_is_absent_not_an_error(cv_tree):
-    assert {c.language for c in commonvoice.clips(cv_tree)} == {"de", "zh"}  # no en, fr ... directory exists
+    assert {c.language for c in commonvoice.clips(cv_tree)} == {"de", "zh", "yue", "zh-TW", "kab"}  # no en directory
+
+
+def test_a_locale_with_tsvs_but_neither_marker_nor_manifest_entry_is_skipped_and_reported(cv_tree, caplog):
+    report = {}
+    with caplog.at_level("WARNING", logger=commonvoice.log.name):
+        clips = list(commonvoice.clips(cv_tree, None, report))
+    assert not any(c.language == "ca" for c in clips)
+    assert report["skipped"] == {"ca": {"reason": "fetch not finished", "clips": 1}}
+    assert "ca is skipped" in caplog.text
+
+
+def test_either_gate_lets_a_locale_in(cv_tree):
+    (cv_tree / ".kab-extracted").unlink()
+    assert not any(c.language == "kab" for c in commonvoice.clips(cv_tree))
+    (cv_tree / "manifest.json").write_text(json.dumps({"locales": {"kab": {}}}))
+    assert any(c.language == "kab" for c in commonvoice.clips(cv_tree))
+
+
+def test_a_locale_whose_language_has_no_row_is_skipped_and_reported(cv_tree, monkeypatch):
+    monkeypatch.setitem(commonvoice.CV_LOCALES, "fa", ("id", "sha"))
+    add_cv_locale(cv_tree, "fa", {"common_voice_fa_1.mp3": ("p", "text")}, train=["common_voice_fa_1.mp3"])
+    (cv_tree / ".fa-extracted").write_text("0")
+    report = {}
+    assert not any(c.language == "fa" for c in commonvoice.clips(cv_tree, None, report))
+    assert report["skipped"]["fa"] == {"reason": "no row in mfa_models.tsv", "clips": 1}
+
+
+def test_every_locale_of_the_fetcher_has_a_row_so_nothing_is_skipped_for_want_of_one():
+    assert {commonvoice.language_of(locale) for locale in CV_LOCALES} <= set(load_models())
 
 
 def test_only_the_asked_languages_are_read(cv_tree, monkeypatch):

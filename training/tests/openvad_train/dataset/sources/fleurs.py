@@ -5,7 +5,7 @@
 
 import pytest
 
-from mfa_source_support import make_fleurs_tree
+from mfa_source_support import make_fleurs_tree, write_tsv
 from openvad_train.dataset.sources import fleurs
 
 
@@ -22,7 +22,7 @@ def test_fleurs_has_no_speakers(fleurs_tree):
 
 def test_fleurs_keeps_official_splits_and_maps_mandarin(fleurs_tree):
     splits = {(c.language, c.split) for c in fleurs.clips(fleurs_tree)}
-    assert splits == {(lang, s) for lang in ("de", "zh") for s in ("train", "validation", "test")}
+    assert splits == {(lang, s) for lang in ("de", "zh", "yue", "hu") for s in ("train", "validation", "test")}
 
 
 def test_fleurs_fields_from_the_raw_text_and_the_sample_count(fleurs_tree):
@@ -37,9 +37,17 @@ def test_fleurs_fields_from_the_raw_text_and_the_sample_count(fleurs_tree):
     assert c.path == "datasets/raw/fleurs/de_de/audio/dev/de_de-dev.wav"
 
 
-def test_fleurs_leaves_out_languages_without_an_mfa_model_and_unasked_ones(fleurs_tree):
-    assert not any(c.language in ("hu", "yue") for c in fleurs.clips(fleurs_tree))
+def test_fleurs_cantonese_is_yue_and_only_the_asked_languages_are_read(fleurs_tree):
+    assert {c.language for c in fleurs.clips(fleurs_tree)} == {"de", "zh", "yue", "hu"}
     assert {c.language for c in fleurs.clips(fleurs_tree, {"zh"})} == {"zh"}
+
+
+def test_a_directory_whose_language_has_no_row_is_skipped_and_reported(fleurs_tree, monkeypatch):
+    monkeypatch.setattr(fleurs, "FLEURS_LANGS", (*fleurs.FLEURS_LANGS, "fa_ir"))
+    write_tsv(fleurs_tree / "fa_ir" / "train.tsv", [[1, "a.wav", "t", "t", "t", 16000, "MALE"]] * 4)
+    report = {}
+    assert not any(c.language == "fa" for c in fleurs.clips(fleurs_tree, None, report))
+    assert report["skipped"] == {"fa_ir": {"reason": "no row in mfa_models.tsv", "clips": 4}}
 
 
 def test_fleurs_is_an_mfa_source():

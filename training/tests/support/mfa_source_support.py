@@ -7,6 +7,7 @@
 
 import csv
 import gzip
+import json
 from pathlib import Path
 
 import numpy as np
@@ -45,7 +46,8 @@ def add_cv_locale(raw: Path, locale: str, clips: dict[str, tuple[str, str]], *, 
 
 def make_cv_tree(raw: Path) -> Path:
     """German: speakers a and b are plain, c is in dev, d in test, e has a clip in no official split. `c2` is a
-    validated clip of a dev speaker. `zh-CN` is Mandarin, `kab` has no MFA model and `en` is not fetched yet.
+    validated clip of a dev speaker. Finished locales have a `.<locale>-extracted` marker or are in the raw
+    manifest (`zh-HK`); `ca` has TSVs and neither, as a locale does while its fetch runs; `en` is not fetched yet.
     """
     clips = {
         "common_voice_de_a1.mp3": ("a", "One sentence."),
@@ -65,9 +67,12 @@ def make_cv_tree(raw: Path) -> Path:
         test=["common_voice_de_d1.mp3"],
         train=["common_voice_de_a1.mp3", "common_voice_de_a2.mp3", "common_voice_de_b1.mp3"],
     )
-    add_cv_locale(raw, "zh-CN", {"common_voice_zh-CN_1.mp3": ("m", "你好")}, train=["common_voice_zh-CN_1.mp3"])
-    add_cv_locale(raw, "zh-TW", {"common_voice_zh-TW_1.mp3": ("t", "你好")}, train=["common_voice_zh-TW_1.mp3"])
-    add_cv_locale(raw, "kab", {"common_voice_kab_1.mp3": ("k", "azul")}, train=["common_voice_kab_1.mp3"])
+    for locale, speaker in (("zh-CN", "m"), ("zh-TW", "t"), ("kab", "k"), ("zh-HK", "h"), ("ca", "q")):
+        name = f"common_voice_{locale}_1.mp3"
+        add_cv_locale(raw, locale, {name: (speaker, "text")}, train=[name])
+    for locale in ("de", "zh-CN", "zh-TW", "kab"):
+        (raw / f".{locale}-extracted").write_text("0")
+    (raw / "manifest.json").write_text(json.dumps({"locales": {"zh-HK": {}}}))
     return raw
 
 

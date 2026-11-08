@@ -13,10 +13,12 @@ from pathlib import Path
 
 from openvad_train.dataset.models import indexed_languages
 from openvad_train.dataset.schema import Clip, Split
+from openvad_train.dataset.sources import count_lines
 
 
 SOURCE = "mls"
 MFA_ALIGNED = True
+REPORTS = True
 RAW_PREFIX = Path("datasets/raw/mls")
 LICENCE = "CC BY 4.0"
 LANGUAGE = {
@@ -59,8 +61,17 @@ def _split_clips(raw: Path, name: str, language: str, official: str) -> Iterator
         )
 
 
-def clips(raw: Path, languages: set[str] | None = None) -> Iterator[Clip]:
+def clips(raw: Path, languages: set[str] | None = None, report: dict | None = None) -> Iterator[Clip]:
+    """A language folder on disk whose language has no row in `mfa_models.tsv` is recorded in `report["skipped"]`."""
     wanted = indexed_languages(languages)
+    table = indexed_languages(None)
+    skipped = report.setdefault("skipped", {}) if report is not None else {}
+    for folder in sorted(raw.glob("mls_*")):
+        if LANGUAGE.get(folder.name.removeprefix("mls_")) not in table:
+            skipped[folder.name] = {
+                "reason": "no row in mfa_models.tsv",
+                "clips": sum(count_lines(f) for f in folder.glob("*/transcripts.txt")),
+            }
     for name, language in LANGUAGE.items():
         if language in wanted and (raw / f"mls_{name}").is_dir():
             for official in SPLITS:

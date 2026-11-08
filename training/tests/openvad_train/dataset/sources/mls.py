@@ -43,5 +43,11 @@ def test_mls_leaves_out_a_language_we_do_not_use_and_one_not_asked_for(mls_tree)
     assert list(mls.clips(mls_tree, {"fr"})) == []
 
 
+def test_a_language_folder_we_have_no_row_for_is_skipped_and_reported(mls_tree):
+    report = {}
+    assert {c.language for c in mls.clips(mls_tree, None, report)} == {"de"}
+    assert report["skipped"] == {"mls_english": {"reason": "no row in mfa_models.tsv", "clips": 1}}
+
+
 def test_mls_is_an_mfa_source():
     assert mls.MFA_ALIGNED is True

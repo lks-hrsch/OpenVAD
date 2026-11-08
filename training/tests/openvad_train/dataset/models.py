@@ -53,5 +53,18 @@ def test_indexed_languages_are_the_tables_rows_open_ones_included_narrowed_by_th
     table = set(load_models())
     assert indexed_languages(None) == table
     assert "ca" in table  # open: indexed, and align refuses it until the owner decides
-    assert not table & {"fa", "ur", "ar", "mhr", "kab", "rw"}  # no MFA model (ADR 0023) or no row yet
-    assert indexed_languages({"de", "kab", "xx"}) == {"de"}
+    assert not table & {"fa", "ur", "ar", "mhr", "lzz", "kbd", "ady", "qu"}  # ADR 0023's eight have no model
+    assert {"kab", "rw", "be", "yue", "zh-TW"} <= table  # Kabyle is not Kabardian; open rows, so their hours count
+    assert all(m.status == "open" for lang, m in load_models().items() if lang in {"kab", "rw", "be", "yue", "zh-TW"})
+    assert indexed_languages({"de", "kab", "xx"}) == {"de", "kab"}
+
+
+def test_every_language_any_source_can_have_on_disk_has_a_row():
+    from openvad_train.dataset.sources import commonvoice, fleurs, mls
+    from openvad_train.fetch.commonvoice import CV_LOCALES
+    from openvad_train.fetch.fleurs import FLEURS_LANGS
+    from openvad_train.fetch.voxpopuli import VOXPOPULI_LANGS
+
+    needed = {commonvoice.language_of(locale) for locale in CV_LOCALES}
+    needed |= {fleurs._language(d) for d in FLEURS_LANGS} | set(mls.LANGUAGE.values()) | set(VOXPOPULI_LANGS)
+    assert needed <= set(load_models())

@@ -14,16 +14,18 @@ from pathlib import Path
 
 from openvad_train.dataset.models import indexed_languages
 from openvad_train.dataset.schema import Clip, Split
+from openvad_train.dataset.sources import count_lines
 from openvad_train.fetch.fleurs import FLEURS_LANGS
 
 
 SOURCE = "fleurs"
 MFA_ALIGNED = True
+REPORTS = True
 RAW_PREFIX = Path("datasets/raw/fleurs")
 LICENCE = "CC BY 4.0"
 SPLITS: dict[str, Split] = {"train": "train", "dev": "validation", "test": "test"}
 # A FLEURS directory is `<language>_<region>`; Mandarin is `cmn_hans_cn`.
-LANGUAGE_OF_PREFIX = {"cmn": "zh"}
+LANGUAGE_OF_PREFIX = {"cmn": "zh"}  # `yue_hant_hk` is Cantonese, `yue`
 
 
 def _language(directory: str) -> str:
@@ -52,8 +54,17 @@ def _split_clips(raw: Path, directory: str, language: str, official: str) -> Ite
             )
 
 
-def clips(raw: Path, languages: set[str] | None = None) -> Iterator[Clip]:
+def clips(raw: Path, languages: set[str] | None = None, report: dict | None = None) -> Iterator[Clip]:
+    """A directory on disk whose language has no row in `mfa_models.tsv` is recorded in `report["skipped"]`."""
     wanted = indexed_languages(languages)
+    table = indexed_languages(None)
+    skipped = report.setdefault("skipped", {}) if report is not None else {}
+    for directory in FLEURS_LANGS:
+        if _language(directory) not in table and (raw / directory).is_dir():
+            skipped[directory] = {
+                "reason": "no row in mfa_models.tsv",
+                "clips": sum(count_lines(f) for f in (raw / directory).glob("*.tsv")),
+            }
     for directory in FLEURS_LANGS:
         if _language(directory) in wanted and (raw / directory).is_dir():
             for official in SPLITS:

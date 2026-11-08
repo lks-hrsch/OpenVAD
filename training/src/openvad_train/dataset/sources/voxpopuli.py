@@ -16,6 +16,7 @@ from pathlib import Path
 
 from openvad_train.dataset.models import indexed_languages
 from openvad_train.dataset.schema import Clip
+from openvad_train.dataset.sources import count_lines
 from openvad_train.dataset.sources.swc import assign_splits
 from openvad_train.fetch.voxpopuli import VOXPOPULI_LANGS
 
@@ -58,6 +59,16 @@ def clips(raw: Path, languages: set[str] | None = None, report: dict | None = No
     0.3 to 1.6% of rows.
     """
     wanted = indexed_languages(languages)
+    table = indexed_languages(None)
+    if report is not None:
+        report["skipped"] = {
+            language: {
+                "reason": "no row in mfa_models.tsv",
+                "clips": count_lines(raw / "annotations" / f"asr_{language}.tsv.gz") - 1,
+            }
+            for language in VOXPOPULI_LANGS
+            if language not in table and (raw / "annotations" / f"asr_{language}.tsv.gz").is_file()
+        }
     rows: dict[str, list[dict[str, str]]] = {}
     hours: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
     for language in VOXPOPULI_LANGS:
